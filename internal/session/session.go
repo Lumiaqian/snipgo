@@ -5,6 +5,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/png"
 	"time"
@@ -88,6 +89,9 @@ func (s *Session) kick(gen int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		frames, err := s.Capture(ctx)
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = errors.New("截图超时，请重试")
+		}
 		s.OnMain(func() { s.Deliver(gen, frames, err) })
 	}()
 }
