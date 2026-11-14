@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -107,6 +108,9 @@ func Grab(ctx context.Context, displays []Display) ([]crop.Screen, error) {
 	if len(displays) == 0 {
 		return nil, errors.New("没有显示器")
 	}
+	// 自动释放池只能在创建它的线程上 drain，等回调期间 goroutine 不能换线程。
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	pool := objc.ID(objc.GetClass("NSAutoreleasePool")).Send(selAlloc).Send(selInit)
 	defer pool.Send(selDrain)
 
