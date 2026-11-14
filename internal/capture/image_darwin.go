@@ -42,9 +42,9 @@ func bgraToNRGBA(raw []byte, width, height, stride int, premul bool) (*image.NRG
 			i := x * 4
 			b, g, r, a := row[i], row[i+1], row[i+2], row[i+3]
 			if premul && a != 0 && a != 255 {
-				r = uint8(uint16(r) * 255 / uint16(a))
-				g = uint8(uint16(g) * 255 / uint16(a))
-				b = uint8(uint16(b) * 255 / uint16(a))
+				r = unpremul(r, a)
+				g = unpremul(g, a)
+				b = unpremul(b, a)
 			}
 			if a == 0 {
 				r, g, b = 0, 0, 0
@@ -56,4 +56,9 @@ func bgraToNRGBA(raw []byte, width, height, stride int, premul bool) (*image.NRG
 		}
 	}
 	return dst, nil
+}
+
+// unpremul 还原预乘颜色。通道大于 alpha 的坏数据截到 255，不让它回绕成别的颜色。
+func unpremul(c, a uint8) uint8 {
+	return uint8(min(uint16(c)*255/uint16(a), 255))
 }

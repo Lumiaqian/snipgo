@@ -56,3 +56,15 @@ func TestBGRAZeroAlphaClearsColor(t *testing.T) {
 		t.Fatalf("pixel %v", c)
 	}
 }
+
+func TestBGRAPremultipliedClampsBadChannel(t *testing.T) {
+	// 预乘数据里通道不该大于 alpha，坏数据截到 255 而不是回绕。
+	raw := []byte{200, 0, 0, 100}
+	img, err := bgraToNRGBA(raw, 1, 1, 4, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := img.NRGBAAt(0, 0); c.B != 255 {
+		t.Fatalf("pixel %v, want blue 255", c)
+	}
+}
