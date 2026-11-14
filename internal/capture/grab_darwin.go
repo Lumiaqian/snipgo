@@ -21,7 +21,7 @@ import (
 
 // macOS 14 的 SCScreenshotManager.captureImageWithFilter。
 // 不用 15.2 的 captureImageInRect，也不用 macOS 26 的 SCScreenshotConfiguration。
-// 完成回调在后台队列执行。超时只停止等待：块和过滤器留着，避免回调晚到时重复释放。
+// 完成回调在后台队列执行。超时后由后台 goroutine 等回调结束，再释放块和迟到的结果。
 
 const captureResolutionBest = 1
 
@@ -225,7 +225,7 @@ func captureDisplay(ctx context.Context, display objc.ID, width, height int) (*i
 	objc.ID(objc.GetClass("SCScreenshotManager")).Send(selCapture, filter, config, block)
 	r, err := waitObjC(ctx, ch, done, block)
 	if err != nil {
-		// 回调还没来。过滤器、配置和块都留着，晚到的回调会自己释放过滤器。
+		// 回调还没来。晚到的回调自己释放过滤器和配置，块由 waitObjC 的后台 goroutine 释放。
 		return nil, err
 	}
 	return r.img, r.err
@@ -238,7 +238,7 @@ type objcResult struct {
 }
 
 // waitObjC 等回调把结果放进 ch，并等回调函数返回后再释放块。
-// 超时则不释放：回调可能仍会执行，提前释放会变成重复释放。
+// 超时则先返回，回调晚到时由后台 goroutine 收尾：释放已 retain 的 content，再释放块。
 func waitObjC(ctx context.Context, ch <-chan objcResult, done <-chan struct{}, block objc.Block) (objcResult, error) {
 	select {
 	case r := <-ch:
@@ -246,6 +246,14 @@ func waitObjC(ctx context.Context, ch <-chan objcResult, done <-chan struct{}, b
 		block.Release()
 		return r, nil
 	case <-ctx.Done():
+		go func() {
+			r := <-ch
+			<-done
+			if r.content != 0 {
+				r.content.Send(selRelease)
+			}
+			block.Release()
+		}()
 		return objcResult{}, ctx.Err()
 	}
 }
