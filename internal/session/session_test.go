@@ -228,3 +228,22 @@ func ready(ui *fakeUI, clip *fakeClip) *Session {
 func readyFrames() []crop.Screen {
 	return []crop.Screen{redScreen()}
 }
+
+func TestHotkeyIgnoredWhileCapturing(t *testing.T) {
+	launches := 0
+	s := &Session{
+		Allowed: func() (bool, string) { return true, "" },
+		UI:      &fakeUI{},
+		Clip:    &fakeClip{},
+		Launch:  func(int) { launches++ },
+	}
+	s.Hotkey()
+	s.Hotkey()
+	if launches != 1 {
+		t.Fatalf("launches %d, want 1", launches)
+	}
+	s.Deliver(s.gen, []crop.Screen{redScreen()}, nil)
+	if s.phase != phaseSelecting {
+		t.Fatal("first capture should still be delivered")
+	}
+}

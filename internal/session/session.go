@@ -60,8 +60,11 @@ type drag struct {
 	x1, y1 float64
 }
 
-// Hotkey 在主线程调用。选区还在时先关掉，再开始新一轮。
+// Hotkey 在主线程调用。正在采集时忽略；选区还在时先关掉，再开始新一轮。
 func (s *Session) Hotkey() {
+	if s.phase == phaseCapturing {
+		return
+	}
 	if s.phase == phaseSelecting {
 		s.clearSelection()
 	}
