@@ -119,7 +119,7 @@ func (a *app) refreshMenu() {
 		items = append(items, &mygo.MenuItem{Label: text, Disabled: true})
 	}
 	if a.shortcutErr != nil {
-		items = append(items, &mygo.MenuItem{Label: "快捷键 Cmd+Shift+2 已被占用", Disabled: true})
+		items = append(items, &mygo.MenuItem{Label: "快捷键 " + shortcut + " 注册失败", Disabled: true})
 	}
 	st, err := permissionflow.Check(permissionflow.ScreenRecording)
 	if err != nil || st != permissionflow.Granted {
