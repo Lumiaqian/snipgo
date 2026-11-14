@@ -1,0 +1,12 @@
+.DS_Store
+/bin/
+/build/
+/dist/
+*.test
+coverage.out
+.env
+.env.*
+!.env.example
+
+/.mygo/
+mygo_windows_*.syso

@@ -1,0 +1,6 @@
+{
+  "name": "SnipGo",
+  "identifier": "app.snipgo",
+  "version": "0.1.0",
+  "out": "build"
+}
