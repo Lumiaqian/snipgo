@@ -260,8 +260,8 @@ func TestMaximizedForegroundWindowOccludesBackgroundWindows(t *testing.T) {
 	ui := &fakeUI{}
 	clip := &fakeClip{}
 	screen := crop.Screen{Bounds: image.Rect(1728, 0, 3648, 1080), Scale: 2}
-	maxWarp := image.Rect(1728, 0, 3648, 1080)       // 顶层全屏/最大化窗口
-	buried := image.Rect(2000, 200, 2800, 700)       // 被遮挡在底下的小窗口
+	maxWarp := image.Rect(1728, 0, 3648, 1080) // 顶层全屏/最大化窗口
+	buried := image.Rect(2000, 200, 2800, 700) // 被遮挡在底下的小窗口
 	s := &Session{
 		Live: func() (Snapshot, error) {
 			return Snapshot{

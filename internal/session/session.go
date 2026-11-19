@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"math"
 	"time"
@@ -40,6 +41,8 @@ const (
 	ActionPin
 	ActionSave
 	ActionOCR
+	ActionCutout
+	ActionTemplate
 )
 
 // WinTarget 记录单个可见窗口的 CGWindowID 与边界。
@@ -85,13 +88,13 @@ type Clipboard interface {
 type dragKind int
 
 const (
-	dragNone dragKind = iota
-	dragBox           // 新画选区
-	dragMove          // 平移已有选区
-	dragResize        // 拖拽控制柄缩放
-	dragPendingRedraw // 在已有选区外按下，拖够 minDIP 才替换选区
-	dragAnnotate      // 在选区内绘制矢量标注
-	dragAnnotateEdit  // 拖拽平移或调整已选中的标注图元
+	dragNone          dragKind = iota
+	dragBox                    // 新画选区
+	dragMove                   // 平移已有选区
+	dragResize                 // 拖拽控制柄缩放
+	dragPendingRedraw          // 在已有选区外按下，拖够 minDIP 才替换选区
+	dragAnnotate               // 在选区内绘制矢量标注
+	dragAnnotateEdit           // 拖拽平移或调整已选中的标注图元
 )
 
 type dragState struct {
@@ -118,6 +121,10 @@ type Session struct {
 	UI      UI
 	// OnOutput 在每次成功生成截图 PNG（复制 / 贴图 / 保存）时回调，供本地历史记录归档。
 	OnOutput func(png []byte, pxW, pxH int)
+	// OnCutout 在触发选区主体抠图（K）并采集完像素后回调，交由 Vision 离线去背景并生成异形贴纸。
+	OnCutout func(img *image.NRGBA, r image.Rectangle)
+	// OnTemplate 在触发套模板（B）并采集/合成完选区标注后回调，打开所见即所得「套模板工作台」。
+	OnTemplate func(img *image.NRGBA, r image.Rectangle)
 	// OnMain 把后台采集结果送回主线程。测试里直接同步执行。
 	OnMain func(func())
 	// Launch 替换默认的后台整屏冻结采集（测试钩子）。
@@ -132,6 +139,9 @@ type Session struct {
 	windowOnly     bool
 	beautify       bool
 	beautifyPreset beautify.Preset
+	beautifyChrome bool
+	colorFmt       beautify.ColorFormat
+	pickedColors   []color.NRGBA
 	measureMode    bool
 	lastOCRRect    image.Rectangle
 	frames         []crop.Screen
@@ -208,6 +218,129 @@ func (s *Session) ToggleBeautify() bool {
 func (s *Session) SetBeautifyPreset(p beautify.Preset) {
 	s.beautifyPreset = p
 	s.beautify = true
+}
+
+// BeautifyChrome 报告美化卡片是否附加仿真 macOS 红黄绿交通灯顶栏。
+func (s *Session) BeautifyChrome() bool { return s.beautifyChrome }
+
+// ToggleBeautifyChrome 开关美化卡片的仿真 macOS 窗口顶栏。
+func (s *Session) ToggleBeautifyChrome() bool {
+	s.beautifyChrome = !s.beautifyChrome
+	if s.beautifyChrome {
+		s.beautify = true
+	}
+	return s.beautifyChrome
+}
+
+// ColorFormat 返回当前取色格式（HEX / RGB / OKLCH / Tailwind）。
+func (s *Session) ColorFormat() beautify.ColorFormat { return s.colorFmt }
+
+// CycleColorFormat 循环切换取色输出格式。
+func (s *Session) CycleColorFormat() beautify.ColorFormat {
+	s.colorFmt = beautify.NextColorFormat(s.colorFmt)
+	return s.colorFmt
+}
+
+// PickedColors 返回本轮取色已采集的多色板颜色副本。
+func (s *Session) PickedColors() []color.NRGBA {
+	if len(s.pickedColors) == 0 {
+		return nil
+	}
+	out := make([]color.NRGBA, len(s.pickedColors))
+	copy(out, s.pickedColors)
+	return out
+}
+
+// ClearPickedColors 清空暂存的多色板。
+func (s *Session) ClearPickedColors() {
+	s.pickedColors = nil
+}
+
+// SampleColorToPalette 在不退出选区的前提下采样当前光标色值并加入多色板（最多 8 色）。
+// 冻结模式同步采样；实时模式异步采样并在回调中通知刷新。
+func (s *Session) SampleColorToPalette(onAdded func(col color.NRGBA)) bool {
+	if !s.hasCursor {
+		return false
+	}
+	appendCol := func(c color.NRGBA) {
+		c.A = 255
+		if len(s.pickedColors) >= 8 {
+			s.pickedColors = s.pickedColors[1:]
+		}
+		s.pickedColors = append(s.pickedColors, c)
+		if onAdded != nil {
+			onAdded(c)
+		}
+	}
+	if !s.live {
+		loupe, ok := s.SampleLoupe(1)
+		if !ok {
+			return false
+		}
+		appendCol(loupe.Center)
+		return true
+	}
+	if s.CaptureRect == nil {
+		return false
+	}
+	cx, cy := int(math.Floor(s.cursorX)), int(math.Floor(s.cursorY))
+	patch := image.Rect(cx-1, cy-1, cx+2, cy+2)
+	if union := screensUnion(s.frames); !union.Empty() {
+		patch = patch.Intersect(union)
+	}
+	if patch.Empty() {
+		return false
+	}
+	gen := s.gen
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		img, err := s.CaptureRect(ctx, patch)
+		s.OnMain(func() {
+			if gen != s.gen || (s.phase != PhaseSelecting && s.phase != PhaseAdjusting) || err != nil || img == nil || img.Bounds().Empty() {
+				return
+			}
+			b := img.Bounds()
+			appendCol(img.NRGBAAt(b.Min.X+b.Dx()/2, b.Min.Y+b.Dy()/2))
+		})
+	}()
+	return true
+}
+
+// PinPickedPalette 将当前已采集的多色板渲染为高分屏配色卡，复制到剪贴板并原地贴图，同时结束选区。
+func (s *Session) PinPickedPalette() bool {
+	if len(s.pickedColors) == 0 {
+		return false
+	}
+	colors := s.PickedColors()
+	scale := 2.0
+	if s.hasCursor {
+		pt := image.Pt(int(math.Floor(s.cursorX)), int(math.Floor(s.cursorY)))
+		scale = s.scaleForRect(image.Rect(pt.X, pt.Y, pt.X+1, pt.Y+1))
+	}
+	card := beautify.RenderPaletteCard(colors, scale)
+	if card == nil || card.Bounds().Empty() {
+		return false
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, card); err != nil {
+		return false
+	}
+	dipW := max(120, int(math.Round(float64(card.Bounds().Dx())/scale)))
+	dipH := max(64, int(math.Round(float64(card.Bounds().Dy())/scale)))
+	at := image.Pt(120, 120)
+	if s.hasCursor {
+		at = image.Pt(max(20, int(s.cursorX)-dipW/2), max(40, int(s.cursorY)-dipH/2))
+	}
+	s.clearSelection()
+	if s.Clip != nil {
+		_ = s.Clip.WritePNG(buf.Bytes())
+	}
+	if s.OnOutput != nil {
+		s.OnOutput(buf.Bytes(), card.Bounds().Dx(), card.Bounds().Dy())
+	}
+	s.UI.ShowPin(card, buf.Bytes(), at, dipW, dipH)
+	return true
 }
 
 // MeasureMode 报告冻结模式下是否开启了像素测量尺。
@@ -411,6 +544,7 @@ func (s *Session) enterSelecting(snap Snapshot) {
 	s.windowOnly = false
 	s.beautify = false
 	s.measureMode = false
+	s.pickedColors = nil
 	s.lockedWinID = 0
 	s.lockedWinRect = image.Rectangle{}
 	s.sel = image.Rectangle{}
@@ -838,6 +972,12 @@ func (s *Session) Save() { s.confirm(ActionSave) }
 // OCR 识别当前选区文字或二维码并复制到剪贴板。
 func (s *Session) OCR() { s.confirm(ActionOCR) }
 
+// Cutout 对当前选区执行离线 AI 主体抠图并作为无底异形贴纸悬浮展示。
+func (s *Session) Cutout() { s.confirm(ActionCutout) }
+
+// Template 采集当前选区（保留已绘矢量标注）并进入所见即所得「套模板工作台」。
+func (s *Session) Template() { s.confirm(ActionTemplate) }
+
 func (s *Session) confirm(act ConfirmAction) {
 	r, winID, ok := s.targetSelection()
 	if !ok {
@@ -848,8 +988,9 @@ func (s *Session) confirm(act ConfirmAction) {
 	}
 	items := s.Annotations().Items()
 	useWinOnly := s.windowOnly && winID != 0 && s.CaptureWindow != nil
-	useBeautify := s.beautify && act != ActionOCR
-	if act == ActionOCR {
+	useBeautify := s.beautify && act != ActionOCR && act != ActionCutout && act != ActionTemplate
+	useChrome := s.beautifyChrome
+	if act == ActionOCR || act == ActionCutout {
 		items = nil
 	}
 	preset := s.beautifyPreset
@@ -861,12 +1002,15 @@ func (s *Session) confirm(act ConfirmAction) {
 			s.fail(err.Error())
 			return
 		}
-		if act == ActionOCR {
+		if act == ActionOCR || act == ActionCutout || act == ActionTemplate {
+			if len(items) > 0 {
+				annotate.Render(img, r, items)
+			}
 			s.clearSelection()
 			s.applyOutput(act, r, img, nil)
 			return
 		}
-		img, outR := postProcessImage(img, r, scale, items, useBeautify, preset)
+		img, outR := postProcessImage(img, r, scale, items, useBeautify, preset, useChrome)
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, img); err != nil {
 			s.fail(err.Error())
@@ -903,19 +1047,22 @@ func (s *Session) confirm(act ConfirmAction) {
 			err = errors.New("截图超时，请重试")
 		}
 		var outR = r
-		if err == nil && img != nil && !img.Bounds().Empty() {
-			img, outR = postProcessImage(img, r, scale, items, useBeautify, preset)
+		if err == nil && img != nil && !img.Bounds().Empty() && act != ActionOCR && act != ActionCutout {
+			img, outR = postProcessImage(img, r, scale, items, useBeautify, preset, useChrome)
 		}
 		s.OnMain(func() { s.DeliverRect(gen, act, outR, img, err) })
 	}()
 }
 
-func postProcessImage(img *image.NRGBA, r image.Rectangle, scale float64, items []annotate.Item, useBeautify bool, preset beautify.Preset) (*image.NRGBA, image.Rectangle) {
+func postProcessImage(img *image.NRGBA, r image.Rectangle, scale float64, items []annotate.Item, useBeautify bool, preset beautify.Preset, useChrome bool) (*image.NRGBA, image.Rectangle) {
 	if len(items) > 0 {
 		annotate.Render(img, r, items)
 	}
 	if useBeautify {
-		img = beautify.RenderCard(img, scale, preset)
+		img = beautify.RenderCardWithOptions(img, scale, beautify.CardOptions{
+			Preset:       preset,
+			WindowChrome: useChrome,
+		})
 		if scale <= 0 {
 			scale = 2.0
 		}
@@ -957,6 +1104,22 @@ func (s *Session) DeliverRect(gen int, act ConfirmAction, r image.Rectangle, img
 		s.status = ""
 		s.UI.SetStatus("")
 		s.UI.RecognizeImage(img)
+		return
+	}
+	if act == ActionCutout {
+		s.status = ""
+		s.UI.SetStatus("")
+		if s.OnCutout != nil {
+			s.OnCutout(img, r)
+		}
+		return
+	}
+	if act == ActionTemplate {
+		s.status = ""
+		s.UI.SetStatus("")
+		if s.OnTemplate != nil {
+			s.OnTemplate(img, r)
+		}
 		return
 	}
 	var buf bytes.Buffer
@@ -1003,25 +1166,40 @@ func (s *Session) applyOutput(act ConfirmAction, r image.Rectangle, img *image.N
 		s.status = ""
 		s.UI.SetStatus("")
 		s.UI.RecognizeImage(img)
+	case ActionCutout:
+		s.status = ""
+		s.UI.SetStatus("")
+		if s.OnCutout != nil {
+			s.OnCutout(img, r)
+		}
+	case ActionTemplate:
+		s.status = ""
+		s.UI.SetStatus("")
+		if s.OnTemplate != nil {
+			s.OnTemplate(img, r)
+		}
 	}
 }
 
-// CopyColor 复制光标处像素色值（HEX 或 RGB）到剪贴板并退出截图。
-// 冻结模式直接从静态缓冲读取；实时模式异步采集光标周围极小块像素取色。
+// CopyColor 复制光标处像素色值到剪贴板并退出截图。
+// rgbFormat 为 true（Shift+C）固定输出 R, G, B；否则按当前取色格式（HEX / RGB / OKLCH / Tailwind）输出。
 func (s *Session) CopyColor(rgbFormat bool) bool {
 	if s.Clip == nil || !s.hasCursor {
 		return false
+	}
+	colorFmt := s.colorFmt
+	formatPx := func(px color.NRGBA) string {
+		if rgbFormat {
+			return fmt.Sprintf("%d, %d, %d", px.R, px.G, px.B)
+		}
+		return beautify.FormatColor(px, colorFmt)
 	}
 	if !s.live {
 		loupe, ok := s.SampleLoupe(1)
 		if !ok {
 			return false
 		}
-		text := loupe.Hex()
-		if rgbFormat {
-			text = loupe.RGB()
-		}
-		s.Clip.WriteText(text)
+		s.Clip.WriteText(formatPx(loupe.Center))
 		s.status = ""
 		s.UI.SetStatus("")
 		s.clearSelection()
@@ -1060,11 +1238,7 @@ func (s *Session) CopyColor(rgbFormat bool) bool {
 			}
 			b := img.Bounds()
 			px := img.NRGBAAt(b.Min.X+b.Dx()/2, b.Min.Y+b.Dy()/2)
-			text := fmt.Sprintf("#%02X%02X%02X", px.R, px.G, px.B)
-			if rgbFormat {
-				text = fmt.Sprintf("%d, %d, %d", px.R, px.G, px.B)
-			}
-			s.Clip.WriteText(text)
+			s.Clip.WriteText(formatPx(px))
 			s.status = ""
 			s.UI.SetStatus("")
 		})
@@ -1105,6 +1279,7 @@ func (s *Session) clearSelection() {
 	s.live = false
 	s.autoOCR = false
 	s.measureMode = false
+	s.pickedColors = nil
 	s.dropFrames()
 	s.hoverWin = image.Rectangle{}
 	s.lockedWinID = 0
