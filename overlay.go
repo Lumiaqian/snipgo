@@ -128,36 +128,38 @@ func (a *app) selectionView(o *overlay) func(*ui.Context) {
 			return
 		}
 
-		if a.handleSelectionKeys(c) {
-			return
-		}
-		w := float32(o.bounds.Dx())
-		h := float32(o.bounds.Dy())
-		var toolbarAct func()
-		ui.Box(c).Size(w, h).Children(func() {
-			if o.bitmap != nil {
-				ui.Image(c, o.bitmap).Size(w, h).Absolute().Left(0).Top(0).IgnoreInput(true)
+		withAppTheme(c, func() {
+			if a.handleSelectionKeys(c) {
+				return
 			}
-			hit := ui.Box(c).Size(w, h).Absolute().Left(0).Top(0).ZIndex(2)
-			if o.bitmap == nil {
-				// macOS SkyLight 合成器会把 alpha < 0.05 (13/255) 的透明窗口像素当成鼠标穿透区；
-				// 0.055 (14/255) 刚好高于穿透阈值以捕获鼠标移动与点击，同时视觉上几乎完全透明。
-				hit.Background(ui.RGBA(128, 128, 128, 0.055))
-			}
-			lx, ly, _ := hit.PointerPosition()
-			gx := float64(o.bounds.Min.X) + float64(lx)
-			gy := float64(o.bounds.Min.Y) + float64(ly)
-			hit.Cursor(cursorForHandle(a.session.HitTest(gx, gy)))
-			hit.HandleInput(func(ev ui.InputEvent) bool {
-				return a.onCanvasInput(o, ev)
+			w := float32(o.bounds.Dx())
+			h := float32(o.bounds.Dy())
+			var toolbarAct func()
+			ui.Box(c).Size(w, h).Children(func() {
+				if o.bitmap != nil {
+					ui.Image(c, o.bitmap).Size(w, h).Absolute().Left(0).Top(0).IgnoreInput(true)
+				}
+				hit := ui.Box(c).Size(w, h).Absolute().Left(0).Top(0).ZIndex(2)
+				if o.bitmap == nil {
+					// macOS SkyLight 合成器会把 alpha < 0.05 (13/255) 的透明窗口像素当成鼠标穿透区；
+					// 0.055 (14/255) 刚好高于穿透阈值以捕获鼠标移动与点击，同时视觉上几乎完全透明。
+					hit.Background(ui.RGBA(128, 128, 128, 0.055))
+				}
+				lx, ly, _ := hit.PointerPosition()
+				gx := float64(o.bounds.Min.X) + float64(lx)
+				gy := float64(o.bounds.Min.Y) + float64(ly)
+				hit.Cursor(cursorForHandle(a.session.HitTest(gx, gy)))
+				hit.HandleInput(func(ev ui.InputEvent) bool {
+					return a.onCanvasInput(o, ev)
+				})
+				a.paintMask(c, o)
+				a.paintTextEditor(c, o)
+				toolbarAct = a.paintToolbar(c, o)
 			})
-			a.paintMask(c, o)
-			a.paintTextEditor(c, o)
-			toolbarAct = a.paintToolbar(c, o)
+			if toolbarAct != nil {
+				a.deferUI(toolbarAct)
+			}
 		})
-		if toolbarAct != nil {
-			a.deferUI(toolbarAct)
-		}
 	}
 }
 
@@ -262,6 +264,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		return false
 	}
 
+	cmdQ := c.Shortcut(ui.Cmd, ui.KeyQ)
 	cmdW := c.Shortcut(ui.Cmd, ui.KeyW)
 	space := c.Shortcut(0, ui.KeySpace)
 	enter := c.Shortcut(0, ui.KeyEnter)
@@ -277,6 +280,10 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	keyR := c.Shortcut(0, ui.KeyR)
 	keyL := c.Shortcut(0, ui.KeyL)
 	keyX := c.Shortcut(0, ui.KeyX)
+	keyK := c.Shortcut(0, ui.KeyK)
+	keyP := c.Shortcut(0, ui.KeyP)
+	shiftP := c.Shortcut(ui.Shift, ui.KeyP)
+	tabKey := c.Shortcut(0, ui.KeyTab)
 	keyC := c.Shortcut(0, ui.KeyC)
 	shiftC := c.Shortcut(ui.Shift, ui.KeyC)
 	delKey := c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)
@@ -294,6 +301,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		{ui.Key7, annotate.ToolText},
 		{ui.Key8, annotate.ToolSpotlight},
 		{ui.Key9, annotate.ToolErase},
+		{ui.Key0, annotate.ToolLoupe},
 	}
 	var pickedTool annotate.Tool = -1
 	for _, tk := range toolKeys {
@@ -334,6 +342,9 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	}
 
 	switch {
+	case cmdQ:
+		a.deferUI(func() { mygo.App.Quit() })
+		return true
 	case esc || cmdW:
 		a.deferUI(a.session.Cancel)
 		return true
@@ -365,6 +376,25 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	case keyX && a.session.Phase() == session.PhaseAdjusting:
 		a.autoRedactSelection()
 		return false
+	case keyK:
+		a.commitOrCloseTextEdit()
+		a.deferUI(a.session.Cutout)
+		return true
+	case tabKey:
+		a.session.CycleColorFormat()
+		a.invalidateAll()
+		return false
+	case shiftP:
+		if len(a.session.PickedColors()) > 0 {
+			a.deferUI(func() { a.session.PinPickedPalette() })
+			return true
+		}
+		return false
+	case keyP:
+		if a.session.SampleColorToPalette(func(color.NRGBA) { a.invalidateAll() }) {
+			a.invalidateAll()
+		}
+		return false
 	case keyL && a.session.Phase() == session.PhaseAdjusting:
 		if sel, locked, ok := a.session.ActiveRect(); ok && locked {
 			a.deferUI(func() { a.startScrollCapture(sel) })
@@ -394,9 +424,9 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		}
 		return false
 	case keyB:
-		a.session.ToggleBeautify()
-		a.invalidateAll()
-		return false
+		a.commitOrCloseTextEdit()
+		a.deferUI(a.session.Template)
+		return true
 	case keyR:
 		if a.session.ToggleMeasure() {
 			a.invalidateAll()
@@ -457,7 +487,7 @@ func (a *app) paintMask(c *ui.Context, o *overlay) {
 	}
 	win := image.Rect(0, 0, o.bounds.Dx(), o.bounds.Dy())
 	_, border := dimBands(win, hole)
-	accent := ui.RGB(0, 168, 255)
+	accent := uiPalette(c).Accent
 	if a.session.WindowOnly() {
 		accent = ui.RGB(52, 199, 89)
 	}
@@ -465,22 +495,6 @@ func (a *app) paintMask(c *ui.Context, o *overlay) {
 		strokeW := float32(1.5)
 		if !locked && !a.session.Dragging() {
 			strokeW = 2
-		}
-		if a.session.Beautify() {
-			c0, c1 := beautify.PresetColors(a.session.BeautifyPreset())
-			pad := float32(6)
-			gx0 := max(float32(win.Min.X), float32(border.Min.X)-pad)
-			gy0 := max(float32(win.Min.Y), float32(border.Min.Y)-pad)
-			gx1 := min(float32(win.Max.X), float32(border.Max.X)+pad)
-			gy1 := min(float32(win.Max.Y), float32(border.Max.Y)+pad)
-			ui.Box(c).Absolute().
-				Left(gx0).Top(gy0).
-				Size(gx1-gx0, gy1-gy0).
-				ZIndex(3).
-				Radius(8).
-				Border(4, ui.RGBA(c0.R, c0.G, c0.B, 0.72)).
-				Shadow(0, 4, 16, 0, ui.RGBA(c1.R, c1.G, c1.B, 0.45)).
-				IgnoreInput(true)
 		}
 		// MyGo 的 Border 向盒内绘制线宽；向外外扩 strokeW（并在屏边夹紧）让内沿精确贴齐选区像素边界。
 		bx0 := max(float32(win.Min.X), float32(border.Min.X)-strokeW)
@@ -507,58 +521,62 @@ func (a *app) paintMask(c *ui.Context, o *overlay) {
 				continue
 			}
 			ui.Box(c).Absolute().
-				Left(float32(lx - 4)).Top(float32(ly - 4)).
-				Size(8, 8).
+				Left(float32(lx)-4.5).Top(float32(ly)-4.5).
+				Size(9, 9).
 				ZIndex(4).
-				Radius(1.5).
+				Radius(4.5).
 				Background(ui.RGB(255, 255, 255)).
 				Border(1.5, accent).
+				Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, 0.45)).
 				IgnoreInput(true)
 		}
 	}
+	nativeGlass := o.bitmap == nil
+	pal := uiPalette(c)
 	if hasRect && !border.Empty() && a.ownsPoint(o, rect.Min) {
 		pxW, pxH := a.session.PixelSize(rect)
 		if label := formatSizeLabel(rect.Dx(), rect.Dy(), pxW, pxH); label != "" {
 			if a.session.WindowOnly() {
 				label += " · 独立单窗"
 			}
-			if a.session.Beautify() {
-				label += " · " + beautify.PresetName(a.session.BeautifyPreset())
-			}
 			pos := hudTopLeft(win, border)
-			ui.Box(c).Absolute().
-				Left(float32(pos.X)).Top(float32(pos.Y)).
-				ZIndex(5).
-				Padding(3, 7).
-				Radius(4).
-				Background(ui.RGBA(20, 20, 24, 0.86)).
-				IgnoreInput(true).
-				Children(func() {
-					ui.Text(c, label).
-						FontSize(12).
-						FontFeatures("tnum").
-						TextColor(ui.RGB(255, 255, 255))
-				})
+			liquidGlassCapsule(
+				ui.Box(c).Absolute().
+					Left(float32(pos.X)).Top(float32(pos.Y)).
+					ZIndex(5).
+					Padding(4, 10).
+					IgnoreInput(true),
+				13,
+				nativeGlass,
+			).Children(func() {
+				ui.Text(c, label).
+					FontSize(11.5).
+					FontWeight(500).
+					FontFeatures("tnum").
+					TextColor(pal.Text)
+			})
 		}
 	}
 	if a.session.AutoOCR() && len(a.overlays) > 0 && o == a.overlays[0] {
-		ui.Row(c).Absolute().
-			Left(float32(max(12, win.Dx()/2-200))).Top(44).
-			Height(32).
-			Padding(0, 14).
-			Gap(7).
-			AlignItems(ui.Center).
-			ZIndex(6).
-			Radius(16).
-			Background(ui.RGBA(20, 21, 26, 0.92)).
-			Border(1, ui.RGBA(64, 172, 255, 0.45)).
-			Shadow(0, 4, 14, 0, ui.RGBA(0, 0, 0, 0.35)).
-			IgnoreInput(true).
-			Children(func() {
-				ui.Icon(c, iconOCR).FontSize(14).TextColor(ui.RGB(64, 172, 255))
-				ui.Text(c, "识图模式 · 拖拽框选或单击窗口松手即刻提取文字与二维码 · Esc 取消").
-					FontSize(12).NoWrap().TextColor(ui.RGB(240, 242, 247))
-			})
+		liquidGlassCapsule(
+			ui.Row(c).Absolute().
+				Left(float32(max(12, win.Dx()/2-200))).Top(44).
+				Height(34).
+				Padding(0, 14).
+				Gap(7).
+				AlignItems(ui.Center).
+				ZIndex(6).
+				IgnoreInput(true),
+			17,
+			nativeGlass,
+		).Children(func() {
+			ui.Icon(c, iconOCR).FontSize(14).TextColor(pal.Accent)
+			ui.Text(c, "识图模式 · 拖拽框选或单击窗口松手即刻提取文字与二维码 · Esc 取消").
+				FontSize(12).FontWeight(500).NoWrap().TextColor(pal.Text)
+		})
+	}
+	if len(a.session.PickedColors()) > 0 && len(a.overlays) > 0 && o == a.overlays[0] {
+		a.paintPickedPaletteBar(c, o, win)
 	}
 	if a.session.MeasureMode() {
 		a.paintRuler(c, o, win)
@@ -664,6 +682,12 @@ func paintCanvasAnnotations(p *ui.Painter, clipR ui.Rect, items []annotate.Item,
 				fSize := float32(13 + it.Stroke*2)
 				p.RichText(x0+1, y0+1, 0, ui.Span{Text: it.Text, Size: fSize, Weight: 600, Color: ui.RGBA(0, 0, 0, 0.65)})
 				p.RichText(x0, y0, 0, ui.Span{Text: it.Text, Size: fSize, Weight: 600, Color: col})
+			case annotate.ToolLoupe:
+				zoom := it.Zoom
+				if zoom <= 0 {
+					zoom = 2.5
+				}
+				drawPreviewLoupe(p, x0, y0, x1, y1, float32(annotate.LoupeRadius(it.Stroke)), zoom, col)
 			}
 		}
 
@@ -682,6 +706,42 @@ func drawErasePreview(p *ui.Painter, r ui.Rect) {
 	p.StrokeDashed(r, ui.RGBA(10, 132, 255, 0.78), 3, 1.2)
 }
 
+func drawPreviewLoupe(p *ui.Painter, x0, y0, x1, y1, rad float32, zoom float64, accent ui.Color) {
+	if rad < 14 {
+		rad = 48
+	}
+	dist := float32(math.Hypot(float64(x1-x0), float64(y1-y0)))
+	if dist > 10 {
+		ux, uy := (x1-x0)/dist, (y1-y0)/dist
+		const tr = float32(7)
+		if dist > tr+rad+4 {
+			lx0, ly0 := x0+ux*tr, y0+uy*tr
+			lx1, ly1 := x1-ux*(rad+3), y1-uy*(rad+3)
+			var stem ui.Path
+			stem.Cap(ui.RoundCap).MoveTo(lx0, ly0).LineTo(lx1, ly1)
+			p.StrokePath(&stem, 3.6, ui.RGBA(255, 255, 255, 0.85))
+			p.StrokePath(&stem, 2.0, accent)
+		}
+		p.Stroke(ui.Rect{X: x0 - tr, Y: y0 - tr, W: tr * 2, H: tr * 2}, accent, tr, 2)
+		p.Fill(ui.Rect{X: x0 - 2, Y: y0 - 2, W: 4, H: 4}, accent, 2)
+	}
+	lensR := ui.Rect{X: x1 - rad, Y: y1 - rad, W: rad * 2, H: rad * 2}
+	p.Shadow(lensR, rad, 0, 5, 16, 0, ui.RGBA(0, 0, 0, 0.42))
+	p.Fill(lensR, ui.RGBA(20, 24, 34, 0.24), rad)
+	p.Stroke(lensR, ui.RGBA(255, 255, 255, 0.96), rad, 3)
+	p.Stroke(ui.Rect{X: x1 - rad - 1.5, Y: y1 - rad - 1.5, W: (rad + 1.5) * 2, H: (rad + 1.5) * 2}, accent, rad+1.5, 1.3)
+
+	// 镜内右下角精致倍率角标
+	badge := fmt.Sprintf("%.1f×", zoom)
+	sp := ui.Span{Text: badge, Size: 11, Weight: 700, Features: "tnum", Color: ui.RGB(255, 255, 255)}
+	tw, th := p.MeasureText(0, sp)
+	bw, bh := tw+10, th+4
+	bx := x1 - bw*0.5
+	by := y1 + rad - bh - 6
+	p.Fill(ui.Rect{X: bx, Y: by, W: bw, H: bh}, ui.RGBA(18, 20, 26, 0.82), bh*0.5)
+	p.RichText(bx+5, by+2, 0, sp)
+}
+
 func drawSelectionHandles(p *ui.Painter, it annotate.Item, x0, y0, x1, y1 float32) {
 	hi := ui.RGB(10, 132, 255)
 	dot := func(cx, cy float32) {
@@ -691,6 +751,9 @@ func drawSelectionHandles(p *ui.Painter, it annotate.Item, x0, y0, x1, y1 float3
 	switch it.Tool {
 	case annotate.ToolStep, annotate.ToolText:
 		dot(x0, y0)
+	case annotate.ToolLoupe:
+		dot(x0, y0)
+		dot(x1, y1)
 	case annotate.ToolPen:
 		if len(it.Points) > 0 {
 			dot(x0, y0)
@@ -860,22 +923,25 @@ func (a *app) paintTextEditor(c *ui.Context, o *overlay) {
 	ly := max(8, min(pt.Y-o.bounds.Min.Y, o.bounds.Dy()-42))
 	col := a.session.Annotations().Color
 
-	box := ui.Row(c).Absolute().
-		Left(float32(lx)).Top(float32(ly)).
-		Width(220).
-		ZIndex(12).
-		Padding(4, 6).
-		Gap(6).
-		AlignItems(ui.Center).
-		Radius(6).
-		Background(ui.RGBA(22, 22, 26, 0.94)).
-		Border(1.5, ui.RGB(col.R, col.G, col.B))
+	box := liquidGlassCapsule(
+		ui.Row(c).Absolute().
+			Left(float32(lx)).Top(float32(ly)).
+			Width(220).
+			ZIndex(12).
+			Padding(4, 6).
+			Gap(6).
+			AlignItems(ui.Center),
+		12,
+		o.bitmap == nil,
+	).Border(1.5, ui.RGB(col.R, col.G, col.B))
 	_ = box.Clicked()
 	box.Children(func() {
-		inp := ui.TextInput(c.Key("annot-text-input"), &a.textEditBuf).
-			Grow(1).
-			Placeholder("输入批注，回车确认").
-			AutoFocus()
+		inp := recessedInputStyle(c,
+			ui.TextInput(c.Key("annot-text-input"), &a.textEditBuf).
+				Grow(1).
+				Placeholder("输入批注，回车确认").
+				AutoFocus(),
+		).Radius(8)
 		if inp.Submitted() {
 			a.commitOrCloseTextEdit()
 			a.invalidateAll()
@@ -916,16 +982,18 @@ func (a *app) paintRuler(c *ui.Context, o *overlay, win image.Rectangle) {
 
 	badge := fmt.Sprintf("↔ %d px (%d)  ↕ %d px (%d) · 单击复制", rd.WidthPx, rd.WidthDIP, rd.HeightPx, rd.HeightDIP)
 	pos := loupePos(win, image.Pt(int(cx), int(cy)), 240, 32)
-	ui.Box(c).Absolute().
-		Left(float32(pos.X)).Top(float32(pos.Y)).
-		ZIndex(7).
-		Padding(5, 9).
-		Radius(5).
-		Background(ui.RGBA(20, 20, 24, 0.92)).
-		Border(1, ui.RGBA(255, 69, 58, 0.65)).
-		IgnoreInput(true).
+	pal := uiPalette(c)
+	liquidGlassCapsule(
+		ui.Box(c).Absolute().
+			Left(float32(pos.X)).Top(float32(pos.Y)).
+			ZIndex(7).
+			Padding(5, 10).
+			IgnoreInput(true),
+		13,
+		o.bitmap == nil,
+	).Border(1, ui.RGBA(255, 69, 58, 0.72)).
 		Children(func() {
-			ui.Text(c, badge).FontSize(11.5).FontFeatures("tnum").TextColor(ui.RGB(255, 255, 255))
+			ui.Text(c, badge).FontSize(11.5).FontWeight(500).FontFeatures("tnum").TextColor(pal.Text)
 		})
 }
 
@@ -945,50 +1013,109 @@ func (a *app) paintLoupe(c *ui.Context, o *overlay, win image.Rectangle) {
 	const (
 		cellSize = 10
 		pad      = 6
-		footerH  = 44
+		footerH  = 54
 	)
 	gridPx := loupe.Side * cellSize
-	boxW := gridPx + pad*2
+	boxW := max(gridPx+pad*2, 186)
 	boxH := gridPx + pad*2 + footerH
+	gridLeft := (boxW - gridPx) / 2
 	localCursor := image.Pt(pt.X-o.bounds.Min.X, pt.Y-o.bounds.Min.Y)
 	pos := loupePos(win, localCursor, boxW, boxH)
-	hexText := loupe.Hex()
-	coordText := fmt.Sprintf("(%d, %d) · C 复制 / R 标尺", loupe.DIP.X, loupe.DIP.Y)
+	cFmt := a.session.ColorFormat()
+	colorText := beautify.FormatColor(loupe.Center, cFmt)
+	fmtTag := beautify.ColorFormatName(cFmt)
+	coordText := fmt.Sprintf("(%d,%d) · Tab 格式 · C 复制 · P 色板", loupe.DIP.X, loupe.DIP.Y)
+	pal := uiPalette(c)
 
-	ui.Box(c).Absolute().
-		Left(float32(pos.X)).Top(float32(pos.Y)).
-		Size(float32(boxW), float32(boxH)).
-		ZIndex(6).
-		Radius(6).
-		Background(ui.RGBA(22, 22, 26, 0.92)).
-		Border(1, ui.RGBA(255, 255, 255, 0.16)).
-		IgnoreInput(true).
-		Children(func() {
-			ui.Box(c).Absolute().
-				Left(pad).Top(pad).
-				Size(float32(gridPx), float32(gridPx)).
-				Draw(func(p *ui.Painter, r ui.Rect) {
-					drawLoupeGrid(p, r, loupe, cellSize)
-				})
-			ui.Row(c).Absolute().
-				Left(pad).Top(float32(pad + gridPx + 6)).
-				AlignItems(ui.Center).Gap(6).
-				Children(func() {
-					sw := loupe.Center
-					ui.Box(c).Size(12, 12).Radius(2).
-						Background(ui.RGB(sw.R, sw.G, sw.B)).
-						Border(1, ui.RGBA(255, 255, 255, 0.5))
-					ui.Text(c, hexText).
-						FontSize(12).
-						FontFeatures("tnum").
-						TextColor(ui.RGB(255, 255, 255))
-				})
-			ui.Text(c, coordText).Absolute().
-				Left(pad).Top(float32(pad + gridPx + 24)).
-				FontSize(10.5).
-				FontFeatures("tnum").
-				TextColor(ui.RGBA(255, 255, 255, 0.68))
-		})
+	liquidGlassCapsule(
+		ui.Box(c).Absolute().
+			Left(float32(pos.X)).Top(float32(pos.Y)).
+			Size(float32(boxW), float32(boxH)).
+			ZIndex(6).
+			IgnoreInput(true),
+		16,
+		o.bitmap == nil,
+	).Children(func() {
+		ui.Box(c).Absolute().
+			Left(float32(gridLeft)).Top(pad).
+			Size(float32(gridPx), float32(gridPx)).
+			Radius(8).Clip().
+			Draw(func(p *ui.Painter, r ui.Rect) {
+				drawLoupeGrid(p, r, loupe, cellSize)
+			})
+		ui.Row(c).Absolute().
+			Left(pad).Top(float32(pad + gridPx + 6)).
+			Width(float32(boxW - pad*2)).
+			AlignItems(ui.Center).Gap(5).
+			Children(func() {
+				sw := loupe.Center
+				ui.Box(c).Size(12, 12).Radius(4).Shrink(0).
+					Background(ui.RGB(sw.R, sw.G, sw.B)).
+					Border(1, pal.SubtleBorder)
+				ui.Text(c, colorText).
+					FontSize(11).
+					FontFeatures("tnum").
+					NoWrap().
+					MaxLines(1).
+					Ellipsis("…").
+					Grow(1).
+					TextColor(pal.Text)
+				ui.Row(c).Height(16).Padding(0, 5).Radius(8).Shrink(0).AlignItems(ui.Center).
+					Background(pal.BadgeInfoBg).
+					Border(1, pal.BadgeInfoBd).
+					Children(func() {
+						ui.Text(c, fmtTag).FontSize(9.5).FontWeight(500).NoWrap().TextColor(pal.BadgeInfoFg)
+					})
+			})
+		ui.Text(c, coordText).Absolute().
+			Left(pad).Top(float32(pad + gridPx + 26)).
+			FontSize(9.5).
+			FontFeatures("tnum").
+			TextColor(pal.TextSecondary)
+	})
+}
+
+func (a *app) paintPickedPaletteBar(c *ui.Context, o *overlay, win image.Rectangle) {
+	colors := a.session.PickedColors()
+	if len(colors) == 0 {
+		return
+	}
+	pal := uiPalette(c)
+	bar := liquidGlassCapsule(
+		ui.Row(c).Absolute().
+			Left(float32(max(12, win.Dx()/2-210))).Top(14).
+			Height(34).
+			Padding(0, 10).
+			Gap(6).
+			AlignItems(ui.Center).
+			ZIndex(11),
+		17,
+		o.bitmap == nil,
+	)
+	_ = bar.Clicked()
+	bar.Children(func() {
+		ui.Icon(c, iconPalette).FontSize(13.5).TextColor(pal.Accent)
+		ui.Text(c, fmt.Sprintf("色板 (%d)", len(colors))).FontSize(11.5).FontWeight(500).NoWrap().TextColor(pal.Text)
+		for i, col := range colors {
+			col := col
+			tip := beautify.FormatColor(col, a.session.ColorFormat()) + " · " + beautify.NearestTailwind(col)
+			dot := ui.Box(c.Key(700+i)).Size(16, 16).Radius(8).Shrink(0).
+				Tooltip(tip).
+				Background(ui.RGB(col.R, col.G, col.B)).
+				Border(1.5, pal.SubtleBorder).
+				Cursor(ui.CursorPointer)
+			if dot.Clicked() {
+				mygo.Clipboard.WriteText(beautify.FormatColor(col, a.session.ColorFormat()))
+			}
+		}
+		if miniPillBtn(c, iconPin, "贴色卡 (⇧P)", true) {
+			a.deferUI(func() { a.session.PinPickedPalette() })
+		}
+		if miniPillBtn(c, iconClose, "清空", false) {
+			a.session.ClearPickedColors()
+			a.invalidateAll()
+		}
+	})
 }
 
 func drawLoupeGrid(p *ui.Painter, r ui.Rect, loupe session.Loupe, cell float32) {
@@ -1035,11 +1162,11 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 	ac := a.session.Annotations()
 	hasSelected := ac.Selected >= 0
 	showStyleControls := ac.Tool != annotate.ToolNone || hasSelected
-	showSubBar := showStyleControls || a.session.Beautify()
+	showSubBar := showStyleControls
 	const (
-		mainBarH = 38
-		subBarH  = 34
-		estBarW  = 728
+		mainBarH = 40
+		subBarH  = 38
+		estBarW  = 740
 		edgeGap  = 8
 	)
 	totalH := mainBarH
@@ -1061,17 +1188,18 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 		wrap.Left(float32(leftX)).AlignItems(ui.Start)
 	}
 
+	nativeGlass := o.bitmap == nil
 	wrap.Children(func() {
-		bar := ui.Row(c).
-			Height(mainBarH).
-			Padding(5, 7).
-			Gap(2).
-			AlignItems(ui.Center).
-			Radius(10).
-			Shrink(0).
-			Background(ui.RGBA(24, 25, 30, 0.96)).
-			Border(1, ui.RGBA(255, 255, 255, 0.14)).
-			Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.42))
+		bar := liquidGlassCapsule(
+			ui.Row(c).
+				Height(mainBarH).
+				Padding(4, 8).
+				Gap(1.5).
+				AlignItems(ui.Center).
+				Shrink(0),
+			20,
+			nativeGlass,
+		)
 		_ = bar.Clicked()
 		bar.Children(func() {
 			tools := [...]struct {
@@ -1089,6 +1217,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 				{"擦除", "无痕擦除文字 (9)", iconErase, annotate.ToolErase},
 				{"聚光", "聚光灯高亮 (8)", iconSpotlight, annotate.ToolSpotlight},
 				{"文字", "文字批注 (7)", iconText, annotate.ToolText},
+				{"放大", "局部放大镜特写 (0)", iconLoupe, annotate.ToolLoupe},
 			}
 			for i, t := range tools {
 				if iconToolBtn(c.Key(100+i), t.icon, t.label, t.tip, ac.Tool == t.tool, false) {
@@ -1115,14 +1244,18 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 				a.commitOrCloseTextEdit()
 				a.autoRedactSelection()
 			}
+			if iconToolBtn(c, iconCutout, "抠图", "离线 AI 主体抠图并贴为异形贴纸 (K)", false, false) {
+				a.commitOrCloseTextEdit()
+				chosen = a.session.Cutout
+			}
 			canWin := a.session.CanWindowOnly()
 			if iconToolBtn(c, iconWindowOnly, "单窗", "纯净单窗抠图（去壁纸遮挡）(W)", a.session.WindowOnly(), !canWin) && canWin {
 				a.session.ToggleWindowOnly()
 				a.invalidateAll()
 			}
-			if iconToolBtn(c, iconSparkles, "美化", "圆角阴影渐变背景卡片 (B)", a.session.Beautify(), false) {
-				a.session.ToggleBeautify()
-				a.invalidateAll()
+			if iconToolBtn(c, iconTemplate, "模板", "套用便签 / 拍立得 / 浏览器 / 分享卡等模板 (B)", false, false) {
+				a.commitOrCloseTextEdit()
+				chosen = a.session.Template
 			}
 			if !a.session.IsLive() {
 				if iconToolBtn(c, iconRuler, "标尺", "像素间距测量尺 (R)", a.session.MeasureMode(), false) {
@@ -1161,19 +1294,20 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 		})
 
 		if showSubBar {
-			sub := ui.Row(c).
-				Height(subBarH).
-				Padding(4, 10).
-				Gap(7).
-				AlignItems(ui.Center).
-				Radius(9).
-				Shrink(0).
-				Background(ui.RGBA(24, 25, 30, 0.95)).
-				Border(1, ui.RGBA(255, 255, 255, 0.12)).
-				Shadow(0, 6, 18, 0, ui.RGBA(0, 0, 0, 0.36))
+			sub := liquidGlassCapsule(
+				ui.Row(c).
+					Height(subBarH).
+					Padding(4, 10).
+					Gap(7).
+					AlignItems(ui.Center).
+					Shrink(0),
+				19,
+				nativeGlass,
+			)
 			_ = sub.Clicked()
 			sub.Children(func() {
 				if showStyleControls {
+					uiPal := uiPalette(c)
 					curCol := ac.Color
 					curStroke := ac.Stroke
 					if selIt, ok := ac.SelectedItem(); ok {
@@ -1191,9 +1325,10 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 							dot.Scale(0.92, 0.92)
 						}
 						if active {
-							dot.Border(2, ui.RGB(255, 255, 255))
+							dot.Border(2, uiPal.Accent).
+								InsetShadow(0, 0, 0, 1.5, ui.RGB(255, 255, 255))
 						} else {
-							dot.Border(1, ui.RGBA(255, 255, 255, 0.32))
+							dot.Border(1, uiPal.SubtleBorder)
 						}
 						if dot.Clicked() {
 							ac.SetColor(pal)
@@ -1223,20 +1358,22 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 							a.invalidateAll()
 						}
 					}
-				}
-				if showStyleControls && a.session.Beautify() {
-					toolbarDivider(c)
-				}
-				if a.session.Beautify() {
-					for i, pr := range [...]beautify.Preset{
-						beautify.PresetOcean,
-						beautify.PresetSunset,
-						beautify.PresetEmerald,
-						beautify.PresetSlate,
-					} {
-						if gradientPresetChip(c.Key(300+i), pr, a.session.BeautifyPreset() == pr) {
-							a.session.SetBeautifyPreset(pr)
-							a.invalidateAll()
+					selIt, hasSelIt := ac.SelectedItem()
+					if ac.Tool == annotate.ToolLoupe || (hasSelIt && selIt.Tool == annotate.ToolLoupe) {
+						toolbarDivider(c)
+						curZoom := ac.LoupeZoom
+						if hasSelIt && selIt.Tool == annotate.ToolLoupe && selIt.Zoom > 0 {
+							curZoom = selIt.Zoom
+						}
+						for i, z := range [...]float64{2.0, 2.5, 3.0, 4.0} {
+							lbl := fmt.Sprintf("%.1f×", z)
+							if z == float64(int(z)) {
+								lbl = fmt.Sprintf("%d×", int(z))
+							}
+							if compactTabBtn(c.Key(260+i), lbl, math.Abs(curZoom-z) < 0.15) {
+								ac.SetLoupeZoom(z)
+								a.invalidateAll()
+							}
 						}
 					}
 				}
@@ -1301,37 +1438,42 @@ func (a *app) runVisionAutoRedact(img *image.NRGBA, sel image.Rectangle) {
 }
 
 func toolbarDivider(c *ui.Context) {
-	ui.Box(c).Size(1, 18).Margin(0, 5).Shrink(0).Background(ui.RGBA(255, 255, 255, 0.14))
+	ui.Box(c).Size(1, 18).Margin(0, 3).Shrink(0).Background(uiPalette(c).Divider)
 }
 
 func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) bool {
+	p := uiPalette(c)
 	btn := ui.Row(c).
 		Label(label).
 		Tooltip(tip).
-		Size(28, 28).
+		Size(26, 26).
 		AlignItems(ui.Center).
 		Justify(ui.Center).
-		Radius(6).
+		Radius(13).
 		Shrink(0)
 	if !disabled {
 		btn.Cursor(ui.CursorPointer)
+		targetScale := float32(1.0)
 		if btn.Pressed() {
-			btn.Scale(0.94, 0.94)
+			targetScale = 0.93
+		}
+		if sc := btn.AnimateTo("btn-sc", targetScale, springPop); sc != 1.0 {
+			btn.Scale(sc, sc)
 		}
 	}
 	hovered := !disabled && btn.Hovered()
 	switch {
 	case active:
-		btn.Background(ui.RGBA(10, 132, 255, 0.28)).Border(1, ui.RGBA(64, 172, 255, 0.85))
+		liquidActiveChipChrome(c, btn, 13)
 	case hovered:
-		btn.Background(ui.RGBA(255, 255, 255, 0.12))
+		liquidSecondaryChrome(c, btn, true, 13)
 	}
 	btn.Children(func() {
-		col := ui.RGBA(240, 242, 246, 0.9)
+		col := p.Text
 		if disabled {
-			col = ui.RGBA(255, 255, 255, 0.28)
+			col = ui.Color{R: p.TextMuted.R, G: p.TextMuted.G, B: p.TextMuted.B, A: uint8(float32(p.TextMuted.A) * 0.55)}
 		} else if active {
-			col = ui.RGB(116, 198, 255)
+			col = p.ActiveText
 		}
 		ui.Icon(c, ic).FontSize(15.5).TextColor(col)
 	})
@@ -1354,34 +1496,35 @@ func iconSquareBtn(c *ui.Context, ic *ui.SVG, tip string, active, disabled bool)
 }
 
 func actionPillBtn(c *ui.Context, ic *ui.SVG, label, tip string, primary, subtleBg bool) bool {
+	p := uiPalette(c)
 	btn := ui.Row(c).
 		Label(label).
 		Tooltip(tip).
-		Height(28).
+		Height(26).
 		Padding(0, 9).
-		Gap(5).
+		Gap(4).
 		AlignItems(ui.Center).
-		Radius(6).
+		Radius(13).
 		Shrink(0).
 		Cursor(ui.CursorPointer)
+	targetScale := float32(1.0)
 	if btn.Pressed() {
-		btn.Scale(0.96, 0.96)
+		targetScale = 0.94
+	}
+	if sc := btn.AnimateTo("btn-sc", targetScale, springPop); sc != 1.0 {
+		btn.Scale(sc, sc)
 	}
 	hovered := btn.Hovered()
 	switch {
-	case primary && hovered:
-		btn.Background(ui.RGB(32, 152, 255))
 	case primary:
-		btn.Background(ui.RGB(10, 132, 255))
-	case hovered:
-		btn.Background(ui.RGBA(255, 255, 255, 0.15))
-	case subtleBg:
-		btn.Background(ui.RGBA(255, 255, 255, 0.07))
+		liquidPrimaryChrome(c, btn, 13)
+	case hovered || subtleBg:
+		liquidSecondaryChrome(c, btn, hovered, 13)
 	}
 	btn.Children(func() {
-		col := ui.RGBA(244, 245, 248, 0.95)
+		col := p.Text
 		if primary {
-			col = ui.RGB(255, 255, 255)
+			col = p.AccentText
 		}
 		if ic != nil {
 			ui.Icon(c, ic).FontSize(14).TextColor(col)
@@ -1392,55 +1535,38 @@ func actionPillBtn(c *ui.Context, ic *ui.SVG, label, tip string, primary, subtle
 }
 
 func strokeDotBtn(c *ui.Context, label, tip string, dotR float32, active bool) bool {
+	p := uiPalette(c)
 	btn := ui.Box(c).
 		Label(label).
 		Tooltip(tip).
 		Size(24, 24).
-		Radius(6).
+		Radius(12).
 		Shrink(0).
 		Cursor(ui.CursorPointer)
+	targetScale := float32(1.0)
 	if btn.Pressed() {
-		btn.Scale(0.93, 0.93)
+		targetScale = 0.92
+	}
+	if sc := btn.AnimateTo("btn-sc", targetScale, springPop); sc != 1.0 {
+		btn.Scale(sc, sc)
 	}
 	hovered := btn.Hovered()
 	switch {
 	case active:
-		btn.Background(ui.RGBA(10, 132, 255, 0.28)).Border(1, ui.RGBA(64, 172, 255, 0.85))
+		liquidActiveChipChrome(c, btn, 12)
 	case hovered:
-		btn.Background(ui.RGBA(255, 255, 255, 0.12))
+		liquidSecondaryChrome(c, btn, true, 12)
 	}
-	btn.Draw(func(p *ui.Painter, r ui.Rect) {
-		col := ui.RGBA(235, 238, 244, 0.82)
+	btn.Draw(func(painter *ui.Painter, r ui.Rect) {
+		col := p.TextSecondary
 		if active {
-			col = ui.RGB(122, 204, 255)
+			col = p.ActiveText
 		}
 		cx := r.X + r.W*0.5
 		cy := r.Y + r.H*0.5
-		p.Fill(ui.Rect{X: cx - dotR, Y: cy - dotR, W: dotR * 2, H: dotR * 2}, col, dotR)
+		painter.Fill(ui.Rect{X: cx - dotR, Y: cy - dotR, W: dotR * 2, H: dotR * 2}, col, dotR)
 	})
 	return btn.Clicked()
-}
-
-func gradientPresetChip(c *ui.Context, pr beautify.Preset, active bool) bool {
-	name := beautify.PresetName(pr)
-	c0, c1 := beautify.PresetColors(pr)
-	chip := ui.Box(c).
-		Label(name).
-		Tooltip("渐变卡片 · "+name).
-		Size(28, 18).
-		Radius(5).
-		Shrink(0).
-		Gradient(ui.RGB(c0.R, c0.G, c0.B), ui.RGB(c1.R, c1.G, c1.B), 135).
-		Cursor(ui.CursorPointer)
-	if chip.Pressed() {
-		chip.Scale(0.93, 0.93)
-	}
-	if active {
-		chip.Border(2, ui.RGB(255, 255, 255))
-	} else {
-		chip.Border(1, ui.RGBA(255, 255, 255, 0.28))
-	}
-	return chip.Clicked()
 }
 
 func (a *app) ownsPoint(o *overlay, pt image.Point) bool {

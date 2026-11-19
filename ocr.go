@@ -21,6 +21,14 @@ const (
 	ocrWinH = 360
 )
 
+type ocrViewMode int
+
+const (
+	ocrModePlain ocrViewMode = iota
+	ocrModeMarkdown
+	ocrModeTSV
+)
+
 type ocrWindow struct {
 	win         *mygo.Window
 	thumb       *ui.Bitmap
@@ -28,8 +36,13 @@ type ocrWindow struct {
 	loading     bool
 	errMsg      string
 	text        string
+	plainText   string
+	table       vision.Table
+	hasTable    bool
+	mode        ocrViewMode
 	links       []string
 	copiedBadge string
+	enter       panelEnterState
 }
 
 // RecognizeImage 执行离线 Vision 识字与二维码识别，并立即弹出可视化「识图结果面板」。
@@ -69,6 +82,7 @@ func (a *app) openOCRWindow(img *image.NRGBA, anchor image.Rectangle) {
 		thumb:   ui.NewBitmap(img),
 		srcImg:  img,
 		loading: true,
+		enter:   panelEnterState{enabled: true},
 	}
 	a.ocr = ow
 
@@ -80,8 +94,9 @@ func (a *app) openOCRWindow(img *image.NRGBA, anchor image.Rectangle) {
 		Y:               pos.Y,
 		Frameless:       true,
 		Transparent:     true,
-		CornerRadius:    12,
-		Panel:           true,
+		Vibrancy:        vibrancyForGlassLevel(a.cfg.GlassLevel),
+		CornerRadius:    panelCornerRadius,
+		Panel:           false,
 		AlwaysOnTop:     true,
 		DisableMinimize: true,
 		DisableMaximize: true,
@@ -96,6 +111,10 @@ func (a *app) openOCRWindow(img *image.NRGBA, anchor image.Rectangle) {
 			a.ocr = nil
 		}
 	})
+	applyWindowTheme(ow.win, themeStateFromConfig(a.cfg))
+	if mygo.App.IsReady() {
+		mygo.App.Focus()
+	}
 	ow.win.Focus()
 
 	go func() {
@@ -104,6 +123,7 @@ func (a *app) openOCRWindow(img *image.NRGBA, anchor image.Rectangle) {
 			log.Printf("Vision OCR error: %v", err)
 		}
 		links := vision.ExtractLinks(res)
+		tbl, hasTbl := vision.ExtractTable(res.Boxes)
 		txt := strings.TrimSpace(res.Text)
 		if txt == "" && len(res.Barcodes) > 0 {
 			txt = strings.Join(res.Barcodes, "\n")
@@ -116,7 +136,11 @@ func (a *app) openOCRWindow(img *image.NRGBA, anchor image.Rectangle) {
 			if err != nil {
 				ow.errMsg = err.Error()
 			} else {
+				ow.plainText = txt
 				ow.text = txt
+				ow.table = tbl
+				ow.hasTable = hasTbl
+				ow.mode = ocrModePlain
 				ow.links = links
 				if txt != "" {
 					mygo.Clipboard.WriteText(txt)
@@ -178,176 +202,208 @@ func (a *app) placeOCRWindow(anchor image.Rectangle) image.Point {
 
 func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 	c.Root().Background(ui.Transparent)
-	if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(ui.Cmd, ui.KeyW) {
-		if ow.win != nil {
-			go mygo.RunOnMain(func() { a.closeOCRWindow() })
+	withAppTheme(c, func() {
+		if handlePanelWindowShortcuts(c, func() { a.closeOCRWindow() }) {
+			return
 		}
-		return
-	}
 
-	card := ui.Column(c).
-		Fill().
-		Radius(12).
-		Background(ui.RGBA(24, 25, 30, 0.97)).
-		Border(1, ui.RGBA(255, 255, 255, 0.13))
+		p := uiPalette(c)
+		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &ow.enter)
 
-	card.Children(func() {
-		// 1. 顶部可拖拽标题栏
-		header := ui.Row(c).
-			Height(46).
-			Padding(0, 12).
-			Gap(9).
-			AlignItems(ui.Center).
-			DragWindow()
-		header.Children(func() {
-			if ow.thumb != nil {
-				ui.Box(c).Size(34, 24).Radius(4).Clip().
-					Background(ui.RGBA(255, 255, 255, 0.06)).
-					Border(1, ui.RGBA(255, 255, 255, 0.14)).
-					Children(func() {
-						ui.Image(c, ow.thumb).Size(34, 24)
-					})
-			}
-			ui.Icon(c, iconOCR).FontSize(15).TextColor(ui.RGB(64, 172, 255))
-			ui.Text(c, "识图提取").FontSize(13).FontWeight(600).NoWrap().TextColor(ui.RGB(244, 245, 248))
-
-			if ow.loading {
-				ui.Row(c).Height(20).Padding(0, 8).AlignItems(ui.Center).Radius(10).
-					Background(ui.RGBA(64, 172, 255, 0.16)).
-					Children(func() {
-						ui.Text(c, "正在识别…").FontSize(11).NoWrap().TextColor(ui.RGB(122, 198, 255))
-					})
-			} else if ow.copiedBadge != "" {
-				ui.Row(c).Height(20).Padding(0, 8).Gap(4).AlignItems(ui.Center).Radius(10).
-					Background(ui.RGBA(46, 204, 113, 0.16)).
-					Border(1, ui.RGBA(46, 204, 113, 0.35)).
-					Children(func() {
-						ui.Icon(c, iconCheck).FontSize(11).TextColor(ui.RGB(78, 222, 138))
-						ui.Text(c, ow.copiedBadge).FontSize(11).NoWrap().TextColor(ui.RGB(118, 236, 166))
-					})
-			}
-
-			ui.Spacer(c)
-
-			closeBtn := iconSquareBtn(c, iconClose, "关闭 (Esc)", false, false)
-			if closeBtn {
-				if ow.win != nil {
-					go mygo.RunOnMain(func() { a.closeOCRWindow() })
-				}
-			}
-		})
-
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-
-		// 2. 二维码与链接快捷栏（检测到二维码或网址时展示）
-		if !ow.loading && len(ow.links) > 0 {
-			linkWrap := ui.Column(c).
-				Padding(8, 12).
-				Gap(6).
-				Background(ui.RGBA(10, 132, 255, 0.08))
-			linkWrap.Children(func() {
-				for i, lk := range ow.links {
-					if i >= 2 {
-						break
+		card.Children(func() {
+			// 1. 顶部可拖拽标题栏
+			header := ui.Row(c).
+				Height(50).
+				Padding(0, 16).
+				Gap(9).
+				AlignItems(ui.Center).
+				DragWindow()
+			header.Children(func() {
+				if macTrafficCloseBtn(c, "关闭识图", "关闭 (⌘W / Esc)") {
+					if ow.win != nil {
+						go mygo.RunOnMain(func() { a.closeOCRWindow() })
 					}
-					lk := lk
-					isURL := strings.HasPrefix(lk, "http://") || strings.HasPrefix(lk, "https://")
-					row := ui.Row(c.Key(500 + i)).Height(26).Gap(6).AlignItems(ui.Center)
-					row.Children(func() {
-						tag := "二维码"
-						if isURL {
-							tag = "链接"
+				}
+				ui.Box(c).Width(2)
+				if ow.thumb != nil {
+					ui.Box(c).Size(34, 24).Radius(6).Clip().
+						Background(p.StageBg).
+						Border(1, p.CardBorder).
+						Children(func() {
+							ui.Image(c, ow.thumb).Size(34, 24)
+						})
+				}
+				ui.Icon(c, iconOCR).FontSize(15).TextColor(p.Accent)
+				ui.Text(c, "识图提取").FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
+
+				if ow.loading {
+					statusBadgePill(c, "正在识别…", false)
+				} else if ow.copiedBadge != "" {
+					ui.Row(c).Height(22).Padding(0, 9).Gap(4).AlignItems(ui.Center).Radius(11).
+						Background(p.BadgeSuccessBg).
+						Border(1, p.BadgeSuccessBd).
+						InsetShadow(0, 1, 0, 0, p.CardTopRim).
+						Children(func() {
+							ui.Icon(c, iconCheck).FontSize(11).TextColor(p.BadgeSuccessFg)
+							ui.Text(c, ow.copiedBadge).FontSize(11).FontWeight(500).NoWrap().TextColor(p.BadgeSuccessFg)
+						})
+				}
+
+				ui.Spacer(c)
+			})
+
+			panelHairline(c)
+
+			// 1.5 结构化表格格式切换栏（检测到 2×2 及以上表格时自动出现）
+			if !ow.loading && ow.hasTable {
+				modeBar := ui.Row(c).
+					Height(40).
+					Padding(0, 16).
+					Gap(8).
+					AlignItems(ui.Center).
+					Background(p.CardBg)
+				modeBar.Children(func() {
+					ui.Icon(c, iconTable).FontSize(13).TextColor(p.Accent)
+					tabs := [...]struct {
+						mode  ocrViewMode
+						label string
+						badge string
+					}{
+						{ocrModePlain, "纯文本", "已切换并复制纯文本"},
+						{ocrModeMarkdown, "Markdown 表格", fmt.Sprintf("已复制 Markdown 表格 (%d×%d)", len(ow.table.Rows), ow.table.Cols)},
+						{ocrModeTSV, "Excel / 飞书 TSV", "已复制 TSV · 可直接 ⌘V 粘贴成表"},
+					}
+					if picked := liquidSegmented(c, "ocr-mode", int(ow.mode), []string{tabs[0].label, tabs[1].label, tabs[2].label}); picked >= 0 {
+						tab := tabs[picked]
+						ow.mode = tab.mode
+						switch tab.mode {
+						case ocrModeMarkdown:
+							ow.text = ow.table.Markdown()
+						case ocrModeTSV:
+							ow.text = ow.table.TSV()
+						default:
+							ow.text = ow.plainText
 						}
-						ui.Row(c).Height(18).Padding(0, 6).AlignItems(ui.Center).Radius(4).
-							Background(ui.RGBA(10, 132, 255, 0.22)).Shrink(0).
-							Children(func() {
-								ui.Text(c, tag).FontSize(10.5).NoWrap().TextColor(ui.RGB(122, 198, 255))
-							})
-						ui.Text(c, lk).FontSize(12).MaxLines(1).Ellipsis("…").Grow(1).
-							TextColor(ui.RGBA(235, 238, 245, 0.92))
-						if isURL {
-							if miniPillBtn(c, iconExternal, "打开", true) {
-								go func() { _ = mygo.Shell.OpenExternal(lk) }()
+						mygo.Clipboard.WriteText(ow.text)
+						ow.copiedBadge = tab.badge
+					}
+					ui.Spacer(c)
+					ui.Text(c, fmt.Sprintf("%d行×%d列", len(ow.table.Rows), ow.table.Cols)).
+						FontSize(10.5).FontFeatures("tnum").NoWrap().
+						TextColor(p.TextMuted)
+				})
+				panelHairline(c)
+			}
+
+			// 2. 二维码与链接快捷栏（检测到二维码或网址时展示）
+			if !ow.loading && len(ow.links) > 0 {
+				linkWrap := ui.Column(c).
+					Padding(8, 16).
+					Gap(6).
+					Background(p.BadgeInfoBg)
+				linkWrap.Children(func() {
+					for i, lk := range ow.links {
+						if i >= 2 {
+							break
+						}
+						lk := lk
+						isURL := strings.HasPrefix(lk, "http://") || strings.HasPrefix(lk, "https://")
+						row := ui.Row(c.Key(500 + i)).Height(26).Gap(6).AlignItems(ui.Center)
+						row.Children(func() {
+							tag := "二维码"
+							if isURL {
+								tag = "链接"
 							}
-						}
-						if miniPillBtn(c, iconCopy, "复制", false) {
-							mygo.Clipboard.WriteText(lk)
-							ow.copiedBadge = "已复制链接"
-						}
+							ui.Row(c).Height(18).Padding(0, 7).AlignItems(ui.Center).Radius(9).
+								Background(p.BadgeInfoBg).
+								Border(1, p.BadgeInfoBd).
+								Shrink(0).
+								Children(func() {
+									ui.Text(c, tag).FontSize(10.5).FontWeight(500).NoWrap().TextColor(p.BadgeInfoFg)
+								})
+							ui.Text(c, lk).FontSize(12).MaxLines(1).Ellipsis("…").Grow(1).
+								TextColor(p.Text)
+							if isURL {
+								if miniPillBtn(c, iconExternal, "打开", true) {
+									go func() { _ = mygo.Shell.OpenExternal(lk) }()
+								}
+							}
+							if miniPillBtn(c, iconCopy, "复制", false) {
+								mygo.Clipboard.WriteText(lk)
+								ow.copiedBadge = "已复制链接"
+							}
+						})
+					}
+				})
+				panelHairline(c)
+			}
+
+			// 3. 正文内容区
+			body := ui.Column(c).Grow(1).Padding(12, 16)
+			body.Children(func() {
+				switch {
+				case ow.loading:
+					ui.Column(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
+						ui.Text(c, "正在离线识别文字与二维码…").FontSize(13).TextColor(p.TextSecondary)
+						ui.Text(c, "基于 macOS Vision 引擎，全程本地处理不联网").FontSize(11.5).TextColor(p.TextMuted)
 					})
+				case ow.errMsg != "":
+					ui.Column(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Gap(6).Children(func() {
+						ui.Text(c, "识别遇到问题").FontSize(13.5).FontWeight(600).TextColor(ui.RGB(235, 68, 60))
+						ui.Text(c, ow.errMsg).FontSize(12).TextColor(p.TextSecondary)
+					})
+				case strings.TrimSpace(ow.text) == "":
+					ui.Column(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
+						ui.Text(c, "未在所选区域检测到可提取的文字或二维码").FontSize(13).TextColor(p.TextSecondary)
+						ui.Text(c, "试试框选更清晰的文字区域，或点击下方「重新识图」").FontSize(11.5).TextColor(p.TextMuted)
+					})
+				default:
+					recessedInputStyle(c, ui.TextArea(c, &ow.text).
+						Label("识图文本").
+						Fill().
+						Padding(10, 12).
+						FontSize(13).
+						LineHeight(1.55))
 				}
 			})
-			ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-		}
 
-		// 3. 正文内容区
-		body := ui.Column(c).Grow(1).Padding(10, 12)
-		body.Children(func() {
-			switch {
-			case ow.loading:
-				ui.Column(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
-					ui.Text(c, "正在离线识别文字与二维码…").FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.72))
-					ui.Text(c, "基于 macOS Vision 引擎，全程本地处理不联网").FontSize(11.5).TextColor(ui.RGBA(255, 255, 255, 0.42))
-				})
-			case ow.errMsg != "":
-				ui.Column(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Gap(6).Children(func() {
-					ui.Text(c, "识别遇到问题").FontSize(13.5).FontWeight(600).TextColor(ui.RGB(255, 110, 110))
-					ui.Text(c, ow.errMsg).FontSize(12).TextColor(ui.RGBA(255, 255, 255, 0.65))
-				})
-			case strings.TrimSpace(ow.text) == "":
-				ui.Column(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
-					ui.Text(c, "未在所选区域检测到可提取的文字或二维码").FontSize(13).TextColor(ui.RGBA(255, 255, 255, 0.72))
-					ui.Text(c, "试试框选更清晰的文字区域，或点击下方「重新识图」").FontSize(11.5).TextColor(ui.RGBA(255, 255, 255, 0.42))
-				})
-			default:
-				ui.TextArea(c, &ow.text).
-					Label("识图文本").
-					Fill().
-					Padding(8, 10).
-					Radius(8).
-					Background(ui.RGBA(14, 15, 19, 0.85)).
-					Border(1, ui.RGBA(255, 255, 255, 0.09)).
-					FontSize(13).
-					LineHeight(1.55).
-					TextColor(ui.RGB(238, 240, 245)).
-					CaretColor(ui.RGB(64, 172, 255))
-			}
-		})
+			panelHairline(c)
 
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-
-		// 4. 底部操作栏
-		footer := ui.Row(c).
-			Height(44).
-			Padding(0, 12).
-			Gap(8).
-			AlignItems(ui.Center)
-		footer.Children(func() {
-			if actionPillBtn(c, iconOCR, "重新识图", "框选新区域识图 (⌥⌘O)", false, true) {
-				go mygo.RunOnMain(func() {
-					a.closeOCRWindow()
-					if a.session != nil {
-						a.session.StartLiveOCR()
+			// 4. 底部操作栏
+			footer := ui.Row(c).
+				Height(52).
+				Padding(0, 16).
+				Gap(8).
+				AlignItems(ui.Center)
+			footer.Children(func() {
+				hasText := !ow.loading && strings.TrimSpace(ow.text) != ""
+				liquidGlassGroup(c, 13, 6, func(add func(ui.Element) ui.Element) {
+					if glassGroupBtn(c, add, iconOCR, "重新识图", "框选新区域识图 (⌥⌘O)") {
+						go mygo.RunOnMain(func() {
+							a.closeOCRWindow()
+							if a.session != nil {
+								a.session.StartLiveOCR()
+							}
+						})
+					}
+					if hasText {
+						if glassGroupBtn(c, add, iconPin, "贴为便签", "将提取的文字钉在桌面上") {
+							txtCopy := ow.text
+							go mygo.RunOnMain(func() {
+								a.pinExtractedText(txtCopy)
+							})
+						}
 					}
 				})
-			}
-			hasText := !ow.loading && strings.TrimSpace(ow.text) != ""
-			if hasText {
-				if actionPillBtn(c, iconPin, "贴为便签", "将提取的文字钉在桌面上", false, true) {
-					txtCopy := ow.text
-					go mygo.RunOnMain(func() {
-						a.pinExtractedText(txtCopy)
-					})
+				ui.Spacer(c)
+				if hasText {
+					if actionPillBtn(c, iconCopy, "复制全文", "复制文本框中的全部内容", true, false) {
+						mygo.Clipboard.WriteText(ow.text)
+						nChars := utf8.RuneCountInString(strings.TrimSpace(ow.text))
+						ow.copiedBadge = fmt.Sprintf("已复制全文 · %d 字", nChars)
+					}
 				}
-			}
-			ui.Spacer(c)
-			if hasText {
-				if actionPillBtn(c, iconCopy, "复制全文", "复制文本框中的全部内容", true, false) {
-					mygo.Clipboard.WriteText(ow.text)
-					nChars := utf8.RuneCountInString(strings.TrimSpace(ow.text))
-					ow.copiedBadge = fmt.Sprintf("已复制全文 · %d 字", nChars)
-				}
-			}
+			})
 		})
 	})
 }
@@ -373,34 +429,71 @@ func (a *app) pinExtractedText(txt string) {
 }
 
 func miniPillBtn(c *ui.Context, ic *ui.SVG, label string, primary bool) bool {
+	p := uiPalette(c)
 	btn := ui.Row(c).
 		Label(label).
-		Height(22).
-		Padding(0, 7).
+		Height(24).
+		Padding(0, 10).
 		Gap(4).
 		AlignItems(ui.Center).
-		Radius(5).
+		Radius(12).
 		Shrink(0).
 		Cursor(ui.CursorPointer)
+	targetScale := float32(1.0)
 	if btn.Pressed() {
-		btn.Scale(0.96, 0.96)
+		targetScale = 0.94
+	}
+	if sc := btn.AnimateTo("mini-sc", targetScale, springPop); sc != 1.0 {
+		btn.Scale(sc, sc)
 	}
 	hov := btn.Hovered()
-	switch {
-	case primary && hov:
-		btn.Background(ui.RGB(28, 152, 255))
-	case primary:
-		btn.Background(ui.RGB(10, 132, 255))
-	case hov:
-		btn.Background(ui.RGBA(255, 255, 255, 0.16))
-	default:
-		btn.Background(ui.RGBA(255, 255, 255, 0.09))
+	if primary {
+		liquidPrimaryChrome(c, btn, 12)
+	} else {
+		liquidSecondaryChrome(c, btn, hov, 12)
 	}
 	btn.Children(func() {
-		if ic != nil {
-			ui.Icon(c, ic).FontSize(11.5).TextColor(ui.RGB(255, 255, 255))
+		col := p.Text
+		if primary {
+			col = p.AccentText
 		}
-		ui.Text(c, label).FontSize(11).NoWrap().TextColor(ui.RGB(255, 255, 255))
+		if ic != nil {
+			ui.Icon(c, ic).FontSize(11.5).TextColor(col)
+		}
+		ui.Text(c, label).FontSize(11).FontWeight(500).NoWrap().TextColor(col)
+	})
+	return btn.Clicked()
+}
+
+func compactTabBtn(c *ui.Context, label string, active bool) bool {
+	p := uiPalette(c)
+	btn := ui.Row(c).
+		Label(label).
+		Height(24).
+		Padding(0, 10).
+		AlignItems(ui.Center).
+		Radius(12).
+		Shrink(0).
+		Cursor(ui.CursorPointer)
+	targetScale := float32(1.0)
+	if btn.Pressed() {
+		targetScale = 0.94
+	}
+	if sc := btn.AnimateTo("tab-sc", targetScale, springPop); sc != 1.0 {
+		btn.Scale(sc, sc)
+	}
+	switch {
+	case active:
+		liquidActiveChipChrome(c, btn, 12)
+	default:
+		liquidSecondaryChrome(c, btn, btn.Hovered(), 12)
+	}
+	btn.Children(func() {
+		col := p.TextSecondary
+		if active {
+			col = p.ActiveText
+		}
+		ui.Text(c, label).FontSize(11).FontWeight(500).NoWrap().TextColor(col)
 	})
 	return btn.Clicked()
 }

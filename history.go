@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	historyWinW = 540
-	historyWinH = 440
+	historyWinW = 580
+	historyWinH = 448
 )
 
 type historyWindow struct {
@@ -24,6 +24,7 @@ type historyWindow struct {
 	entries     []store.Entry
 	thumbs      map[string]*ui.Bitmap
 	statusBadge string
+	enter       panelEnterState
 }
 
 // tempPNGDragData 将内存 PNG 写入临时目录并返回原生文件拖拽载荷（供贴图直接拖入微信/Slack/浏览器）。
@@ -107,6 +108,7 @@ func (a *app) openHistoryWindow() {
 	a.closeHistoryWindow()
 	hw := &historyWindow{
 		thumbs: map[string]*ui.Bitmap{},
+		enter:  panelEnterState{enabled: true},
 	}
 	a.histWin = hw
 	a.reloadHistoryWindow()
@@ -120,12 +122,13 @@ func (a *app) openHistoryWindow() {
 		Y:               pos.Y,
 		Frameless:       true,
 		Transparent:     true,
-		CornerRadius:    12,
-		Panel:           true,
+		Vibrancy:        vibrancyForGlassLevel(a.cfg.GlassLevel),
+		CornerRadius:    panelCornerRadius,
+		Panel:           false,
 		AlwaysOnTop:     true,
 		DisableMinimize: true,
 		DisableMaximize: true,
-		MinWidth:        460,
+		MinWidth:        500,
 		MinHeight:       320,
 		Content: ui.View(func(c *ui.Context) {
 			a.paintHistoryView(c, hw)
@@ -136,6 +139,10 @@ func (a *app) openHistoryWindow() {
 			a.histWin = nil
 		}
 	})
+	applyWindowTheme(hw.win, themeStateFromConfig(a.cfg))
+	if mygo.App.IsReady() {
+		mygo.App.Focus()
+	}
 	hw.win.Focus()
 }
 
@@ -162,82 +169,74 @@ func (a *app) placeCenteredPanel(w, h int) image.Point {
 
 func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 	c.Root().Background(ui.Transparent)
-	if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(ui.Cmd, ui.KeyW) {
-		if hw.win != nil {
-			go mygo.RunOnMain(func() { a.closeHistoryWindow() })
-		}
-		return
-	}
-
-	card := ui.Column(c).
-		Fill().
-		Radius(12).
-		Background(ui.RGBA(22, 23, 28, 0.97)).
-		Border(1, ui.RGBA(255, 255, 255, 0.13))
-
-	card.Children(func() {
-		// 标题栏
-		header := ui.Row(c).
-			Height(46).
-			Padding(0, 14).
-			Gap(8).
-			AlignItems(ui.Center).
-			DragWindow()
-		header.Children(func() {
-			ui.Icon(c, iconHistory).FontSize(15).TextColor(ui.RGB(64, 172, 255))
-			ui.Text(c, fmt.Sprintf("最近截图历史（%d）", len(hw.entries))).
-				FontSize(13).FontWeight(600).NoWrap().TextColor(ui.RGB(244, 245, 248))
-			if hw.statusBadge != "" {
-				ui.Row(c).Height(20).Padding(0, 8).AlignItems(ui.Center).Radius(10).
-					Background(ui.RGBA(46, 204, 113, 0.18)).
-					Children(func() {
-						ui.Text(c, hw.statusBadge).FontSize(11).NoWrap().TextColor(ui.RGB(118, 236, 166))
-					})
-			}
-			ui.Spacer(c)
-			if len(hw.entries) > 0 {
-				if miniPillBtn(c, iconTrash, "清空全部", false) {
-					if a.history != nil {
-						a.history.Clear()
-						a.reloadHistoryWindow()
-						a.refreshMenu()
-					}
-				}
-			}
-			if iconToolBtn(c, iconClose, "关闭历史", "关闭 (Esc)", false, false) {
-				if hw.win != nil {
-					go mygo.RunOnMain(func() { a.closeHistoryWindow() })
-				}
-			}
-		})
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-
-		// 双列滚动缩略图网格
-		if len(hw.entries) == 0 {
-			ui.Column(c).Grow(1).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
-				ui.Icon(c, iconHistory).FontSize(26).TextColor(ui.RGBA(255, 255, 255, 0.25))
-				ui.Text(c, "暂无截图记录").FontSize(13.5).TextColor(ui.RGBA(255, 255, 255, 0.72))
-				ui.Text(c, "完成复制、贴图或保存后会自动归档到这里（最多保留 20 张）").
-					FontSize(11.5).TextColor(ui.RGBA(255, 255, 255, 0.42))
-			})
+	withAppTheme(c, func() {
+		if handlePanelWindowShortcuts(c, func() { a.closeHistoryWindow() }) {
 			return
 		}
 
-		scroller := ui.Scroll(c).Grow(1).Padding(12, 14)
-		scroller.Children(func() {
-			colWrap := ui.Column(c).Gap(10)
-			colWrap.Children(func() {
-				for rowIdx := 0; rowIdx < len(hw.entries); rowIdx += 2 {
-					rIdx := rowIdx
-					rowEl := ui.Row(c.Key(1000 + rIdx)).Gap(10)
-					rowEl.Children(func() {
-						a.paintHistoryCard(c.Key(2000+rIdx), hw, hw.entries[rIdx])
-						if rIdx+1 < len(hw.entries) {
-							a.paintHistoryCard(c.Key(2000+rIdx+1), hw, hw.entries[rIdx+1])
-						} else {
-							ui.Box(c).Grow(1)
+		p := uiPalette(c)
+		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &hw.enter)
+
+		card.Children(func() {
+			if len(hw.entries) == 0 {
+				ui.Column(c).Fill().Padding(58, 16, 16, 16).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
+					ui.Icon(c, iconHistory).FontSize(26).TextColor(p.TextMuted)
+					ui.Text(c, "暂无截图记录").FontSize(13.5).TextColor(p.TextSecondary)
+					ui.Text(c, "完成复制、贴图或保存后会自动归档到这里（最多保留 20 张）").
+						FontSize(11.5).TextColor(p.TextMuted)
+				})
+			} else {
+				// 双列滚动缩略图网格（位于浮动标题栏下方，带渐进式滚动边缘模糊）
+				scroller := ui.Scroll(c).Fill().Padding(58, 16, 16, 16).ScrollbarInsets(54, 0, 0)
+				scroller.Children(func() {
+					colWrap := ui.Column(c).Gap(10)
+					colWrap.Children(func() {
+						for rowIdx := 0; rowIdx < len(hw.entries); rowIdx += 2 {
+							rIdx := rowIdx
+							rowEl := ui.Row(c.Key(1000 + rIdx)).Gap(10)
+							rowEl.Children(func() {
+								a.paintHistoryCard(c.Key(2000+rIdx), hw, hw.entries[rIdx])
+								if rIdx+1 < len(hw.entries) {
+									a.paintHistoryCard(c.Key(2000+rIdx+1), hw, hw.entries[rIdx+1])
+								} else {
+									ui.Box(c).Grow(1)
+								}
+							})
 						}
 					})
+				})
+				paintTopScrollEdge(c, 58)
+			}
+
+			// 浮动标题栏
+			header := ui.Row(c).
+				Absolute().Top(0).Left(0).Right(0).
+				Height(50).
+				Padding(0, 16).
+				Gap(8).
+				AlignItems(ui.Center).
+				ZIndex(2).
+				DragWindow()
+			header.Children(func() {
+				if macTrafficCloseBtn(c, "关闭历史", "关闭 (⌘W / Esc)") {
+					if hw.win != nil {
+						go mygo.RunOnMain(func() { a.closeHistoryWindow() })
+					}
+				}
+				ui.Box(c).Width(2)
+				ui.Icon(c, iconHistory).FontSize(15).TextColor(p.Accent)
+				ui.Text(c, fmt.Sprintf("最近截图历史（%d）", len(hw.entries))).
+					FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
+				statusBadgePill(c, hw.statusBadge, true)
+				ui.Spacer(c)
+				if len(hw.entries) > 0 {
+					if miniPillBtn(c, iconTrash, "清空全部", false) {
+						if a.history != nil {
+							a.history.Clear()
+							a.reloadHistoryWindow()
+							a.refreshMenu()
+						}
+					}
 				}
 			})
 		})
@@ -245,22 +244,37 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 }
 
 func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) {
+	p := uiPalette(c)
 	bmp := hw.thumbs[e.ID]
-	itemCard := ui.Column(c).
+	cardCol := ui.Column(c.Key("hc-"+e.ID)).
 		Grow(1).
 		Padding(8, 8).
 		Gap(7).
-		Radius(9).
-		Background(ui.RGBA(32, 34, 42, 0.88)).
-		Border(1, ui.RGBA(255, 255, 255, 0.09))
+		Transition(ui.ElementTransition{
+			Animation: &springSnappy,
+			Enter:     &ui.Motion{Scale: 0.94},
+			Exit:      &ui.Motion{Scale: 0.90},
+		})
+	bgTarget := p.CardBg
+	bdTarget := p.CardBorder
+	if cardCol.Hovered() {
+		bgTarget = p.CardBgHover
+		bdTarget = p.ActiveBorder
+	}
+	itemCard := cardCol.
+		Radius(cardCornerRadius).
+		Background(cardCol.AnimateColor("hc-bg", bgTarget, colorMorph)).
+		Border(1, cardCol.AnimateColor("hc-bd", bdTarget, colorMorph)).
+		InsetShadow(0, 1, 0, 0, p.CardTopRim)
 
 	itemCard.Children(func() {
 		// 缩略图区域：直接按住即可作为原生 PNG 文件拖进微信/Slack/浏览器！
 		thumbBox := ui.Box(c).
 			Height(116).
-			Radius(6).
+			Radius(10).
 			Clip().
-			Background(ui.RGBA(14, 15, 19, 0.92)).
+			Background(p.StageBg).
+			Border(1, p.CardBorder).
 			AlignItems(ui.Center).
 			Justify(ui.Center).
 			Tooltip("按住可直接将此截图作为 PNG 文件拖入微信 / 浏览器")
@@ -276,17 +290,17 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 		}
 		thumbBox.Children(func() {
 			if bmp != nil {
-				ui.Image(c, bmp).Height(116)
+				ui.Image(c, bmp).Height(116).Fit(ui.Contain)
 			}
 		})
 
 		// 尺寸与时间戳
-		metaRow := ui.Row(c).AlignItems(ui.Center).Gap(6)
+		metaRow := ui.Row(c).AlignItems(ui.Center).Gap(3)
 		metaRow.Children(func() {
 			ui.Text(c, fmt.Sprintf("%d×%d", e.Width, e.Height)).
-				FontSize(11).FontFeatures("tnum").NoWrap().TextColor(ui.RGBA(232, 236, 244, 0.88))
-			ui.Text(c, e.CreatedAt.Format("15:04:05")).
-				FontSize(10.5).FontFeatures("tnum").NoWrap().TextColor(ui.RGBA(255, 255, 255, 0.42))
+				FontSize(11).FontFeatures("tnum").NoWrap().TextColor(p.Text)
+			ui.Text(c, e.CreatedAt.Format("15:04")).
+				FontSize(10.5).FontFeatures("tnum").NoWrap().TextColor(p.TextMuted)
 			ui.Spacer(c)
 			if pinMiniIconBtn(c, iconCopy, "复制到剪贴板") {
 				if _, raw, err := store.Load(e); err == nil {
@@ -301,6 +315,11 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 					cur := mygo.Screen.CursorScreenPoint()
 					at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
 					go mygo.RunOnMain(func() { a.ShowPin(img, raw, at, dipW, dipH) })
+				}
+			}
+			if pinMiniIconBtn(c, iconTemplate, "套模板（便签 / 拍立得 / 浏览器…）") {
+				if img, _, err := store.Load(e); err == nil {
+					go mygo.RunOnMain(func() { a.openTemplateWindow(img, image.Rectangle{}) })
 				}
 			}
 			if pinMiniIconBtn(c, iconOCR, "识图提取文字") {

@@ -93,7 +93,8 @@ func (a *app) startScrollCapture(sel image.Rectangle) {
 		Y:               ctrlPos.Y,
 		Frameless:       true,
 		Transparent:     true,
-		CornerRadius:    12,
+		Vibrancy:        vibrancyForGlassLevel(a.cfg.GlassLevel),
+		CornerRadius:    panelCornerRadius,
 		Panel:           true,
 		AlwaysOnTop:     true,
 		DisableResize:   true,
@@ -104,6 +105,7 @@ func (a *app) startScrollCapture(sel image.Rectangle) {
 		}),
 	})
 	sc.ctrlWin.SetContentProtection(true)
+	applyWindowTheme(sc.ctrlWin, themeStateFromConfig(a.cfg))
 	sc.ctrlWin.OnClosed(func() {
 		if a.scrollCap == sc {
 			a.stopScrollCapture()
@@ -256,99 +258,105 @@ func (a *app) stopScrollCapture() {
 
 func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 	c.Root().Background(ui.Transparent)
-	if c.Shortcut(0, ui.KeyEscape) {
-		go mygo.RunOnMain(func() { a.stopScrollCapture() })
-		return
-	}
-	if c.Shortcut(0, ui.KeyEnter) {
-		go mygo.RunOnMain(func() { a.finishScrollCapture("copy") })
-		return
-	}
+	withAppTheme(c, func() {
+		if handlePanelWindowShortcuts(c, func() { a.stopScrollCapture() }) {
+			return
+		}
+		if c.Shortcut(0, ui.KeyEnter) {
+			go mygo.RunOnMain(func() { a.finishScrollCapture("copy") })
+			return
+		}
 
-	sc.mu.Lock()
-	bmp := sc.preview
-	pxW, pxH, frames := sc.pxW, sc.pxH, sc.frames
-	sc.mu.Unlock()
+		sc.mu.Lock()
+		bmp := sc.preview
+		pxW, pxH, frames := sc.pxW, sc.pxH, sc.frames
+		sc.mu.Unlock()
 
-	card := ui.Column(c).
-		Fill().
-		Radius(12).
-		Background(ui.RGBA(22, 23, 28, 0.97)).
-		Border(1, ui.RGBA(255, 255, 255, 0.14))
+		p := uiPalette(c)
+		card := liquidGlassPanel(c, ui.Column(c))
 
-	card.Children(func() {
-		// 标题栏
-		header := ui.Row(c).
-			Height(40).
-			Padding(0, 10).
-			Gap(6).
-			AlignItems(ui.Center).
-			DragWindow()
-		header.Children(func() {
-			ui.Box(c).Size(8, 8).Radius(4).Background(ui.RGB(52, 199, 89))
-			ui.Text(c, "滚动长截图").FontSize(12.5).FontWeight(600).NoWrap().TextColor(ui.RGB(244, 245, 248))
-			ui.Spacer(c)
-			if iconToolBtn(c, iconClose, "取消长截图", "取消 (Esc)", false, false) {
-				go mygo.RunOnMain(func() { a.stopScrollCapture() })
-			}
-		})
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-
-		// 实时缩略预览区
-		previewArea := ui.Column(c).
-			Grow(1).
-			Padding(10, 10).
-			Gap(6).
-			AlignItems(ui.Center).
-			Justify(ui.Center)
-		previewArea.Children(func() {
-			if bmp != nil && pxW > 0 && pxH > 0 {
-				maxW, maxH := float32(scrollCtrlW-28), float32(186)
-				aspect := float32(pxW) / float32(pxH)
-				dispH := maxH
-				dispW := dispH * aspect
-				if dispW > maxW {
-					dispW = maxW
-					dispH = dispW / aspect
+		card.Children(func() {
+			// 标题栏
+			header := ui.Row(c).
+				Height(44).
+				Padding(0, 12).
+				Gap(6).
+				AlignItems(ui.Center).
+				DragWindow()
+			header.Children(func() {
+				if macTrafficCloseBtn(c, "取消长截图", "取消 (⌘W / Esc)") {
+					go mygo.RunOnMain(func() { a.stopScrollCapture() })
 				}
-				ui.Box(c).Size(dispW, dispH).Radius(6).Clip().
-					Background(ui.RGBA(12, 13, 16, 0.9)).
-					Border(1, ui.RGBA(52, 199, 89, 0.5)).
-					Children(func() {
-						ui.Image(c, bmp).Size(dispW, dispH)
+				ui.Box(c).Width(2)
+				ui.Box(c).Size(8, 8).Radius(4).Background(ui.RGB(52, 199, 89))
+				ui.Text(c, "滚动长截图").FontSize(12.5).FontWeight(600).NoWrap().TextColor(p.Text)
+				ui.Spacer(c)
+			})
+			panelHairline(c)
+
+			// 实时缩略预览区
+			previewArea := ui.Column(c).
+				Grow(1).
+				Padding(10, 10).
+				Gap(6).
+				AlignItems(ui.Center).
+				Justify(ui.Center)
+			previewArea.Children(func() {
+				if bmp != nil && pxW > 0 && pxH > 0 {
+					maxW, maxH := float32(scrollCtrlW-28), float32(186)
+					aspect := float32(pxW) / float32(pxH)
+					dispH := maxH
+					dispW := dispH * aspect
+					if dispW > maxW {
+						dispW = maxW
+						dispH = dispW / aspect
+					}
+					ui.Box(c).Size(dispW, dispH).Radius(10).Clip().
+						Background(p.StageBg).
+						Border(1, ui.RGBA(52, 199, 89, 0.55)).
+						Children(func() {
+							ui.Image(c, bmp).Size(dispW, dispH)
+						})
+				} else {
+					ui.Text(c, "准备采集中…").FontSize(12).TextColor(p.TextMuted)
+				}
+
+				if frames > 1 {
+					ui.Row(c).AlignItems(ui.Center).Gap(3).Children(func() {
+						ui.Text(c, fmt.Sprintf("%d × %d px · 已拼接", pxW, pxH)).FontSize(11).FontFeatures("tnum").NoWrap().TextColor(p.TextSecondary)
+						ui.Text(c, fmt.Sprintf("%d", frames)).FontSize(11).FontWeight(700).FontFeatures("tnum").NoWrap().TextColor(p.Accent).
+							ContentTransition(ui.ContentTransition{Numeric: true})
+						ui.Text(c, "帧").FontSize(11).NoWrap().TextColor(p.TextSecondary)
 					})
-			} else {
-				ui.Text(c, "准备采集中…").FontSize(12).TextColor(ui.RGBA(255, 255, 255, 0.5))
-			}
+				} else {
+					statTxt := "请在绿框内缓慢向下滚动鼠标"
+					if pxH > 0 {
+						statTxt = fmt.Sprintf("%d × %d px · 向下滚轮开始拼接", pxW, pxH)
+					}
+					ui.Text(c, statTxt).FontSize(11).FontFeatures("tnum").NoWrap().TextColor(p.TextSecondary)
+				}
+			})
 
-			statTxt := "请在绿框内缓慢向下滚动鼠标"
-			if frames > 1 {
-				statTxt = fmt.Sprintf("%d × %d px · 已拼接 %d 帧", pxW, pxH, frames)
-			} else if pxH > 0 {
-				statTxt = fmt.Sprintf("%d × %d px · 向下滚轮开始拼接", pxW, pxH)
-			}
-			ui.Text(c, statTxt).FontSize(11).FontFeatures("tnum").NoWrap().TextColor(ui.RGBA(210, 216, 226, 0.85))
-		})
+			panelHairline(c)
 
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-
-		// 底部完成按钮栏
-		footer := ui.Row(c).
-			Height(42).
-			Padding(0, 8).
-			Gap(5).
-			AlignItems(ui.Center)
-		footer.Children(func() {
-			if iconToolBtn(c, iconPin, "长图贴图", "转为桌面贴图", false, false) {
-				go mygo.RunOnMain(func() { a.finishScrollCapture("pin") })
-			}
-			if iconToolBtn(c, iconSave, "保存长图", "保存长图 PNG", false, false) {
-				go mygo.RunOnMain(func() { a.finishScrollCapture("save") })
-			}
-			ui.Spacer(c)
-			if actionPillBtn(c, iconCheck, "完成复制", "完成并复制到剪贴板 (Enter)", true, false) {
-				go mygo.RunOnMain(func() { a.finishScrollCapture("copy") })
-			}
+			// 底部完成按钮栏
+			footer := ui.Row(c).
+				Height(46).
+				Padding(0, 10).
+				Gap(5).
+				AlignItems(ui.Center)
+			footer.Children(func() {
+				if iconToolBtn(c, iconPin, "长图贴图", "转为桌面贴图", false, false) {
+					go mygo.RunOnMain(func() { a.finishScrollCapture("pin") })
+				}
+				if iconToolBtn(c, iconSave, "保存长图", "保存长图 PNG", false, false) {
+					go mygo.RunOnMain(func() { a.finishScrollCapture("save") })
+				}
+				ui.Spacer(c)
+				if actionPillBtn(c, iconCheck, "完成复制", "完成并复制到剪贴板 (Enter)", true, false) {
+					go mygo.RunOnMain(func() { a.finishScrollCapture("copy") })
+				}
+			})
 		})
 	})
 }

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,10 +18,13 @@ import (
 	"snipgo/internal/beautify"
 	"snipgo/internal/config"
 	"snipgo/internal/crop"
+	"snipgo/internal/pinops"
 	"snipgo/internal/scrollcap"
 	"snipgo/internal/session"
 	"snipgo/internal/store"
 	"snipgo/internal/textrender"
+	"snipgo/internal/updater"
+	"snipgo/internal/vision"
 )
 
 func TestVisualVerifyEveryFeature(t *testing.T) {
@@ -41,7 +46,7 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 		FontSize:  28,
 		Weight:    0.3,
 		Monospace: true,
-		Color:    color.NRGBA{R: 245, G: 246, B: 250, A: 255},
+		Color:     color.NRGBA{R: 245, G: 246, B: 250, A: 255},
 	}); secretTxt != nil {
 		sb := secretTxt.Bounds()
 		draw.Draw(bgPx, sb.Add(image.Pt(200, 560)), secretTxt, sb.Min, draw.Over)
@@ -233,18 +238,18 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 		frames:  6,
 	}
 	pEdit := &pinWin{
-		baseImg: spotCrop,
-		baseBmp: ui.NewBitmap(spotCrop),
-		img:     spotCrop,
-		bmp:     ui.NewBitmap(spotCrop),
-		png:     []byte{1, 2, 3},
-		annot:   annotate.NewCanvas(),
-		origW:   420,
-		origH:   260,
-		curW:    420,
-		curH:    260,
-		zoom:    1.0,
-		opacity: 100,
+		baseImg:  spotCrop,
+		baseBmp:  ui.NewBitmap(spotCrop),
+		img:      spotCrop,
+		bmp:      ui.NewBitmap(spotCrop),
+		png:      []byte{1, 2, 3},
+		annot:    annotate.NewCanvas(),
+		origW:    420,
+		origH:    260,
+		curW:     420,
+		curH:     260,
+		zoom:     1.0,
+		opacity:  100,
 		editMode: true,
 	}
 	pEdit.annot.Tool = annotate.ToolArrow
@@ -258,20 +263,26 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 	pEdit.annot.Tool = annotate.ToolArrow
 
 	scrollAndPinImg := ui.Render(func(c *ui.Context) {
-		ui.Row(c).Fill().Padding(16, 16).Gap(20).Background(ui.RGB(20, 22, 28)).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(scrollCtrlW, scrollCtrlH).Children(func() {
-				a.paintScrollCtrlView(c, scrollSess)
-			})
-			ui.Column(c).Gap(12).Children(func() {
-				ui.Box(c).Size(420, 260).Children(func() {
-					a.pinView(c, pEdit)
+		ui.Box(c).Fill().Padding(16, 16).
+			Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, true) }).
+			Children(func() {
+				ui.Themed(c, ui.DarkTheme()).Fill().Background(ui.Transparent).Children(func() {
+					ui.Row(c).Fill().Gap(20).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(scrollCtrlW, scrollCtrlH).Children(func() {
+							a.paintScrollCtrlView(c, scrollSess)
+						})
+						ui.Column(c).Gap(12).Children(func() {
+							ui.Box(c).Size(420, 260).Children(func() {
+								a.pinView(c, pEdit)
+							})
+							ui.Box(c).Size(420, 56).Radius(12).Background(ui.RGBA(255, 255, 255, 0.08)).Children(func() {
+								ui.Text(c, "悬停栏：").Absolute().Left(14).Top(20).FontSize(11.5).TextColor(ui.RGB(210, 216, 226))
+								a.paintPinHoverBar(c, &pinWin{origW: 420, origH: 56, curW: 420, curH: 56, png: []byte{1}})
+							})
+						})
+					})
 				})
-				ui.Box(c).Size(420, 56).Radius(8).Background(ui.RGB(34, 38, 48)).Children(func() {
-					ui.Text(c, "悬停栏（含左一 PNG 拖出手柄 + 左二原地编辑）：").Absolute().Left(12).Top(18).FontSize(11.5).TextColor(ui.RGB(210, 216, 226))
-					a.paintPinHoverBar(c, &pinWin{origW: 420, origH: 56, curW: 420, curH: 56, png: []byte{1}})
-				})
 			})
-		})
 	}, 720, 380, 2)
 	savePNGFile(t, filepath.Join(dir, "verify_6_scroll_and_pin_edit.png"), scrollAndPinImg)
 
@@ -300,22 +311,563 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 	cd := &countdownSession{remaining: 3}
 
 	histAndSetImg := ui.Render(func(c *ui.Context) {
-		ui.Column(c).Fill().Padding(14, 14).Gap(12).Background(ui.RGB(18, 20, 26)).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(246, 42).Children(func() {
-				a.paintCountdownView(c, cd)
-			})
-			ui.Row(c).Gap(16).Children(func() {
-				ui.Box(c).Size(historyWinW, 380).Children(func() {
-					a.paintHistoryView(c, hw)
+		ui.Box(c).Fill().Padding(14, 14).
+			Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, false) }).
+			Children(func() {
+				ui.Themed(c, ui.LightTheme()).Fill().Background(ui.Transparent).Children(func() {
+					ui.Column(c).Fill().Gap(12).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(246, 42).Children(func() {
+							a.paintCountdownView(c, cd)
+						})
+						ui.Row(c).Gap(16).Children(func() {
+							ui.Box(c).Size(historyWinW, 540).Children(func() {
+								a.paintHistoryView(c, hw)
+							})
+							ui.Box(c).Size(settingsWinW, 540).Children(func() {
+								a.paintSettingsView(c, sw)
+							})
+						})
+					})
 				})
-				ui.Box(c).Size(settingsWinW, 380).Children(func() {
-					a.paintSettingsView(c, sw)
-				})
 			})
-		})
-	}, 1068, 462, 2)
+	}, historyWinW+settingsWinW+44, 622, 2)
 	savePNGFile(t, filepath.Join(dir, "verify_7_history_and_settings.png"), histAndSetImg)
 	a.histWin = nil
+
+	// 图 8：局部放大镜特写（ToolLoupe 实时预览 + 2x 真实导出）+ 离线 Vision 主体抠图（棋盘格透明底验证）
+	a.session.Cancel()
+	a.session.StartFrozen()
+	a.session.InitCursor(200, 150)
+	a.session.BeginDrag(0, 200, 150)
+	a.session.EndDrag()
+	ac = a.session.Annotations()
+	ac.Reset()
+	ac.Tool = annotate.ToolLoupe
+	ac.Color = annotate.Palette[3] // 蓝色
+	ac.Stroke = 3.0
+	ac.SetLoupeZoom(3.0)
+	ac.BeginPointer(520, 98) // 放大蓝色按钮
+	ac.EndPointer(340, 175)
+	// 第二个原地放大镜放大文字区域
+	ac.Color = annotate.Palette[0]
+	ac.Stroke = 2.0
+	ac.SetLoupeZoom(2.5)
+	ac.BeginPointer(225, 292)
+	ac.EndPointer(228, 294) // <12 DIP -> 原地放大镜
+	ac.Tool = annotate.ToolLoupe
+
+	loupeLive := ui.Render(a.selectionView(o), dipW, dipH, 2)
+	loupeCrop, err := crop.Crop([]crop.Screen{{Bounds: o.bounds, Scale: 2, Pixels: bgPx}}, sel)
+	if err != nil {
+		t.Fatalf("loupe crop: %v", err)
+	}
+	annotate.Render(loupeCrop, sel, ac.Items())
+
+	// 真实 Vision 前景主体抠图放在棋盘格背景上展示透明通道效果
+	subCanvas := image.NewNRGBA(image.Rect(0, 0, 280, 280))
+	draw.Draw(subCanvas, subCanvas.Bounds(), image.NewUniform(color.NRGBA{R: 236, G: 240, B: 246, A: 255}), image.Point{}, draw.Src)
+	for y := 55; y < 225; y++ {
+		for x := 55; x < 225; x++ {
+			dx, dy := float64(x-140), float64(y-140)
+			d := dx*dx + dy*dy
+			if d <= 75*75 {
+				c := color.NRGBA{R: 245, G: 84, B: 66, A: 255}
+				if d >= 28*28 && d <= 48*48 {
+					c = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+				}
+				subCanvas.SetNRGBA(x, y, c)
+			}
+		}
+	}
+	cutImg, cutErr := vision.Cutout(subCanvas)
+	if cutErr != nil {
+		t.Logf("Cutout skipped or failed: %v", cutErr)
+		cutImg = subCanvas
+	}
+	checker := image.NewNRGBA(image.Rect(0, 0, cutImg.Bounds().Dx()+48, cutImg.Bounds().Dy()+48))
+	for y := range checker.Bounds().Dy() {
+		for x := range checker.Bounds().Dx() {
+			c := color.NRGBA{R: 48, G: 52, B: 60, A: 255}
+			if ((x/14)+(y/14))%2 == 1 {
+				c = color.NRGBA{R: 72, G: 76, B: 86, A: 255}
+			}
+			checker.SetNRGBA(x, y, c)
+		}
+	}
+	draw.Draw(checker, cutImg.Bounds().Add(image.Pt(24, 24)), cutImg, cutImg.Bounds().Min, draw.Over)
+
+	s8W := loupeLive.Bounds().Dx() + max(loupeCrop.Bounds().Dx(), checker.Bounds().Dx()) + 50
+	s8H := max(loupeLive.Bounds().Dy(), loupeCrop.Bounds().Dy()+checker.Bounds().Dy()+40) + 20
+	sheet8 := image.NewNRGBA(image.Rect(0, 0, s8W, s8H))
+	draw.Draw(sheet8, sheet8.Bounds(), image.NewUniform(color.NRGBA{R: 18, G: 20, B: 26, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(sheet8, loupeLive.Bounds().Add(image.Pt(10, 10)), loupeLive, image.Point{}, draw.Over)
+	draw.Draw(sheet8, loupeCrop.Bounds().Add(image.Pt(loupeLive.Bounds().Dx()+30, 10)), loupeCrop, image.Point{}, draw.Over)
+	draw.Draw(sheet8, checker.Bounds().Add(image.Pt(loupeLive.Bounds().Dx()+30, loupeCrop.Bounds().Dy()+30)), checker, image.Point{}, draw.Over)
+	savePNGFile(t, filepath.Join(dir, "verify_8_loupe_and_cutout.png"), sheet8)
+
+	// 图 9：贴图拉帘对比 / 像素 Diff 热力图 + OCR 表格还原面板（Markdown 表格视图）
+	cmpBefore := image.NewNRGBA(image.Rect(0, 0, 640, 400))
+	cmpAfter := image.NewNRGBA(image.Rect(0, 0, 640, 400))
+	draw.Draw(cmpBefore, cmpBefore.Bounds(), image.NewUniform(color.NRGBA{R: 30, G: 34, B: 44, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(cmpAfter, cmpAfter.Bounds(), image.NewUniform(color.NRGBA{R: 30, G: 34, B: 44, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(cmpBefore, image.Rect(40, 50, 280, 140), image.NewUniform(color.NRGBA{R: 10, G: 132, B: 255, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(cmpAfter, image.Rect(40, 50, 280, 140), image.NewUniform(color.NRGBA{R: 52, G: 199, B: 89, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(cmpBefore, image.Rect(340, 180, 580, 310), image.NewUniform(color.NRGBA{R: 72, G: 78, B: 96, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(cmpAfter, image.Rect(360, 195, 580, 325), image.NewUniform(color.NRGBA{R: 249, G: 115, B: 22, A: 255}), image.Point{}, draw.Src)
+
+	diffRes := pinops.RenderPixelDiff(cmpBefore, cmpAfter, 12)
+	pSplit := &pinWin{
+		img: cmpAfter, bmp: ui.NewBitmap(cmpAfter),
+		origW: 320, origH: 200, curW: 320, curH: 200, zoom: 1, opacity: 100,
+		compareMode: true, compareDiff: false, compareSplit: 0.48,
+		comparePeer: cmpBefore, comparePeerBmp: ui.NewBitmap(cmpBefore),
+		compareDiffRes: diffRes, compareDiffBmp: ui.NewBitmap(diffRes.Image),
+	}
+	pDiff := &pinWin{
+		img: cmpAfter, bmp: ui.NewBitmap(cmpAfter),
+		origW: 320, origH: 200, curW: 320, curH: 200, zoom: 1, opacity: 100,
+		compareMode: true, compareDiff: true, compareSplit: 0.48,
+		comparePeer: cmpBefore, comparePeerBmp: ui.NewBitmap(cmpBefore),
+		compareDiffRes: diffRes, compareDiffBmp: ui.NewBitmap(diffRes.Image),
+	}
+	tbl, _ := vision.ExtractTable([]vision.TextBox{
+		{Text: "模块", X: 0.05, Top: 0.10, W: 0.18, H: 0.06},
+		{Text: "耗时", X: 0.42, Top: 0.10, W: 0.15, H: 0.06},
+		{Text: "状态", X: 0.74, Top: 0.10, W: 0.16, H: 0.06},
+		{Text: "主体抠图", X: 0.05, Top: 0.30, W: 0.20, H: 0.06},
+		{Text: "0.28s", X: 0.42, Top: 0.30, W: 0.14, H: 0.06},
+		{Text: "离线可用", X: 0.74, Top: 0.30, W: 0.18, H: 0.06},
+		{Text: "表格还原", X: 0.05, Top: 0.50, W: 0.20, H: 0.06},
+		{Text: "0.15s", X: 0.42, Top: 0.50, W: 0.14, H: 0.06},
+		{Text: "Markdown/TSV", X: 0.74, Top: 0.50, W: 0.22, H: 0.06},
+	})
+	owTbl := &ocrWindow{
+		thumb:       ui.NewBitmap(cmpAfter),
+		plainText:   "模块 耗时 状态\n主体抠图 0.28s 离线可用\n表格还原 0.15s Markdown/TSV",
+		text:        tbl.Markdown(),
+		table:       tbl,
+		hasTable:    true,
+		mode:        ocrModeMarkdown,
+		copiedBadge: "已复制 Markdown 表格 (3×3)",
+	}
+	sheet9Img := ui.Render(func(c *ui.Context) {
+		ui.Box(c).Fill().Padding(16, 16).
+			Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, true) }).
+			Children(func() {
+				ui.Themed(c, ui.DarkTheme()).Fill().Background(ui.Transparent).Children(func() {
+					ui.Column(c).Fill().Gap(16).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).Gap(16).Children(func() {
+							ui.Box(c).Size(320, 200).Children(func() { a.pinView(c, pSplit) })
+							ui.Box(c).Size(320, 200).Children(func() { a.pinView(c, pDiff) })
+						})
+						ui.Box(c).Size(520, 310).Children(func() { a.paintOCRView(c, owTbl) })
+					})
+				})
+			})
+	}, 688, 560, 2)
+	savePNGFile(t, filepath.Join(dir, "verify_9_compare_diff_and_table_ocr.png"), sheet9Img)
+
+	// 图 10：开发者多色板 + OKLCH/Tailwind 卡片 + 主色自适应流体渐变 & macOS 交通灯顶栏卡片
+	palCard := beautify.RenderPaletteCard([]color.NRGBA{
+		{R: 14, G: 165, B: 233, A: 255},
+		{R: 16, G: 185, B: 129, A: 255},
+		{R: 249, G: 115, B: 22, A: 255},
+		{R: 168, G: 85, B: 247, A: 255},
+	}, 2.0)
+	singleColorCard := beautify.RenderTextPin("#0EA5E9", 2.0)
+	chromeCard := beautify.RenderCardWithOptions(cropped, 2.0, beautify.CardOptions{
+		Preset:       beautify.PresetAuto,
+		WindowChrome: true,
+	})
+	pb1 := palCard.Bounds()
+	pb2 := singleColorCard.Bounds()
+	cb1 := chromeCard.Bounds()
+	s10W := max(pb1.Dx()+pb2.Dx()+60, cb1.Dx()+40)
+	s10H := max(pb1.Dy(), pb2.Dy()) + cb1.Dy() + 60
+	sheet10 := image.NewNRGBA(image.Rect(0, 0, s10W, s10H))
+	draw.Draw(sheet10, sheet10.Bounds(), image.NewUniform(color.NRGBA{R: 18, G: 20, B: 26, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(sheet10, pb1.Add(image.Pt(20, 20)), palCard, pb1.Min, draw.Over)
+	draw.Draw(sheet10, pb2.Add(image.Pt(pb1.Dx()+40, 20)), singleColorCard, pb2.Min, draw.Over)
+	draw.Draw(sheet10, cb1.Add(image.Pt(20, max(pb1.Dy(), pb2.Dy())+40)), chromeCard, cb1.Min, draw.Over)
+	savePNGFile(t, filepath.Join(dir, "verify_10_color_palette_and_chrome_card.png"), sheet10)
+
+	// 图 11：套模板全部 10 套主题卡片 5×2 全景展示
+	type tplCase struct {
+		kind    beautify.TemplateKind
+		theme   int
+		title   string
+		caption string
+	}
+	tplCases := []tplCase{
+		{beautify.TemplateStickyNote, 0, "接口联调记录", "红色标注区已脱敏，确认合并前复核"},
+		{beautify.TemplatePolaroid, 0, "UI 走查定格", "对齐像素栅格 · Retina @2x"},
+		{beautify.TemplateBrowser, 0, "https://snipgo.dev/docs", ""},
+		{beautify.TemplateEditorial, 0, "SnipGo 套模板", "支持 10 套高颜值实用模板与 PNG 直接拖出"},
+		{beautify.TemplateReceipt, 0, "SNIPGO STUDIO", "ZERO-CGO · VISION OCR · NATIVE"},
+		{beautify.TemplateTerminal, 0, "zsh — snipgo studio", "go test -race ./...  ✓ passed 14 pkgs"},
+		{beautify.TemplateFilm, 0, "KODAK 400 · FRAME 24A", "35mm Contact Sheet · Natural Grain"},
+		{beautify.TemplateReview, 0, "ISSUE #408 · 排版走查", "高分屏文字清晰 · 建议放大细节对齐像素"},
+		{beautify.TemplatePostcard, 0, "SHANGHAI · AIR MAIL", "Greeting from SnipGo Studio · 2026"},
+		{beautify.TemplateSlide, 0, "SnipGo 26 液态玻璃", "原生态透明选区、离线 AI 抠图与结构化识图一步直达"},
+	}
+	const (
+		galCols = 5
+		galRows = 2
+		cellW   = 380
+		cellH   = 340
+		galGap  = 18
+	)
+	galW := galCols*cellW + (galCols+1)*galGap
+	galH := galRows*cellH + (galRows+1)*galGap
+	sheet11 := image.NewNRGBA(image.Rect(0, 0, galW, galH))
+	draw.Draw(sheet11, sheet11.Bounds(), image.NewUniform(color.NRGBA{R: 16, G: 18, B: 24, A: 255}), image.Point{}, draw.Src)
+	for idx, tc := range tplCases {
+		cardImg := beautify.RenderTemplate(cropped, 1.45, beautify.TemplateOptions{
+			Kind:     tc.kind,
+			Theme:    tc.theme,
+			Title:    tc.title,
+			Caption:  tc.caption,
+			ShowDate: true,
+			Padding:  beautify.PadNormal,
+		})
+		if cardImg == nil {
+			continue
+		}
+		fitImg := fitImageBilinear(cardImg, cellW-16, cellH-16)
+		col := idx % galCols
+		row := idx / galCols
+		cx := galGap + col*(cellW+galGap) + (cellW-fitImg.Bounds().Dx())/2
+		cy := galGap + row*(cellH+galGap) + (cellH-fitImg.Bounds().Dy())/2
+		draw.Draw(sheet11, fitImg.Bounds().Add(image.Pt(cx, cy)), fitImg, fitImg.Bounds().Min, draw.Over)
+	}
+	savePNGFile(t, filepath.Join(dir, "verify_11_templates_gallery.png"), sheet11)
+
+	// 图 12：套模板工作台（paintTemplateView）940×656 @2x 浅色与深色 Liquid Glass 双外观渲染预览
+	tplPrevSrc, tplFactor := downscaleForPreview(cropped, 620)
+	tw := &templateWindow{
+		srcImg:       cropped,
+		srcScale:     2.0,
+		previewSrc:   tplPrevSrc,
+		previewScale: max(0.85, 2.0*tplFactor),
+		opts: beautify.TemplateOptions{
+			Kind:     beautify.TemplateTerminal,
+			Theme:    0,
+			Title:    "zsh — snipgo studio",
+			Caption:  "支持实时预览、自定义配色、日期水印与 PNG 拖拽出图",
+			ShowDate: true,
+			Padding:  beautify.PadNormal,
+		},
+		statusBadge: "✓ 已复制 · 1409×974 px",
+	}
+	tw.refreshPreview()
+	studioLight := ui.Render(func(c *ui.Context) {
+		ui.Box(c).Fill().Padding(14, 14).
+			Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, false) }).
+			Children(func() {
+				ui.Themed(c, ui.LightTheme()).Fill().Background(ui.Transparent).Children(func() {
+					a.paintTemplateView(c, tw)
+				})
+			})
+	}, templateWinW+28, templateWinH+28, 2)
+	savePNGFile(t, filepath.Join(dir, "verify_12_template_studio_light.png"), studioLight)
+
+	studioDark := ui.Render(func(c *ui.Context) {
+		ui.Box(c).Fill().Padding(14, 14).
+			Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, true) }).
+			Children(func() {
+				ui.Themed(c, ui.DarkTheme()).Fill().Background(ui.Transparent).Children(func() {
+					a.paintTemplateView(c, tw)
+				})
+			})
+	}, templateWinW+28, templateWinH+28, 2)
+	savePNGFile(t, filepath.Join(dir, "verify_12_template_studio_dark.png"), studioDark)
+
+	// 图 13：全新 App 图标（Dock 浅色/深色多尺寸）+ 菜单栏模板图标（浅色/深色）真像素核验表
+	saveIconPreviewSheet(t, filepath.Join(dir, "icon_preview_sheet.png"))
+
+	// 图 14：自动更新器面板（浅色发现新版本 + 深色下载校验中与已是最新）
+	uIcon, _ := ui.DecodeBitmap(appIconPNG)
+	mockRel := &updater.Release{
+		Version:   "0.2.0",
+		TagName:   "v0.2.0",
+		Name:      "SnipGo 0.2.0",
+		AssetName: "SnipGo-0.2.0-arm64.app.zip",
+		AssetURL:  "https://github.com/Lumiaqian/snipgo/releases/download/v0.2.0/SnipGo-0.2.0-arm64.app.zip",
+		AssetSize: 4920000,
+		Notes: "### 核心亮点\n" +
+			"- 全新 macOS 26/27 Liquid Glass 自适应浅色与深色液态玻璃外观，支持清透/标准/浓磨砂与主题色自定义\n" +
+			"- 套模板工作台精选 10 套实用样式，涵盖终端代码、35mm 胶片、评审工单与幻灯分栏\n" +
+			"- 全浮窗采用 macOS 左上角红灯关闭（⌘W / Esc）与 ⌘Q 原生快捷习惯，内置自动更新",
+	}
+	uAvail := &updateManager{
+		iconBmp:       uIcon,
+		state:         updAvailable,
+		release:       mockRel,
+		canSelfUpdate: true,
+	}
+	uDown := &updateManager{
+		iconBmp:       uIcon,
+		state:         updDownloading,
+		release:       mockRel,
+		downloaded:    3145728,
+		total:         4920000,
+		canSelfUpdate: true,
+	}
+	uUpToDate := &updateManager{
+		iconBmp:       uIcon,
+		state:         updUpToDate,
+		canSelfUpdate: true,
+	}
+
+	updaterImg := ui.Render(func(c *ui.Context) {
+		ui.Row(c).Fill().Children(func() {
+			ui.Box(c).Width(528).FillHeight().Padding(14, 14).
+				AlignItems(ui.Center).Justify(ui.Center).
+				Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, false) }).
+				Children(func() {
+					ui.Themed(c.Key("upd-light"), ui.LightTheme()).Size(updateWinW, updateWinH).Background(ui.Transparent).Children(func() {
+						a.paintUpdateView(c, uAvail)
+					})
+				})
+			ui.Box(c).Width(528).FillHeight().Padding(14, 14).
+				AlignItems(ui.Center).Justify(ui.Center).
+				Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, true) }).
+				Children(func() {
+					ui.Themed(c.Key("upd-dark"), ui.DarkTheme()).Fill().Background(ui.Transparent).
+						Gap(12).AlignItems(ui.Center).Justify(ui.Center).
+						Children(func() {
+							ui.Box(c.Key("upd-dl")).Size(updateWinW, 304).Children(func() {
+								a.paintUpdateView(c, uDown)
+							})
+							ui.Box(c.Key("upd-cur")).Size(updateWinW, 304).Children(func() {
+								a.paintUpdateView(c, uUpToDate)
+							})
+						})
+				})
+		})
+	}, 1056, 648, 2)
+	savePNGFile(t, filepath.Join(dir, "verify_14_updater_ui.png"), updaterImg)
+
+	// 图 15：外观与主题实时定制展示（清透+极光紫 / 深色+标准+珊瑚粉 / 浅色+浓磨砂+翡翠绿）
+	prevTheme := getActiveTheme()
+	defer setActiveTheme(prevTheme)
+
+	renderTile := func(w, h int, darkWallpaper bool, st appThemeState, fn func(*ui.Context)) *image.RGBA {
+		setActiveTheme(st)
+		return ui.Render(func(c *ui.Context) {
+			ui.Box(c).Fill().Padding(14, 14).
+				Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, darkWallpaper) }).
+				Children(func() {
+					fn(c)
+				})
+		}, w+28, h+28, 2)
+	}
+
+	swPurple := &settingsWindow{
+		draft: config.Settings{
+			ThemeAppearance:  "light",
+			GlassLevel:       "clear",
+			AccentColor:      "purple",
+			QuickSave:        true,
+			CopyOnSave:       true,
+			QuickSaveDir:     a.cfg.QuickSaveDir,
+			DelaySeconds:     3,
+			SnipShortcut:     a.cfg.SnipShortcut,
+			OCRShortcut:      a.cfg.OCRShortcut,
+			FreezeShortcut:   a.cfg.FreezeShortcut,
+			DelayShortcut:    a.cfg.DelayShortcut,
+			PinShortcut:      a.cfg.PinShortcut,
+			HistoryShortcut:  a.cfg.HistoryShortcut,
+			AutoCheckUpdates: true,
+		},
+		saved: "实时预览（点保存生效）",
+	}
+	tile1 := renderTile(settingsWinW, 540, false, appThemeState{Appearance: "light", GlassLevel: "clear", Accent: "purple"}, func(c *ui.Context) {
+		a.paintSettingsView(c, swPurple)
+	})
+	tile2 := renderTile(updateWinW, 540, true, appThemeState{Appearance: "dark", GlassLevel: "regular", Accent: "pink"}, func(c *ui.Context) {
+		a.paintUpdateView(c, uAvail)
+	})
+	tile3 := renderTile(440, 540, false, appThemeState{Appearance: "light", GlassLevel: "frosted", Accent: "green"}, func(c *ui.Context) {
+		a.paintOCRView(c, owTbl)
+	})
+
+	s15W := tile1.Bounds().Dx() + tile2.Bounds().Dx() + tile3.Bounds().Dx()
+	s15H := max(tile1.Bounds().Dy(), max(tile2.Bounds().Dy(), tile3.Bounds().Dy()))
+	sheet15 := image.NewNRGBA(image.Rect(0, 0, s15W, s15H))
+	xOff := 0
+	for _, tile := range []*image.RGBA{tile1, tile2, tile3} {
+		draw.Draw(sheet15, tile.Bounds().Add(image.Pt(xOff, 0)), tile, tile.Bounds().Min, draw.Src)
+		xOff += tile.Bounds().Dx()
+	}
+	savePNGFile(t, filepath.Join(dir, "verify_15_theme_showcase.png"), sheet15)
+}
+
+func paintTahoeWallpaper(p *ui.Painter, r ui.Rect, dark bool) {
+	if dark {
+		p.FillGradient(r, ui.LinearGradient{
+			From:  ui.RGB(16, 26, 54),
+			To:    ui.RGB(48, 22, 62),
+			Angle: 135,
+			Oklab: true,
+		}, 0)
+		p.FillRadialGradient(r, ui.RadialGradient{
+			Center: ui.Point{X: 0.22, Y: 0.24},
+			Radius: r.W * 0.55,
+			Stops: []ui.GradientStop{
+				{Color: ui.RGBA(24, 128, 255, 0.45), At: 0},
+				{Color: ui.RGBA(24, 128, 255, 0), At: 1},
+			},
+		}, 0)
+		p.FillRadialGradient(r, ui.RadialGradient{
+			Center: ui.Point{X: 0.80, Y: 0.72},
+			Radius: r.W * 0.50,
+			Stops: []ui.GradientStop{
+				{Color: ui.RGBA(198, 68, 224, 0.34), At: 0},
+				{Color: ui.RGBA(198, 68, 224, 0), At: 1},
+			},
+		}, 0)
+		p.FillRadialGradient(r, ui.RadialGradient{
+			Center: ui.Point{X: 0.55, Y: 0.18},
+			Radius: r.W * 0.36,
+			Stops: []ui.GradientStop{
+				{Color: ui.RGBA(28, 196, 174, 0.26), At: 0},
+				{Color: ui.RGBA(28, 196, 174, 0), At: 1},
+			},
+		}, 0)
+		return
+	}
+	p.FillGradient(r, ui.LinearGradient{
+		From:  ui.RGB(146, 206, 255),
+		To:    ui.RGB(240, 196, 232),
+		Angle: 135,
+		Oklab: true,
+	}, 0)
+	p.FillRadialGradient(r, ui.RadialGradient{
+		Center: ui.Point{X: 0.20, Y: 0.26},
+		Radius: r.W * 0.52,
+		Stops: []ui.GradientStop{
+			{Color: ui.RGBA(74, 178, 255, 0.52), At: 0},
+			{Color: ui.RGBA(74, 178, 255, 0), At: 1},
+		},
+	}, 0)
+	p.FillRadialGradient(r, ui.RadialGradient{
+		Center: ui.Point{X: 0.82, Y: 0.70},
+		Radius: r.W * 0.50,
+		Stops: []ui.GradientStop{
+			{Color: ui.RGBA(255, 134, 186, 0.44), At: 0},
+			{Color: ui.RGBA(255, 134, 186, 0), At: 1},
+		},
+	}, 0)
+	p.FillRadialGradient(r, ui.RadialGradient{
+		Center: ui.Point{X: 0.54, Y: 0.20},
+		Radius: r.W * 0.38,
+		Stops: []ui.GradientStop{
+			{Color: ui.RGBA(92, 224, 182, 0.38), At: 0},
+			{Color: ui.RGBA(92, 224, 182, 0), At: 1},
+		},
+	}, 0)
+}
+
+func fitImageBilinear(src *image.NRGBA, maxW, maxH int) *image.NRGBA {
+	if src == nil || src.Bounds().Empty() || maxW <= 0 || maxH <= 0 {
+		return src
+	}
+	sb := src.Bounds()
+	sw, sh := sb.Dx(), sb.Dy()
+	r := min(float64(maxW)/float64(sw), float64(maxH)/float64(sh))
+	if r >= 1.0 {
+		return src
+	}
+	dw := max(1, int(math.Round(float64(sw)*r)))
+	dh := max(1, int(math.Round(float64(sh)*r)))
+	dst := image.NewNRGBA(image.Rect(0, 0, dw, dh))
+	for y := range dh {
+		sy := (float64(y)+0.5)/float64(dh)*float64(sh) - 0.5
+		y0 := max(0, min(sh-1, int(math.Floor(sy))))
+		y1 := max(0, min(sh-1, y0+1))
+		fy := sy - float64(y0)
+		for x := range dw {
+			sx := (float64(x)+0.5)/float64(dw)*float64(sw) - 0.5
+			x0 := max(0, min(sw-1, int(math.Floor(sx))))
+			x1 := max(0, min(sw-1, x0+1))
+			fx := sx - float64(x0)
+
+			c00 := src.NRGBAAt(sb.Min.X+x0, sb.Min.Y+y0)
+			c10 := src.NRGBAAt(sb.Min.X+x1, sb.Min.Y+y0)
+			c01 := src.NRGBAAt(sb.Min.X+x0, sb.Min.Y+y1)
+			c11 := src.NRGBAAt(sb.Min.X+x1, sb.Min.Y+y1)
+			lerpU8 := func(a, b, c, d uint8) uint8 {
+				top := float64(a)*(1-fx) + float64(b)*fx
+				bot := float64(c)*(1-fx) + float64(d)*fx
+				return uint8(math.Round(max(0, min(255, top*(1-fy)+bot*fy))))
+			}
+			dst.SetNRGBA(x, y, color.NRGBA{
+				R: lerpU8(c00.R, c10.R, c01.R, c11.R),
+				G: lerpU8(c00.G, c10.G, c01.G, c11.G),
+				B: lerpU8(c00.B, c10.B, c01.B, c11.B),
+				A: lerpU8(c00.A, c10.A, c01.A, c11.A),
+			})
+		}
+	}
+	return dst
+}
+
+func saveIconPreviewSheet(t *testing.T, outPath string) {
+	t.Helper()
+	iconBytes, err := os.ReadFile(filepath.Join("resources", "icon.png"))
+	if err != nil {
+		t.Fatalf("read resources/icon.png: %v", err)
+	}
+	iconDec, err := png.Decode(bytes.NewReader(iconBytes))
+	if err != nil {
+		t.Fatalf("decode icon: %v", err)
+	}
+	iconNRGBA := image.NewNRGBA(image.Rect(0, 0, iconDec.Bounds().Dx(), iconDec.Bounds().Dy()))
+	draw.Draw(iconNRGBA, iconNRGBA.Bounds(), iconDec, iconDec.Bounds().Min, draw.Src)
+
+	trayRaw, err := png.Decode(bytes.NewReader(trayIcon()))
+	if err != nil {
+		t.Fatalf("decode trayIcon: %v", err)
+	}
+	trayBlack := image.NewNRGBA(image.Rect(0, 0, trayRaw.Bounds().Dx(), trayRaw.Bounds().Dy()))
+	draw.Draw(trayBlack, trayBlack.Bounds(), trayRaw, trayRaw.Bounds().Min, draw.Src)
+	trayWhite := image.NewNRGBA(trayBlack.Bounds())
+	for y := range trayWhite.Bounds().Dy() {
+		for x := range trayWhite.Bounds().Dx() {
+			c := trayBlack.NRGBAAt(x, y)
+			trayWhite.SetNRGBA(x, y, color.NRGBA{R: 245, G: 247, B: 250, A: c.A})
+		}
+	}
+
+	const W, H = 900, 620
+	canvas := image.NewNRGBA(image.Rect(0, 0, W, H))
+	// 上半区：浅色 macOS 桌面与 Dock/菜单栏；下半区：深色 macOS 桌面与 Dock/菜单栏
+	draw.Draw(canvas, image.Rect(0, 0, W, H/2), image.NewUniform(color.NRGBA{R: 238, G: 241, B: 246, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(canvas, image.Rect(0, H/2, W, H), image.NewUniform(color.NRGBA{R: 22, G: 24, B: 30, A: 255}), image.Point{}, draw.Src)
+
+	drawBand := func(yBase int, tintTray *image.NRGBA) {
+		i256 := fitImageBilinear(iconNRGBA, 256, 256)
+		i64 := fitImageBilinear(iconNRGBA, 64, 64)
+		i32 := fitImageBilinear(iconNRGBA, 32, 32)
+		draw.Draw(canvas, i256.Bounds().Add(image.Pt(36, yBase+27)), i256, image.Point{}, draw.Over)
+		draw.Draw(canvas, i64.Bounds().Add(image.Pt(330, yBase+123)), i64, image.Point{}, draw.Over)
+		draw.Draw(canvas, i32.Bounds().Add(image.Pt(424, yBase+139)), i32, image.Point{}, draw.Over)
+
+		// 菜单栏图标 4× 放大展示 (144×144) 与真实 @2x 展示 (36×36)
+		tb4 := image.NewNRGBA(image.Rect(0, 0, 144, 144))
+		tw := tintTray.Bounds().Dx()
+		for y := range 144 {
+			for x := range 144 {
+				tb4.SetNRGBA(x, y, tintTray.NRGBAAt(min(tw-1, x/4), min(tw-1, y/4)))
+			}
+		}
+		draw.Draw(canvas, tb4.Bounds().Add(image.Pt(540, yBase+83)), tb4, image.Point{}, draw.Over)
+		draw.Draw(canvas, tintTray.Bounds().Add(image.Pt(730, yBase+137)), tintTray, image.Point{}, draw.Over)
+	}
+	drawBand(0, trayBlack)
+	drawBand(H/2, trayWhite)
+	savePNGFile(t, outPath, canvas)
 }
 
 func savePNGFile(t *testing.T, path string, img image.Image) {

@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -12,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
@@ -21,6 +24,8 @@ import (
 	"snipgo/internal/annotate"
 	"snipgo/internal/beautify"
 	"snipgo/internal/measure"
+	"snipgo/internal/pinops"
+	"snipgo/internal/vision"
 )
 
 const (
@@ -30,29 +35,39 @@ const (
 )
 
 type pinWin struct {
-	win          *mygo.Window
-	baseImg      *image.NRGBA
-	baseBmp      *ui.Bitmap
-	img          *image.NRGBA
-	bmp          *ui.Bitmap
-	png          []byte
-	annot        *annotate.Canvas
-	origW        int
-	origH        int
-	curW         int
-	curH         int
-	zoom         float64
-	opacity      int
-	prevOpacity  int
-	clickThrough bool
-	collapsed    bool
-	rulerMode    bool
-	editMode     bool
-	annotDrag    bool
-	annotEditDrg bool
-	hoverX       float64
-	hoverY       float64
-	hasHover     bool
+	win            *mygo.Window
+	baseImg        *image.NRGBA
+	baseBmp        *ui.Bitmap
+	img            *image.NRGBA
+	bmp            *ui.Bitmap
+	png            []byte
+	annot          *annotate.Canvas
+	origW          int
+	origH          int
+	curW           int
+	curH           int
+	zoom           float64
+	opacity        int
+	prevOpacity    int
+	clickThrough   bool
+	collapsed      bool
+	rulerMode      bool
+	editMode       bool
+	cutout         bool
+	cutting        bool
+	compareMode    bool
+	compareDiff    bool
+	comparePeer    *image.NRGBA
+	comparePeerBmp *ui.Bitmap
+	compareDiffRes pinops.DiffResult
+	compareDiffBmp *ui.Bitmap
+	compareSplit   float64
+	compareDrag    bool
+	annotDrag      bool
+	annotEditDrg   bool
+	hoverX         float64
+	hoverY         float64
+	hasHover       bool
 }
 
 type closedPinRecord struct {
@@ -63,13 +78,14 @@ type closedPinRecord struct {
 	origH   int
 	zoom    float64
 	opacity int
+	cutout  bool
 }
 
 func (a *app) ShowPin(img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int) {
-	a.showPinWithState(img, pngBytes, at, dipW, dipH, 1.0, 100)
+	a.showPinWithState(img, pngBytes, at, dipW, dipH, 1.0, 100, false)
 }
 
-func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int, zoom float64, opacity int) {
+func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int, zoom float64, opacity int, cutout bool) {
 	if img == nil || dipW < 1 || dipH < 1 {
 		return
 	}
@@ -84,19 +100,21 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 
 	baseBmp := ui.NewBitmap(img)
 	p := &pinWin{
-		baseImg:     img,
-		baseBmp:     baseBmp,
-		img:         img,
-		bmp:         baseBmp,
-		png:         append([]byte(nil), pngBytes...),
-		annot:       annotate.NewCanvas(),
-		origW:       dipW,
-		origH:       dipH,
-		curW:        curW,
-		curH:        curH,
-		zoom:        zoom,
-		opacity:     opacity,
-		prevOpacity: opacity,
+		baseImg:      img,
+		baseBmp:      baseBmp,
+		img:          img,
+		bmp:          baseBmp,
+		png:          append([]byte(nil), pngBytes...),
+		annot:        annotate.NewCanvas(),
+		origW:        dipW,
+		origH:        dipH,
+		curW:         curW,
+		curH:         curH,
+		zoom:         zoom,
+		opacity:      opacity,
+		prevOpacity:  opacity,
+		cutout:       cutout,
+		compareSplit: 0.5,
 	}
 	p.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:           "贴图",
@@ -132,7 +150,11 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 			origH:   p.origH,
 			zoom:    p.zoom,
 			opacity: p.opacity,
+			cutout:  p.cutout,
 		})
+	})
+	p.win.OnMove(func() {
+		a.snapPinWindow(p)
 	})
 	p.win.OnClosed(func() {
 		a.dropPin(p)
@@ -147,242 +169,304 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 
 func (a *app) pinView(c *ui.Context, p *pinWin) {
 	c.Root().Background(ui.Transparent)
-	esc := c.Shortcut(0, ui.KeyEscape)
-	enter := c.Shortcut(0, ui.KeyEnter)
-	cmdW := c.Shortcut(ui.Cmd, ui.KeyW)
-	cmdC := c.Shortcut(ui.Cmd, ui.KeyC)
-	cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
-	cmdZ := c.Shortcut(ui.Cmd, ui.KeyZ)
-	cmdShiftZ := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ)
-	delKey := c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)
-	keyE := c.Shortcut(0, ui.KeyE)
-	keyO := c.Shortcut(0, ui.KeyO)
-	keyB := c.Shortcut(0, ui.KeyB)
-	keyP := c.Shortcut(0, ui.KeyP)
-	keyM := c.Shortcut(0, ui.KeyM)
-	keyR := c.Shortcut(0, ui.KeyR)
+	withAppTheme(c, func() {
+		esc := c.Shortcut(0, ui.KeyEscape)
+		enter := c.Shortcut(0, ui.KeyEnter)
+		cmdQ := c.Shortcut(ui.Cmd, ui.KeyQ)
+		cmdW := c.Shortcut(ui.Cmd, ui.KeyW)
+		cmdC := c.Shortcut(ui.Cmd, ui.KeyC)
+		cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
+		cmdZ := c.Shortcut(ui.Cmd, ui.KeyZ)
+		cmdShiftZ := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ)
+		delKey := c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)
+		keyE := c.Shortcut(0, ui.KeyE)
+		keyO := c.Shortcut(0, ui.KeyO)
+		keyB := c.Shortcut(0, ui.KeyB)
+		keyP := c.Shortcut(0, ui.KeyP)
+		keyM := c.Shortcut(0, ui.KeyM)
+		keyR := c.Shortcut(0, ui.KeyR)
+		keyK := c.Shortcut(0, ui.KeyK)
+		keyD := c.Shortcut(0, ui.KeyD)
+		tabKey := c.Shortcut(0, ui.KeyTab)
 
-	if p.win != nil {
-		switch {
-		case esc:
-			if p.editMode {
-				p.finishPinEdit()
-				return
-			}
-			if p.rulerMode {
-				p.rulerMode = false
-				p.win.Invalidate()
-				return
-			}
-			go mygo.RunOnMain(func() {
-				if p.win != nil && !p.win.IsDestroyed() {
-					p.win.Close()
-				}
-			})
+		if cmdQ {
+			go mygo.RunOnMain(func() { mygo.App.Quit() })
 			return
-		case enter && p.editMode:
-			p.finishPinEdit()
-			return
-		case cmdZ && p.editMode:
-			if p.annot.Undo() {
-				p.win.Invalidate()
-			}
-			return
-		case cmdShiftZ && p.editMode:
-			if p.annot.Redo() {
-				p.win.Invalidate()
-			}
-			return
-		case delKey && p.editMode:
-			if p.annot.DeleteSelected() {
-				p.win.Invalidate()
-			}
-			return
-		case keyE:
-			if !p.collapsed {
-				p.togglePinEdit()
-			}
-			return
-		case cmdW:
-			go mygo.RunOnMain(func() {
-				if p.win != nil && !p.win.IsDestroyed() {
-					p.win.Close()
-				}
-			})
-			return
-		case cmdC:
-			if len(p.png) > 0 {
-				pngCopy := p.png
-				go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
-			}
-		case cmdS:
-			if len(p.png) > 0 {
-				a.SavePNG(p.png)
-			}
-		case keyO:
-			a.recognizePin(p)
-		case keyB:
-			a.beautifyPinToClipboard(p)
-		case keyP:
-			go mygo.RunOnMain(func() { a.togglePinPassthrough(p) })
-		case keyM:
-			go mygo.RunOnMain(func() { p.toggleCollapsed() })
-		case keyR:
-			if !p.collapsed {
-				p.rulerMode = !p.rulerMode
-				p.win.Invalidate()
-			}
 		}
-	}
 
-	if p.collapsed {
-		a.paintCollapsedPill(c, p)
-		return
-	}
-
-	w := float32(p.curW)
-	h := float32(p.curH)
-	box := ui.Box(c).Size(w, h)
-	showHoverBar := box.Hovered() && !p.rulerMode && !p.editMode && !p.clickThrough && p.curW >= 156 && p.curH >= 64
-	if p.rulerMode || (p.editMode && p.annot.Tool != annotate.ToolNone) {
-		box.Cursor(ui.CursorCrosshair)
-	}
-	toOrig := func(ev ui.InputEvent) (float64, float64) {
-		z := max(0.05, p.zoom)
-		ox := max(0, min(float64(p.origW), float64(ev.X)/z))
-		oy := max(0, min(float64(p.origH), float64(ev.Y)/z))
-		return ox, oy
-	}
-	box.HandleInput(func(ev ui.InputEvent) bool {
-		switch ev.Kind {
-		case ui.InputPointerMove:
-			p.hoverX, p.hoverY, p.hasHover = float64(ev.X), float64(ev.Y), true
-			if p.editMode && (p.annotDrag || p.annotEditDrg) {
-				ox, oy := toOrig(ev)
-				if p.annotEditDrg {
-					p.annot.MoveEdit(ox, oy)
-				} else {
-					p.annot.MovePointer(ox, oy)
+		if p.win != nil {
+			switch {
+			case esc:
+				if p.compareMode {
+					p.exitCompareMode()
+					return
 				}
-				return true
-			}
-			return p.rulerMode
-		case ui.InputPointerDown:
-			if ev.Button == 1 || (ev.Button == 0 && ev.Mods == ui.Ctrl) {
-				if p.editMode && p.annot.Tool != annotate.ToolNone {
-					p.annot.CancelPointer()
-					p.annot.Tool = annotate.ToolNone
-					return true
+				if p.editMode {
+					p.finishPinEdit()
+					return
 				}
-				go mygo.RunOnMain(func() { a.popupPinMenu(p) })
-				return true
-			}
-			if ev.Button == 0 && p.editMode {
-				ox, oy := toOrig(ev)
-				if _, part := p.annot.HitTest(ox, oy); part != annotate.EditNone && (p.annot.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1) {
-					if p.annot.BeginEdit(ox, oy) {
-						p.annotEditDrg = true
-						return true
-					}
+				if p.rulerMode {
+					p.rulerMode = false
+					p.win.Invalidate()
+					return
 				}
-				if p.annot.Tool == annotate.ToolStep {
-					p.annot.BeginPointer(ox, oy)
-					return true
-				}
-				if p.annot.BeginPointer(ox, oy) {
-					p.annotDrag = true
-					return true
-				}
-				p.annot.ClearSelection()
-				return true
-			}
-			if ev.Button == 0 && p.rulerMode {
-				p.hoverX, p.hoverY, p.hasHover = float64(ev.X), float64(ev.Y), true
-				if sp, ok := p.sampleRuler(); ok {
-					txt := fmt.Sprintf("%d × %d px", sp.WidthPx(), sp.HeightPx())
-					go mygo.RunOnMain(func() { mygo.Clipboard.WriteText(txt) })
-				}
-				return true
-			}
-		case ui.InputPointerUp:
-			if ev.Button == 0 && p.editMode && (p.annotDrag || p.annotEditDrg) {
-				ox, oy := toOrig(ev)
-				if p.annotEditDrg {
-					p.annot.MoveEdit(ox, oy)
-					p.annot.EndEdit()
-					p.annotEditDrg = false
-				} else {
-					p.annot.EndPointer(ox, oy)
-					p.annotDrag = false
-				}
-				return true
-			}
-		case ui.InputScroll:
-			if ev.DY == 0 {
-				return false
-			}
-			if ev.Mods&(ui.Shift|ui.Alt) != 0 {
-				delta := int(math.Copysign(5, -float64(ev.DY)))
 				go mygo.RunOnMain(func() {
-					next := max(15, min(100, p.opacity+delta))
-					if next != p.opacity {
-						p.opacity = next
-						if p.win != nil && !p.win.IsDestroyed() {
-							p.win.SetOpacity(float64(next) / 100)
-						}
+					if p.win != nil && !p.win.IsDestroyed() {
+						p.win.Close()
 					}
 				})
-				return true
-			}
-			factor := 1.0 - float64(ev.DY)*0.004
-			if !ev.Precise {
-				if ev.DY < 0 {
-					factor = 1.08
-				} else {
-					factor = 1.0 / 1.08
+				return
+			case tabKey && p.compareMode:
+				p.compareDiff = !p.compareDiff
+				p.win.Invalidate()
+				return
+			case enter && p.editMode:
+				p.finishPinEdit()
+				return
+			case cmdZ && p.editMode:
+				if p.annot.Undo() {
+					p.win.Invalidate()
+				}
+				return
+			case cmdShiftZ && p.editMode:
+				if p.annot.Redo() {
+					p.win.Invalidate()
+				}
+				return
+			case delKey && p.editMode:
+				if p.annot.DeleteSelected() {
+					p.win.Invalidate()
+				}
+				return
+			case keyE:
+				if !p.collapsed {
+					if p.compareMode {
+						p.exitCompareMode()
+					}
+					p.togglePinEdit()
+				}
+				return
+			case keyK:
+				if !p.collapsed && !p.cutting {
+					a.cutoutPinInPlace(p)
+				}
+				return
+			case keyD:
+				if !p.collapsed {
+					a.togglePinCompare(p)
+				}
+				return
+			case cmdW:
+				go mygo.RunOnMain(func() {
+					if p.win != nil && !p.win.IsDestroyed() {
+						p.win.Close()
+					}
+				})
+				return
+			case cmdC:
+				if p.compareMode {
+					a.copyCompareComposite(p)
+					return
+				}
+				if len(p.png) > 0 {
+					pngCopy := p.png
+					go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
+				}
+			case cmdS:
+				if len(p.png) > 0 {
+					a.SavePNG(p.png)
+				}
+			case keyO:
+				a.recognizePin(p)
+			case keyB:
+				a.openPinTemplate(p)
+			case keyP:
+				go mygo.RunOnMain(func() { a.togglePinPassthrough(p) })
+			case keyM:
+				go mygo.RunOnMain(func() { p.toggleCollapsed() })
+			case keyR:
+				if !p.collapsed {
+					p.rulerMode = !p.rulerMode
+					p.win.Invalidate()
 				}
 			}
-			ax, ay := float64(ev.X), float64(ev.Y)
-			go mygo.RunOnMain(func() { p.applyZoom(p.zoom*factor, ax, ay) })
-			return true
 		}
-		return false
-	}).Children(func() {
-		activeBmp := p.bmp
-		if p.editMode && p.baseBmp != nil {
-			activeBmp = p.baseBmp
+
+		if p.collapsed {
+			a.paintCollapsedPill(c, p)
+			return
 		}
-		if activeBmp != nil {
-			imgEl := ui.Image(c, activeBmp).Size(w, h)
-			if !p.rulerMode && !p.editMode {
-				imgEl.DragWindow()
-				if imgEl.WindowDoubleClicked() {
+
+		w := float32(p.curW)
+		h := float32(p.curH)
+		box := ui.Box(c).Size(w, h)
+		hovered := box.Hovered()
+		showHoverBar := hovered && !p.rulerMode && !p.editMode && !p.compareMode && !p.clickThrough && p.curW >= 156 && p.curH >= 64
+		if p.compareMode && !p.compareDiff {
+			box.Cursor(ui.CursorResizeEW)
+		} else if p.rulerMode || (p.editMode && p.annot.Tool != annotate.ToolNone) {
+			box.Cursor(ui.CursorCrosshair)
+		}
+		toOrig := func(ev ui.InputEvent) (float64, float64) {
+			z := max(0.05, p.zoom)
+			ox := max(0, min(float64(p.origW), float64(ev.X)/z))
+			oy := max(0, min(float64(p.origH), float64(ev.Y)/z))
+			return ox, oy
+		}
+		box.HandleInput(func(ev ui.InputEvent) bool {
+			switch ev.Kind {
+			case ui.InputPointerMove:
+				p.hoverX, p.hoverY, p.hasHover = float64(ev.X), float64(ev.Y), true
+				if p.compareMode && !p.compareDiff && p.compareDrag && p.curW > 0 {
+					p.compareSplit = max(0.02, min(0.98, float64(ev.X)/float64(p.curW)))
+					return true
+				}
+				if p.editMode && (p.annotDrag || p.annotEditDrg) {
+					ox, oy := toOrig(ev)
+					if p.annotEditDrg {
+						p.annot.MoveEdit(ox, oy)
+					} else {
+						p.annot.MovePointer(ox, oy)
+					}
+					return true
+				}
+				return p.rulerMode
+			case ui.InputPointerDown:
+				if ev.Button == 1 || (ev.Button == 0 && ev.Mods == ui.Ctrl) {
+					if p.editMode && p.annot.Tool != annotate.ToolNone {
+						p.annot.CancelPointer()
+						p.annot.Tool = annotate.ToolNone
+						return true
+					}
+					go mygo.RunOnMain(func() { a.popupPinMenu(p) })
+					return true
+				}
+				if ev.Button == 0 && p.compareMode && !p.compareDiff && p.curW > 0 {
+					p.compareDrag = true
+					p.compareSplit = max(0.02, min(0.98, float64(ev.X)/float64(p.curW)))
+					return true
+				}
+				if ev.Button == 0 && p.editMode {
+					ox, oy := toOrig(ev)
+					if _, part := p.annot.HitTest(ox, oy); part != annotate.EditNone && (p.annot.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1) {
+						if p.annot.BeginEdit(ox, oy) {
+							p.annotEditDrg = true
+							return true
+						}
+					}
+					if p.annot.Tool == annotate.ToolStep {
+						p.annot.BeginPointer(ox, oy)
+						return true
+					}
+					if p.annot.BeginPointer(ox, oy) {
+						p.annotDrag = true
+						return true
+					}
+					p.annot.ClearSelection()
+					return true
+				}
+				if ev.Button == 0 && p.rulerMode {
+					p.hoverX, p.hoverY, p.hasHover = float64(ev.X), float64(ev.Y), true
+					if sp, ok := p.sampleRuler(); ok {
+						txt := fmt.Sprintf("%d × %d px", sp.WidthPx(), sp.HeightPx())
+						go mygo.RunOnMain(func() { mygo.Clipboard.WriteText(txt) })
+					}
+					return true
+				}
+			case ui.InputPointerUp:
+				if ev.Button == 0 && p.compareDrag {
+					p.compareDrag = false
+					return true
+				}
+				if ev.Button == 0 && p.editMode && (p.annotDrag || p.annotEditDrg) {
+					ox, oy := toOrig(ev)
+					if p.annotEditDrg {
+						p.annot.MoveEdit(ox, oy)
+						p.annot.EndEdit()
+						p.annotEditDrg = false
+					} else {
+						p.annot.EndPointer(ox, oy)
+						p.annotDrag = false
+					}
+					return true
+				}
+			case ui.InputScroll:
+				if ev.DY == 0 {
+					return false
+				}
+				if ev.Mods&(ui.Shift|ui.Alt) != 0 {
+					delta := int(math.Copysign(5, -float64(ev.DY)))
 					go mygo.RunOnMain(func() {
-						if p.win != nil && !p.win.IsDestroyed() {
-							p.win.Close()
+						next := max(15, min(100, p.opacity+delta))
+						if next != p.opacity {
+							p.opacity = next
+							if p.win != nil && !p.win.IsDestroyed() {
+								p.win.SetOpacity(float64(next) / 100)
+							}
 						}
 					})
+					return true
+				}
+				factor := 1.0 - float64(ev.DY)*0.004
+				if !ev.Precise {
+					if ev.DY < 0 {
+						factor = 1.08
+					} else {
+						factor = 1.0 / 1.08
+					}
+				}
+				ax, ay := float64(ev.X), float64(ev.Y)
+				go mygo.RunOnMain(func() { p.applyZoom(p.zoom*factor, ax, ay) })
+				return true
+			}
+			return false
+		}).Children(func() {
+			if p.compareMode {
+				a.paintPinCompareLayer(c, p, w, h)
+			} else {
+				activeBmp := p.bmp
+				if p.editMode && p.baseBmp != nil {
+					activeBmp = p.baseBmp
+				}
+				if activeBmp != nil {
+					imgEl := ui.Image(c, activeBmp).Size(w, h)
+					if !p.rulerMode && !p.editMode {
+						imgEl.DragWindow()
+						if imgEl.WindowDoubleClicked() {
+							go mygo.RunOnMain(func() {
+								if p.win != nil && !p.win.IsDestroyed() {
+									p.win.Close()
+								}
+							})
+						}
+					}
+				}
+				if p.editMode {
+					p.paintPinEditLayer(c, w, h)
+				}
+				if p.rulerMode {
+					p.paintPinRuler(c, w, h)
+				}
+				if showHoverBar {
+					a.paintPinHoverBar(c, p)
 				}
 			}
-		}
-		if p.editMode {
-			p.paintPinEditLayer(c, w, h)
-		}
-		if p.rulerMode {
-			p.paintPinRuler(c, w, h)
-		}
-		if showHoverBar {
-			a.paintPinHoverBar(c, p)
-		}
-		borderCol := ui.RGBA(128, 128, 128, 0.28)
-		if p.editMode {
-			borderCol = ui.RGBA(10, 132, 255, 0.85)
-		} else if p.clickThrough {
-			borderCol = ui.RGBA(0, 168, 255, 0.45)
-		}
-		ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).
-			Border(1, borderCol).
-			IgnoreInput(true)
+			showBorder := !p.cutout || hovered || p.editMode || p.compareMode
+			if showBorder {
+				pal := uiPalette(c)
+				borderCol := ui.RGBA(128, 128, 128, 0.28)
+				if p.compareMode {
+					borderCol = ui.RGBA(255, 69, 132, 0.85)
+				} else if p.editMode {
+					borderCol = pal.Accent.Alpha(0.85)
+				} else if p.clickThrough {
+					borderCol = pal.Accent.Alpha(0.45)
+				}
+				ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).
+					Border(1, borderCol).
+					IgnoreInput(true)
+			}
+		})
 	})
 }
 
@@ -399,17 +483,18 @@ func (a *app) recognizePin(p *pinWin) {
 }
 
 func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
-	bar := ui.Row(c).Absolute().
-		Right(6).Top(6).
-		Height(28).
-		Padding(2, 4).
-		Gap(2).
-		AlignItems(ui.Center).
-		ZIndex(5).
-		Radius(7).
-		Background(ui.RGBA(22, 23, 28, 0.92)).
-		Border(1, ui.RGBA(255, 255, 255, 0.14)).
-		Shadow(0, 4, 12, 0, ui.RGBA(0, 0, 0, 0.35))
+	pal := uiPalette(c)
+	bar := liquidGlassCapsule(
+		ui.Row(c).Absolute().
+			Right(8).Top(8).
+			Height(32).
+			Padding(0, 6).
+			Gap(2).
+			AlignItems(ui.Center).
+			ZIndex(5),
+		16,
+		false,
+	)
 	_ = bar.Clicked()
 	bar.Children(func() {
 		// 1. 原生文件拖出手柄：按住直接将贴图作为 .png 文件拖进微信/Slack/浏览器/Finder！
@@ -420,7 +505,7 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 				Size(24, 24).
 				AlignItems(ui.Center).
 				Justify(ui.Center).
-				Radius(5).
+				Radius(12).
 				Shrink(0).
 				Cursor(ui.CursorGrab)
 			pngCopy := p.png
@@ -428,15 +513,24 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 				return tempPNGDragData(pngCopy, "SnipGo-Pin")
 			})
 			if dragBtn.Hovered() {
-				dragBtn.Background(ui.RGBA(255, 255, 255, 0.15))
+				liquidSecondaryChrome(c, dragBtn, true, 12)
 			}
 			dragBtn.Children(func() {
-				ui.Icon(c, iconDragFile).FontSize(13.5).TextColor(ui.RGB(118, 210, 255))
+				ui.Icon(c, iconDragFile).FontSize(13.5).TextColor(pal.Accent)
 			})
 		}
-		// 2. 贴图原地二次矢量标注
+		// 2. 贴图原地二次矢量标注 / 一键主体抠图 / 套模板 / 像素对比
 		if pinMiniIconBtn(c, iconEdit, "原地编辑标注 (E)") {
 			p.togglePinEdit()
+		}
+		if pinMiniIconBtn(c, iconTemplate, "套模板（便签 / 拍立得 / 浏览器…）(B)") {
+			a.openPinTemplate(p)
+		}
+		if pinMiniIconBtn(c, iconCutout, "离线 AI 主体抠图去背景 (K)") && !p.cutting {
+			a.cutoutPinInPlace(p)
+		}
+		if len(a.pins) >= 2 && pinMiniIconBtn(c, iconCompare, "拉帘对比 / 像素 Diff (D)") {
+			a.togglePinCompare(p)
 		}
 		if pinMiniIconBtn(c, iconOCR, "识图提取文字 (O)") {
 			a.recognizePin(p)
@@ -539,16 +633,17 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32) {
 	}
 
 	// 底部内嵌紧凑标注工具栏
-	bar := ui.Row(c).Absolute().
-		Right(6).Bottom(6).
-		Height(32).
-		Padding(3, 5).
-		Gap(2).
-		AlignItems(ui.Center).
-		ZIndex(8).
-		Radius(8).
-		Background(ui.RGBA(20, 21, 26, 0.95)).
-		Border(1, ui.RGBA(255, 255, 255, 0.16))
+	bar := liquidGlassCapsule(
+		ui.Row(c).Absolute().
+			Right(8).Bottom(8).
+			Height(36).
+			Padding(0, 6).
+			Gap(2).
+			AlignItems(ui.Center).
+			ZIndex(8),
+		18,
+		false,
+	)
 	_ = bar.Clicked()
 	bar.Children(func() {
 		for i, t := range [...]struct {
@@ -563,6 +658,7 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32) {
 			{iconStep, "序号", annotate.ToolStep},
 			{iconMosaic, "马赛克", annotate.ToolMosaic},
 			{iconErase, "无痕擦除", annotate.ToolErase},
+			{iconLoupe, "放大镜特写", annotate.ToolLoupe},
 		} {
 			active := p.annot.Tool == t.tool
 			if iconToolBtn(c.Key(900+i), t.ic, t.tip, t.tip, active, false) {
@@ -590,37 +686,40 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32) {
 }
 
 func pinMiniIconBtn(c *ui.Context, ic *ui.SVG, tip string) bool {
+	p := uiPalette(c)
 	btn := ui.Row(c).
 		Tooltip(tip).
 		Size(24, 24).
 		AlignItems(ui.Center).
 		Justify(ui.Center).
-		Radius(5).
+		Radius(12).
 		Shrink(0).
 		Cursor(ui.CursorPointer)
 	if btn.Pressed() {
 		btn.Scale(0.92, 0.92)
 	}
 	if btn.Hovered() {
-		btn.Background(ui.RGBA(255, 255, 255, 0.15))
+		liquidSecondaryChrome(c, btn, true, 12)
 	}
 	btn.Children(func() {
-		ui.Icon(c, ic).FontSize(13.5).TextColor(ui.RGBA(242, 244, 248, 0.92))
+		ui.Icon(c, ic).FontSize(13.5).TextColor(p.Text)
 	})
 	return btn.Clicked()
 }
 
 func (a *app) paintCollapsedPill(c *ui.Context, p *pinWin) {
-	pill := ui.Row(c).
-		Size(collapsedPillW, collapsedPillH).
-		Padding(0, 10).
-		Gap(6).
-		AlignItems(ui.Center).
-		Justify(ui.SpaceBetween).
-		Radius(8).
-		Background(ui.RGBA(26, 27, 32, 0.94)).
-		Border(1, ui.RGBA(0, 168, 255, 0.65)).
-		DragWindow()
+	pal := uiPalette(c)
+	pill := liquidGlassCapsule(
+		ui.Row(c).
+			Size(collapsedPillW, collapsedPillH).
+			Padding(0, 12).
+			Gap(6).
+			AlignItems(ui.Center).
+			Justify(ui.SpaceBetween).
+			DragWindow(),
+		16,
+		true,
+	).Border(1, pal.PanelRim)
 	if pill.WindowDoubleClicked() {
 		go mygo.RunOnMain(func() { p.toggleCollapsed() })
 	}
@@ -628,16 +727,17 @@ func (a *app) paintCollapsedPill(c *ui.Context, p *pinWin) {
 		ui.Text(c, fmt.Sprintf("贴图 %d×%d", p.origW, p.origH)).
 			FontSize(11.5).
 			FontFeatures("tnum").
-			TextColor(ui.RGB(240, 242, 246))
+			TextColor(pal.Text)
 		expandBtn := ui.Row(c).
 			Height(20).
-			Padding(0, 6).
+			Padding(0, 7).
 			AlignItems(ui.Center).
-			Radius(4).
-			Background(ui.RGBA(0, 168, 255, 0.28)).
+			Radius(10).
+			Background(pal.ActiveBg).
+			Border(1, pal.ActiveBorder).
 			Cursor(ui.CursorPointer)
 		expandBtn.Children(func() {
-			ui.Text(c, "展开").FontSize(11).TextColor(ui.RGB(130, 218, 255))
+			ui.Text(c, "展开").FontSize(11).FontWeight(500).TextColor(pal.ActiveText)
 		})
 		if expandBtn.Clicked() {
 			go mygo.RunOnMain(func() { p.toggleCollapsed() })
@@ -684,13 +784,16 @@ func (p *pinWin) paintPinRuler(c *ui.Context, w, h float32) {
 	txt := fmt.Sprintf("↔ %d px  ↕ %d px", sp.WidthPx(), sp.HeightPx())
 	bx := max(float32(4), min(cx+12, w-148))
 	by := max(float32(4), min(cy+12, h-28))
-	ui.Box(c).Absolute().Left(bx).Top(by).
-		Padding(3, 7).Radius(4).
-		Background(ui.RGBA(20, 20, 24, 0.9)).
-		IgnoreInput(true).
-		Children(func() {
-			ui.Text(c, txt).FontSize(11).FontFeatures("tnum").TextColor(ui.RGB(255, 255, 255))
-		})
+	pal := uiPalette(c)
+	liquidGlassCapsule(
+		ui.Box(c).Absolute().Left(bx).Top(by).
+			Padding(4, 9).
+			IgnoreInput(true),
+		12,
+		false,
+	).Children(func() {
+		ui.Text(c, txt).FontSize(11).FontFeatures("tnum").TextColor(pal.Text)
+	})
 }
 
 func (p *pinWin) toggleCollapsed() {
@@ -756,22 +859,21 @@ func (a *app) restorePassthroughPins() {
 	a.refreshMenu()
 }
 
-func (a *app) beautifyPinToClipboard(p *pinWin) {
+func (a *app) openPinTemplate(p *pinWin) {
 	if p == nil || p.img == nil {
 		return
 	}
-	src := p.img
-	go func() {
-		card := beautify.RenderCard(src, 2.0, beautify.PresetOcean)
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, card); err != nil {
-			return
-		}
-		data := buf.Bytes()
-		mygo.RunOnMain(func() {
-			_ = mygo.Clipboard.WriteImage(data)
-		})
-	}()
+	var anchor image.Rectangle
+	if p.win != nil && !p.win.IsDestroyed() {
+		b := p.win.Bounds()
+		anchor = image.Rect(b.X, b.Y, b.X+b.Width, b.Y+b.Height)
+	} else {
+		anchor = image.Rect(0, 0, p.origW, p.origH)
+	}
+	imgCopy := p.img
+	go mygo.RunOnMain(func() {
+		a.openTemplateWindow(imgCopy, anchor)
+	})
 }
 
 func (a *app) pushClosedPin(rec closedPinRecord) {
@@ -791,7 +893,7 @@ func (a *app) RestoreLastPin() {
 	}
 	last := a.closedPins[len(a.closedPins)-1]
 	a.closedPins = a.closedPins[:len(a.closedPins)-1]
-	a.showPinWithState(last.img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity)
+	a.showPinWithState(last.img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout)
 }
 
 func (p *pinWin) applyZoom(targetZoom, anchorX, anchorY float64) {
@@ -851,11 +953,11 @@ func (a *app) popupPinMenu(p *pinWin) {
 			},
 		},
 		{
-			Label:       "生成美化卡片并复制",
+			Label:       "套模板（便签 / 拍立得 / 浏览器…）",
 			Accelerator: "B",
 			Disabled:    p.img == nil,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				a.beautifyPinToClipboard(p)
+				a.openPinTemplate(p)
 			},
 		},
 		{
@@ -883,6 +985,24 @@ func (a *app) popupPinMenu(p *pinWin) {
 			Disabled:    p.collapsed,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				p.togglePinEdit()
+			},
+		},
+		{
+			Label:       "离线 AI 主体抠图（去背景）",
+			Accelerator: "K",
+			Disabled:    p.collapsed || p.img == nil || p.cutting,
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.cutoutPinInPlace(p)
+			},
+		},
+		{
+			Label:       "与相邻贴图拉帘对比 / 像素 Diff",
+			Accelerator: "D",
+			Type:        mygo.MenuItemCheckbox,
+			Checked:     p.compareMode,
+			Disabled:    p.collapsed || (!p.compareMode && len(a.pins) < 2),
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.togglePinCompare(p)
 			},
 		},
 		{
@@ -940,12 +1060,385 @@ func (a *app) popupPinMenu(p *pinWin) {
 		},
 	}
 	if len(a.pins) > 1 {
-		items = append(items, &mygo.MenuItem{
-			Label: "关闭全部贴图",
-			Click: func(*mygo.MenuItem, *mygo.Window) { a.closeAllPins() },
-		})
+		items = append(items,
+			mygo.Separator(),
+			&mygo.MenuItem{
+				Label: "横向拼接所有贴图为一张图",
+				Click: func(*mygo.MenuItem, *mygo.Window) { a.mergeAllPins(true) },
+			},
+			&mygo.MenuItem{
+				Label: "纵向拼接所有贴图为一张图",
+				Click: func(*mygo.MenuItem, *mygo.Window) { a.mergeAllPins(false) },
+			},
+			&mygo.MenuItem{
+				Label: "关闭全部贴图",
+				Click: func(*mygo.MenuItem, *mygo.Window) { a.closeAllPins() },
+			},
+		)
 	}
 	mygo.NewMenu(items).Popup(p.win)
+}
+
+// cutoutSelection 对选区截图执行离线 Vision 前景实例分割，复制透明 PNG 并贴为无边框异形贴纸。
+func (a *app) cutoutSelection(img *image.NRGBA, r image.Rectangle) {
+	if img == nil || img.Bounds().Empty() {
+		return
+	}
+	scale := 2.0
+	if r.Dx() > 0 {
+		scale = max(1.0, float64(img.Bounds().Dx())/float64(r.Dx()))
+	}
+	a.sessionStatus("正在离线 AI 抠取主体…")
+	go func() {
+		cut, err := vision.Cutout(img)
+		if err != nil {
+			mygo.RunOnMain(func() {
+				a.sessionStatus("抠图失败: " + err.Error())
+				go a.showErrorAlert("主体抠图未检测到清晰主体", err.Error())
+			})
+			return
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, cut); err != nil {
+			return
+		}
+		data := buf.Bytes()
+		dipW := max(24, int(math.Round(float64(cut.Bounds().Dx())/scale)))
+		dipH := max(24, int(math.Round(float64(cut.Bounds().Dy())/scale)))
+		at := image.Pt(r.Min.X+(r.Dx()-dipW)/2, r.Min.Y+(r.Dy()-dipH)/2)
+		mygo.RunOnMain(func() {
+			_ = mygo.Clipboard.WriteImage(data)
+			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
+			a.sessionStatus("主体抠图已复制并贴为透明贴纸")
+			a.showPinWithState(cut, data, at, dipW, dipH, 1.0, 100, true)
+		})
+	}()
+}
+
+// cutoutPinInPlace 原地将悬浮贴图主体从背景中抠出，变为无边框透明异形贴纸并同步写入剪贴板。
+func (a *app) cutoutPinInPlace(p *pinWin) {
+	if p == nil || p.img == nil || p.cutting {
+		return
+	}
+	p.cutting = true
+	src := p.img
+	scale := max(1.0, float64(src.Bounds().Dx())/float64(max(1, p.origW)))
+	a.sessionStatus("正在抠取贴图主体…")
+	go func() {
+		cut, err := vision.Cutout(src)
+		if err != nil {
+			mygo.RunOnMain(func() {
+				p.cutting = false
+				a.sessionStatus("抠图失败: " + err.Error())
+				go a.showErrorAlert("主体抠图失败", err.Error())
+			})
+			return
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, cut); err != nil {
+			mygo.RunOnMain(func() { p.cutting = false })
+			return
+		}
+		data := buf.Bytes()
+		mygo.RunOnMain(func() {
+			p.cutting = false
+			if p.win == nil || p.win.IsDestroyed() {
+				return
+			}
+			newOrigW := max(24, int(math.Round(float64(cut.Bounds().Dx())/scale)))
+			newOrigH := max(24, int(math.Round(float64(cut.Bounds().Dy())/scale)))
+			newCurW := max(24, int(math.Round(float64(newOrigW)*p.zoom)))
+			newCurH := max(24, int(math.Round(float64(newOrigH)*p.zoom)))
+			b := p.win.Bounds()
+			cx := b.X + b.Width/2
+			cy := b.Y + b.Height/2
+			bmp := ui.NewBitmap(cut)
+			p.baseImg = cut
+			p.baseBmp = bmp
+			p.img = cut
+			p.bmp = bmp
+			p.png = data
+			p.annot.Reset()
+			p.cutout = true
+			p.origW = newOrigW
+			p.origH = newOrigH
+			p.curW = newCurW
+			p.curH = newCurH
+			p.win.SetBounds(mygo.Rectangle{X: cx - newCurW/2, Y: cy - newCurH/2, Width: newCurW, Height: newCurH})
+			p.win.Invalidate()
+			_ = mygo.Clipboard.WriteImage(data)
+			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
+			a.sessionStatus("贴图已抠出透明主体并复制")
+		})
+	}()
+}
+
+// togglePinCompare 开关 Before/After 拉帘对比与像素 Diff 热力图模式（自动配对最近/重叠的另一张贴图）。
+func (a *app) togglePinCompare(p *pinWin) {
+	if p == nil || p.collapsed {
+		return
+	}
+	if p.compareMode {
+		p.exitCompareMode()
+		return
+	}
+	peer := a.findComparePeer(p)
+	if peer == nil || peer.img == nil || p.img == nil {
+		a.sessionStatus("需要至少 2 张贴图才能开启拉帘/像素对比")
+		return
+	}
+	if p.editMode {
+		p.finishPinEdit()
+	}
+	p.rulerMode = false
+	p.compareMode = true
+	p.compareDiff = false
+	p.comparePeer = peer.img
+	p.comparePeerBmp = ui.NewBitmap(peer.img)
+	p.compareDiffRes = pinops.RenderPixelDiff(peer.img, p.img, 12)
+	if p.compareDiffRes.Image != nil {
+		p.compareDiffBmp = ui.NewBitmap(p.compareDiffRes.Image)
+	}
+	if p.compareSplit <= 0.02 || p.compareSplit >= 0.98 {
+		p.compareSplit = 0.5
+	}
+	if p.win != nil && !p.win.IsDestroyed() {
+		p.win.Focus()
+		p.win.Invalidate()
+	}
+}
+
+func (p *pinWin) exitCompareMode() {
+	p.compareMode = false
+	p.compareDiff = false
+	p.compareDrag = false
+	p.comparePeer = nil
+	p.comparePeerBmp = nil
+	p.compareDiffBmp = nil
+	if p.win != nil && !p.win.IsDestroyed() {
+		p.win.Invalidate()
+	}
+}
+
+func (a *app) findComparePeer(self *pinWin) *pinWin {
+	if self == nil {
+		return nil
+	}
+	var selfR image.Rectangle
+	if self.win != nil && !self.win.IsDestroyed() {
+		b := self.win.Bounds()
+		selfR = image.Rect(b.X, b.Y, b.X+b.Width, b.Y+b.Height)
+	}
+	var best *pinWin
+	bestScore := math.MaxFloat64
+	for _, q := range a.pins {
+		if q == self || q.collapsed || q.img == nil {
+			continue
+		}
+		score := 0.0
+		if q.win != nil && !q.win.IsDestroyed() && !selfR.Empty() {
+			qb := q.win.Bounds()
+			qr := image.Rect(qb.X, qb.Y, qb.X+qb.Width, qb.Y+qb.Height)
+			inter := selfR.Intersect(qr)
+			if !inter.Empty() {
+				// 有重叠的贴图最优先配对（重叠面积越大越优先）。
+				score = -float64(inter.Dx() * inter.Dy())
+			} else {
+				dx := float64((selfR.Min.X+selfR.Max.X)/2 - (qr.Min.X+qr.Max.X)/2)
+				dy := float64((selfR.Min.Y+selfR.Max.Y)/2 - (qr.Min.Y+qr.Max.Y)/2)
+				score = math.Hypot(dx, dy)
+			}
+		}
+		if score < bestScore {
+			bestScore = score
+			best = q
+		}
+	}
+	return best
+}
+
+func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
+	if p.compareDiff && p.compareDiffBmp != nil {
+		ui.Image(c, p.compareDiffBmp).Size(w, h)
+	} else {
+		// 右侧底层展示当前贴图 B，左侧按 splitX 裁剪覆盖展示对比贴图 A。
+		if p.bmp != nil {
+			ui.Image(c, p.bmp).Size(w, h)
+		}
+		splitX := max(float32(2), min(w-2, float32(p.compareSplit)*w))
+		if p.comparePeerBmp != nil {
+			ui.Box(c).Absolute().Left(0).Top(0).Size(splitX, h).Clip().IgnoreInput(true).Children(func() {
+				ui.Image(c, p.comparePeerBmp).Size(w, h)
+			})
+		}
+		// 垂直拉帘分割线与中央抓手圆钮
+		ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).ZIndex(4).IgnoreInput(true).
+			Draw(func(pt *ui.Painter, r ui.Rect) {
+				sx := r.X + splitX
+				pt.Line(sx, r.Y, sx, r.Y+r.H, 2, ui.RGBA(255, 255, 255, 0.95))
+				cy := r.Y + r.H*0.5
+				const kr = float32(13)
+				pt.Shadow(ui.Rect{X: sx - kr, Y: cy - kr, W: kr * 2, H: kr * 2}, kr, 0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.45))
+				pt.Fill(ui.Rect{X: sx - kr, Y: cy - kr, W: kr * 2, H: kr * 2}, ui.RGBA(22, 24, 30, 0.92), kr)
+				pt.Stroke(ui.Rect{X: sx - kr, Y: cy - kr, W: kr * 2, H: kr * 2}, ui.RGB(255, 255, 255), kr, 1.5)
+				sp := ui.Span{Text: "↔", Size: 12, Weight: 700, Color: ui.RGB(255, 255, 255)}
+				tw, th := pt.MeasureText(0, sp)
+				pt.RichText(sx-tw*0.5, cy-th*0.5, 0, sp)
+			})
+		// 左上 / 右上极简角标
+		pal := uiPalette(c)
+		liquidGlassCapsule(
+			ui.Row(c).Absolute().Left(8).Top(8).Height(20).Padding(0, 8).AlignItems(ui.Center).ZIndex(5).
+				IgnoreInput(true),
+			10,
+			false,
+		).Children(func() {
+			ui.Text(c, "对比 A").FontSize(10.5).FontWeight(500).NoWrap().TextColor(pal.Text)
+		})
+		liquidGlassCapsule(
+			ui.Row(c).Absolute().Right(8).Top(8).Height(20).Padding(0, 8).AlignItems(ui.Center).ZIndex(5).
+				IgnoreInput(true),
+			10,
+			false,
+		).Children(func() {
+			ui.Text(c, "当前 B").FontSize(10.5).FontWeight(500).NoWrap().TextColor(pal.ActiveText)
+		})
+	}
+
+	// 底部对比控制条
+	bar := liquidGlassCapsule(
+		ui.Row(c).Absolute().
+			Right(8).Bottom(8).
+			Height(34).
+			Padding(0, 6).
+			Gap(4).
+			AlignItems(ui.Center).
+			ZIndex(8),
+		17,
+		false,
+	)
+	_ = bar.Clicked()
+	bar.Children(func() {
+		if compactTabBtn(c.Key("cmp-split"), "拉帘", !p.compareDiff) {
+			p.compareDiff = false
+		}
+		diffLabel := fmt.Sprintf("热力图 · %.2f%%", p.compareDiffRes.DiffPercent)
+		if compactTabBtn(c.Key("cmp-diff"), diffLabel, p.compareDiff) {
+			p.compareDiff = true
+		}
+		if miniPillBtn(c, iconCopy, "复制", true) {
+			a.copyCompareComposite(p)
+		}
+		if miniPillBtn(c, iconClose, "退出", false) {
+			p.exitCompareMode()
+		}
+	})
+}
+
+func (a *app) copyCompareComposite(p *pinWin) {
+	if p == nil || !p.compareMode {
+		return
+	}
+	var out *image.NRGBA
+	if p.compareDiff {
+		out = p.compareDiffRes.Image
+	} else {
+		scale := max(1.0, float64(p.img.Bounds().Dx())/float64(max(1, p.origW)))
+		out = pinops.RenderSplitCompare(p.comparePeer, p.img, p.compareSplit, scale)
+	}
+	if out == nil || out.Bounds().Empty() {
+		return
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, out); err != nil {
+		return
+	}
+	data := buf.Bytes()
+	go mygo.RunOnMain(func() {
+		_ = mygo.Clipboard.WriteImage(data)
+		a.recordHistory(data, out.Bounds().Dx(), out.Bounds().Dy())
+		a.sessionStatus("已复制贴图对比结果")
+	})
+}
+
+// snapPinWindow 在拖拽移动贴图时自动与相邻贴图的四边/中线进行 8px 磁吸对齐。
+func (a *app) snapPinWindow(p *pinWin) {
+	if a.snappingPin || p == nil || p.win == nil || p.win.IsDestroyed() || len(a.pins) < 2 {
+		return
+	}
+	b := p.win.Bounds()
+	moving := image.Rect(b.X, b.Y, b.X+b.Width, b.Y+b.Height)
+	others := make([]image.Rectangle, 0, len(a.pins)-1)
+	for _, q := range a.pins {
+		if q == p || q.win == nil || q.win.IsDestroyed() {
+			continue
+		}
+		qb := q.win.Bounds()
+		others = append(others, image.Rect(qb.X, qb.Y, qb.X+qb.Width, qb.Y+qb.Height))
+	}
+	snapped, sx, sy := pinops.SnapBounds(moving, others, 8)
+	if !sx && !sy {
+		return
+	}
+	a.snappingPin = true
+	p.win.SetBounds(mygo.Rectangle{X: snapped.Min.X, Y: snapped.Min.Y, Width: b.Width, Height: b.Height})
+	a.snappingPin = false
+}
+
+// mergeAllPins 将当前桌面所有未折叠贴图按空间位置横向或纵向一键拼接为一张图，复制并新建贴图展示。
+func (a *app) mergeAllPins(horizontal bool) {
+	type entry struct {
+		pin *pinWin
+		x   int
+		y   int
+	}
+	var list []entry
+	for _, p := range a.pins {
+		if p.collapsed || p.img == nil {
+			continue
+		}
+		var x, y int
+		if p.win != nil && !p.win.IsDestroyed() {
+			b := p.win.Bounds()
+			x, y = b.X, b.Y
+		}
+		list = append(list, entry{pin: p, x: x, y: y})
+	}
+	if len(list) < 2 {
+		return
+	}
+	slices.SortFunc(list, func(i, j entry) int {
+		if horizontal {
+			if c := cmp.Compare(i.x, j.x); c != 0 {
+				return c
+			}
+			return cmp.Compare(i.y, j.y)
+		}
+		if c := cmp.Compare(i.y, j.y); c != 0 {
+			return c
+		}
+		return cmp.Compare(i.x, j.x)
+	})
+	imgs := make([]*image.NRGBA, len(list))
+	for i, e := range list {
+		imgs[i] = e.pin.img
+	}
+	merged := pinops.MergeImages(imgs, horizontal, 16, color.NRGBA{R: 22, G: 24, B: 30, A: 255})
+	if merged == nil || merged.Bounds().Empty() {
+		return
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, merged); err != nil {
+		return
+	}
+	data := buf.Bytes()
+	_ = mygo.Clipboard.WriteImage(data)
+	a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy())
+	dipW := max(120, min(1100, merged.Bounds().Dx()/2))
+	dipH := max(80, min(800, merged.Bounds().Dy()/2))
+	cur := mygo.Screen.CursorScreenPoint()
+	a.ShowPin(merged, data, image.Pt(max(20, cur.X-dipW/2), max(40, cur.Y-dipH/2)), dipW, dipH)
+	a.sessionStatus(fmt.Sprintf("已拼接 %d 张贴图并复制到剪贴板", len(imgs)))
 }
 
 // PasteClipboardPin 把剪贴板里的图像、图片文件、代码/文字或 #RRGGBB 色号直接转为悬浮贴图。

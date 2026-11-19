@@ -6,23 +6,29 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/config"
+	"snipgo/internal/updater"
 )
 
 const (
-	settingsWinW = 480
-	settingsWinH = 460
+	settingsWinW = 500
+	settingsWinH = 540
 )
 
 type settingsWindow struct {
-	win   *mygo.Window
-	draft config.Settings
-	saved string
+	win           *mygo.Window
+	draft         config.Settings
+	saved         string
+	enter         panelEnterState
+	recordingID   string
+	recordingMods ui.Modifiers
+	recordingErr  string
 }
 
 type countdownSession struct {
@@ -31,13 +37,32 @@ type countdownSession struct {
 	remaining int
 }
 
+type shortcutItemDef struct {
+	id    string
+	label string
+	ptr   func(*config.Settings) *string
+}
+
+var shortcutDefs = []shortcutItemDef{
+	{id: "snip", label: "区域截图", ptr: func(s *config.Settings) *string { return &s.SnipShortcut }},
+	{id: "ocr", label: "截图识图 (OCR)", ptr: func(s *config.Settings) *string { return &s.OCRShortcut }},
+	{id: "freeze", label: "定格与像素标尺", ptr: func(s *config.Settings) *string { return &s.FreezeShortcut }},
+	{id: "delay", label: "延时定格截图", ptr: func(s *config.Settings) *string { return &s.DelayShortcut }},
+	{id: "pin", label: "从剪贴板贴图", ptr: func(s *config.Settings) *string { return &s.PinShortcut }},
+	{id: "history", label: "最近截图历史", ptr: func(s *config.Settings) *string { return &s.HistoryShortcut }},
+}
+
 func (a *app) openSettingsWindow() {
 	if a.setWin != nil && a.setWin.win != nil && !a.setWin.win.IsDestroyed() {
+		if mygo.App.IsReady() {
+			mygo.App.Focus()
+		}
 		a.setWin.win.Focus()
 		return
 	}
 	sw := &settingsWindow{
 		draft: a.cfg,
+		enter: panelEnterState{enabled: true},
 	}
 	a.setWin = sw
 	pos := a.placeCenteredPanel(settingsWinW, settingsWinH)
@@ -49,8 +74,9 @@ func (a *app) openSettingsWindow() {
 		Y:               pos.Y,
 		Frameless:       true,
 		Transparent:     true,
-		CornerRadius:    12,
-		Panel:           true,
+		Vibrancy:        vibrancyForGlassLevel(a.cfg.GlassLevel),
+		CornerRadius:    panelCornerRadius,
+		Panel:           false,
 		AlwaysOnTop:     true,
 		DisableResize:   true,
 		DisableMinimize: true,
@@ -60,10 +86,21 @@ func (a *app) openSettingsWindow() {
 		}),
 	})
 	sw.win.OnClosed(func() {
+		wasRecording := sw.recordingID != ""
+		sw.recordingID = ""
+		sw.recordingMods = 0
 		if a.setWin == sw {
 			a.setWin = nil
+			a.applyThemeLive(a.cfg)
+		}
+		if wasRecording {
+			a.registerAllShortcuts()
 		}
 	})
+	applyWindowTheme(sw.win, themeStateFromConfig(a.cfg))
+	if mygo.App.IsReady() {
+		mygo.App.Focus()
+	}
 	sw.win.Focus()
 }
 
@@ -71,174 +108,789 @@ func (a *app) closeSettingsWindow() {
 	if a.setWin != nil {
 		old := a.setWin
 		a.setWin = nil
+		wasRecording := old.recordingID != ""
+		old.recordingID = ""
+		old.recordingMods = 0
 		if old.win != nil && !old.win.IsDestroyed() {
 			old.win.Close()
 		}
+		if wasRecording {
+			a.registerAllShortcuts()
+		}
+		a.applyThemeLive(a.cfg)
+	}
+}
+
+func (a *app) startShortcutRecording(sw *settingsWindow, id string) {
+	sw.recordingID = id
+	sw.recordingMods = 0
+	sw.recordingErr = ""
+	if mygo.App.IsReady() {
+		mygo.GlobalShortcut.UnregisterAll()
+		mygo.App.Focus()
+	}
+	if sw.win != nil && !sw.win.IsDestroyed() {
+		sw.win.Focus()
+		sw.win.Invalidate()
+	}
+}
+
+func (a *app) stopShortcutRecording(sw *settingsWindow, restoreHotkeys bool) {
+	sw.recordingID = ""
+	sw.recordingMods = 0
+	if restoreHotkeys {
+		a.registerAllShortcuts()
+	}
+	if sw.win != nil && !sw.win.IsDestroyed() {
+		sw.win.Invalidate()
 	}
 }
 
 func (a *app) applyAndSaveSettings(next config.Settings) {
 	next.Normalize(a.picturesDir)
-	if next.OpenAtLogin != a.cfg.OpenAtLogin {
+	if next.OpenAtLogin != a.cfg.OpenAtLogin && mygo.App.IsReady() {
 		_ = mygo.App.SetOpenAtLogin(next.OpenAtLogin)
 	}
+	prevAuto := a.cfg.AutoCheckUpdates
+	prevPre := a.cfg.IncludePrereleases
 	a.cfg = next
+	a.applyThemeLive(a.cfg)
 	if a.userDataDir != "" {
 		_ = config.Save(a.userDataDir, a.cfg)
 	}
 	a.registerAllShortcuts()
 	a.refreshMenu()
+	if a.upd != nil && (prevAuto != a.cfg.AutoCheckUpdates || prevPre != a.cfg.IncludePrereleases) {
+		a.restartUpdateScheduler()
+	}
 }
 
 func (a *app) paintSettingsView(c *ui.Context, sw *settingsWindow) {
 	c.Root().Background(ui.Transparent)
-	if c.Shortcut(0, ui.KeyEscape) || c.Shortcut(ui.Cmd, ui.KeyW) {
-		if sw.win != nil {
-			go mygo.RunOnMain(func() { a.closeSettingsWindow() })
+	withAppTheme(c, func() {
+		if sw.recordingID == "" && handlePanelWindowShortcuts(c, func() { a.closeSettingsWindow() }) {
+			return
 		}
-		return
-	}
 
-	card := ui.Column(c).
-		Fill().
-		Radius(12).
-		Background(ui.RGBA(22, 23, 28, 0.98)).
-		Border(1, ui.RGBA(255, 255, 255, 0.13)).
-		TextColor(ui.RGB(238, 240, 246))
+		p := uiPalette(c)
+		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &sw.enter)
+		defCfg := config.Default(a.picturesDir)
 
-	card.Children(func() {
-		header := ui.Row(c).
-			Height(46).
-			Padding(0, 14).
-			Gap(8).
-			AlignItems(ui.Center).
-			DragWindow()
-		header.Children(func() {
-			ui.Icon(c, iconSettings).FontSize(15).TextColor(ui.RGB(64, 172, 255))
-			ui.Text(c, "SnipGo 偏好设置").FontSize(13.5).FontWeight(600).NoWrap().TextColor(ui.RGB(244, 245, 248))
-			if sw.saved != "" {
-				ui.Row(c).Height(20).Padding(0, 8).AlignItems(ui.Center).Radius(10).
-					Background(ui.RGBA(46, 204, 113, 0.18)).
-					Children(func() {
-						ui.Text(c, sw.saved).FontSize(11).NoWrap().TextColor(ui.RGB(118, 236, 166))
-					})
-			}
-			ui.Spacer(c)
-			if iconToolBtn(c, iconClose, "关闭设置", "关闭 (Esc)", false, false) {
-				if sw.win != nil {
-					go mygo.RunOnMain(func() { a.closeSettingsWindow() })
-				}
-			}
-		})
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-
-		body := ui.Scroll(c).Grow(1).Padding(12, 16)
-		body.Children(func() {
-			col := ui.Column(c).Gap(14)
-			col.Children(func() {
-				// 分组 1：保存与通用工作流
-				sectionTitle(c, "快存与通用工作流")
-				sec1 := settingsCard(c)
-				sec1.Children(func() {
-					ui.Checkbox(c, &sw.draft.QuickSave, "按 ⌘S 免弹窗一键快存到默认文件夹（⇧⌘S 另存为）").TextColor(ui.RGB(236, 238, 245))
-					ui.Checkbox(c, &sw.draft.CopyOnSave, "保存 PNG 文件时自动同时复制图像到剪贴板").TextColor(ui.RGB(236, 238, 245))
-					ui.Checkbox(c, &sw.draft.OpenAtLogin, "登录 macOS 时自动启动 SnipGo").TextColor(ui.RGB(236, 238, 245))
-
-					dirRow := ui.Row(c).AlignItems(ui.Center).Gap(6)
-					dirRow.Children(func() {
-						ui.Icon(c, iconFolder).FontSize(14).TextColor(ui.RGBA(255, 255, 255, 0.6))
-						ui.Text(c, sw.draft.QuickSaveDir).FontSize(11.5).MaxLines(1).Ellipsis("…").Grow(1).
-							TextColor(ui.RGBA(220, 224, 234, 0.88))
-						if miniPillBtn(c, nil, "更改目录…", false) {
-							curDir := sw.draft.QuickSaveDir
-							go func() {
-								dirs, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-									Title:             "选择默认快存目录",
-									DefaultPath:       curDir,
-									Directory:         true,
-									CreateDirectories: true,
-								})
-								if err == nil && len(dirs) > 0 && dirs[0] != "" {
-									mygo.RunOnMain(func() {
-										sw.draft.QuickSaveDir = dirs[0]
-										if sw.win != nil && !sw.win.IsDestroyed() {
-											sw.win.Invalidate()
-										}
-									})
-								}
-							}()
+		card.Children(func() {
+			body := ui.Scroll(c).Fill().Padding(58, 16, 62, 16).ScrollbarInsets(54, 0, 56)
+			body.Children(func() {
+				col := ui.Column(c).Gap(14)
+				col.Children(func() {
+					// 分组 1：外观与主题
+					sectionTitle(c, "外观与主题")
+					secTheme := settingsCard(c)
+					secTheme.Children(func() {
+						appModes := []struct{ id, label string }{
+							{"system", "跟随系统"},
+							{"light", "浅色"},
+							{"dark", "深色"},
 						}
-					})
-
-					delayRow := ui.Row(c).AlignItems(ui.Center).Gap(8)
-					delayRow.Children(func() {
-						ui.Text(c, "延时定格倒计时：").FontSize(12).TextColor(ui.RGBA(230, 234, 242, 0.85))
-						for i, sec := range []int{3, 5, 10} {
-							sec := sec
-							active := sw.draft.DelaySeconds == sec
-							if miniPillBtn(c.Key(700+i), nil, fmt.Sprintf("%d 秒", sec), active) {
-								sw.draft.DelaySeconds = sec
+						appSel := 0
+						for i, m := range appModes {
+							if sw.draft.ThemeAppearance == m.id {
+								appSel = i
+								break
 							}
 						}
+						ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+							ui.Text(c, "外观模式：").Width(74).FontSize(12).NoWrap().TextColor(p.TextSecondary)
+							if picked := liquidSegmented(c, "set-app", appSel, []string{"跟随系统", "浅色", "深色"}); picked >= 0 && appModes[picked].id != sw.draft.ThemeAppearance {
+								sw.draft.ThemeAppearance = appModes[picked].id
+								a.applyAndSaveSettings(sw.draft)
+								sw.saved = "✓ 已实时生效"
+							}
+						})
+
+						glassModes := []struct{ id, label string }{
+							{"clear", "清透"},
+							{"regular", "标准"},
+							{"frosted", "浓磨砂"},
+						}
+						glassSel := 1
+						for i, g := range glassModes {
+							if sw.draft.GlassLevel == g.id {
+								glassSel = i
+								break
+							}
+						}
+						ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+							ui.Text(c, "液态玻璃：").Width(74).FontSize(12).NoWrap().TextColor(p.TextSecondary)
+							if picked := liquidSegmented(c, "set-glass", glassSel, []string{"清透", "标准", "浓磨砂"}); picked >= 0 && glassModes[picked].id != sw.draft.GlassLevel {
+								sw.draft.GlassLevel = glassModes[picked].id
+								a.applyAndSaveSettings(sw.draft)
+								sw.saved = "✓ 已实时生效"
+							}
+						})
+
+						accentRow := ui.Row(c).AlignItems(ui.Center).Gap(7)
+						accentRow.Children(func() {
+							ui.Text(c, "主题色：").Width(74).FontSize(12).NoWrap().TextColor(p.TextSecondary)
+							autoActive := sw.draft.AccentColor == "" || sw.draft.AccentColor == "system"
+							if miniPillBtn(c.Key("acc-system"), nil, "自动", autoActive) && !autoActive {
+								sw.draft.AccentColor = "system"
+								a.applyAndSaveSettings(sw.draft)
+								sw.saved = "✓ 已实时生效"
+							}
+							for i, opt := range accentOptions {
+								if opt.ID == "system" {
+									continue
+								}
+								opt := opt
+								active := sw.draft.AccentColor == opt.ID
+								dotCol := opt.Light
+								if p.Dark {
+									dotCol = opt.Dark
+								}
+								swBtn := ui.Box(c.Key(840+i)).
+									Label(opt.Name).
+									Tooltip(opt.Name).
+									Size(22, 22).
+									Radius(11).
+									Shrink(0).
+									Padding(2.5, 2.5).
+									Cursor(ui.CursorPointer)
+								targetScale := float32(1.0)
+								if swBtn.Pressed() {
+									targetScale = 0.88
+								} else if active || swBtn.Hovered() {
+									targetScale = 1.10
+								}
+								sc := swBtn.AnimateTo("acc-pop", targetScale, springPop)
+								if sc != 1.0 {
+									swBtn.Scale(sc, sc)
+								}
+								ringCol := ui.Transparent
+								if active {
+									ringCol = p.Text
+								} else if swBtn.Hovered() {
+									ringCol = p.TextSecondary
+								}
+								animRing := swBtn.AnimateColor("acc-ring", ringCol, colorMorph)
+								swBtn.Border(1.5, animRing).Children(func() {
+									ui.Box(c).Fill().Radius(8).Background(dotCol).Border(1, ui.RGBA(255, 255, 255, 0.35))
+								})
+								if swBtn.Clicked() && !active {
+									sw.draft.AccentColor = opt.ID
+									a.applyAndSaveSettings(sw.draft)
+									sw.saved = "✓ 已实时生效"
+								}
+							}
+						})
+					})
+
+					// 分组 2：全局快捷键（点击直接按键录入，立即保存生效）
+					sectionTitle(c, "全局快捷键（点击右侧按键直接录制）")
+					sec2 := settingsCard(c)
+					sec2.Children(func() {
+						for _, def := range shortcutDefs {
+							a.shortcutRecorderRow(c, p, sw, def, defCfg)
+						}
+						if sw.recordingErr != "" {
+							ui.Row(c.Key("sc-err-bar")).
+								Padding(6, 10).Radius(10).Gap(6).AlignItems(ui.Center).
+								Background(ui.RGBA(235, 68, 60, 0.14)).
+								Border(1, ui.RGBA(235, 68, 60, 0.42)).
+								Children(func() {
+									ui.Text(c, sw.recordingErr).FontSize(11).TextColor(ui.RGB(235, 68, 60))
+								})
+						}
+					})
+
+					// 分组 3：保存与通用工作流
+					sectionTitle(c, "快存与通用工作流")
+					sec1 := settingsCard(c)
+					sec1.Children(func() {
+						if liquidSwitch(c, "quicksave", &sw.draft.QuickSave, "按 ⌘S 免弹窗一键快存到默认文件夹（⇧⌘S 另存为）") {
+							a.applyAndSaveSettings(sw.draft)
+							sw.saved = "✓ 已保存"
+						}
+						if liquidSwitch(c, "copyonsave", &sw.draft.CopyOnSave, "保存 PNG 文件时自动同时复制图像到剪贴板") {
+							a.applyAndSaveSettings(sw.draft)
+							sw.saved = "✓ 已保存"
+						}
+						if liquidSwitch(c, "openatlogin", &sw.draft.OpenAtLogin, "登录 macOS 时自动启动 SnipGo") {
+							a.applyAndSaveSettings(sw.draft)
+							sw.saved = "✓ 已保存"
+						}
+
+						dirRow := ui.Row(c).AlignItems(ui.Center).Gap(6)
+						dirRow.Children(func() {
+							ui.Icon(c, iconFolder).FontSize(14).TextColor(p.TextSecondary)
+							ui.Text(c, sw.draft.QuickSaveDir).FontSize(11.5).MaxLines(1).Ellipsis("…").Grow(1).
+								TextColor(p.TextSecondary)
+							if miniPillBtn(c, nil, "更改目录…", false) {
+								curDir := sw.draft.QuickSaveDir
+								go func() {
+									dirs, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+										Title:             "选择默认快存目录",
+										DefaultPath:       curDir,
+										Directory:         true,
+										CreateDirectories: true,
+									})
+									if err == nil && len(dirs) > 0 && dirs[0] != "" {
+										mygo.RunOnMain(func() {
+											sw.draft.QuickSaveDir = dirs[0]
+											a.applyAndSaveSettings(sw.draft)
+											sw.saved = "✓ 目录已更新"
+											if sw.win != nil && !sw.win.IsDestroyed() {
+												sw.win.Invalidate()
+											}
+										})
+									}
+								}()
+							}
+						})
+
+						delayVals := []int{3, 5, 10}
+						delaySel := 0
+						for i, sec := range delayVals {
+							if sw.draft.DelaySeconds == sec {
+								delaySel = i
+								break
+							}
+						}
+						ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+							ui.Text(c, "延时定格倒计时：").FontSize(12).TextColor(p.TextSecondary)
+							ui.Spacer(c)
+							if picked := liquidSegmented(c, "set-delay", delaySel, []string{"3 秒", "5 秒", "10 秒"}); picked >= 0 && delayVals[picked] != sw.draft.DelaySeconds {
+								sw.draft.DelaySeconds = delayVals[picked]
+								a.applyAndSaveSettings(sw.draft)
+								sw.saved = "✓ 已保存"
+							}
+						})
+					})
+
+					// 分组 4：软件更新
+					sectionTitle(c, "软件更新")
+					sec3 := settingsCard(c)
+					sec3.Children(func() {
+						verRow := ui.Row(c).AlignItems(ui.Center).Gap(8)
+						verRow.Children(func() {
+							ui.Text(c, "当前版本："+updater.FormatVersion(currentAppVersion())).
+								FontSize(12).FontWeight(500).FontFeatures("tnum").NoWrap().TextColor(p.Text)
+							if a.upd != nil && a.upd.staged != nil {
+								statusBadgePill(c, "可重启更新 "+updater.FormatVersion(a.upd.staged.Version), true)
+							} else if rel := a.availableUpdate(); rel != nil {
+								statusBadgePill(c, "有新版本 "+updater.FormatVersion(rel.Version), false)
+							} else if a.upd != nil && a.upd.state == updUpToDate {
+								statusBadgePill(c, "已是最新", true)
+							} else if sw.draft.AutoCheckUpdates {
+								statusBadgePill(c, "自动检测", false)
+							}
+							ui.Spacer(c)
+							if miniPillBtn(c, iconUpdate, "检查更新", false) {
+								a.checkForUpdates(true)
+							}
+						})
+						if liquidSwitch(c, "autoupd", &sw.draft.AutoCheckUpdates, "启动时自动检查更新（每 24 小时后台静默检测）") {
+							a.applyAndSaveSettings(sw.draft)
+							sw.saved = "✓ 已保存"
+						}
+						if liquidSwitch(c, "preupd", &sw.draft.IncludePrereleases, "接收测试预览版（Beta / Pre-release）") {
+							a.applyAndSaveSettings(sw.draft)
+							sw.saved = "✓ 已保存"
+						}
+						if sw.draft.SkippedVersion != "" {
+							skipRow := ui.Row(c).AlignItems(ui.Center).Gap(8)
+							skipRow.Children(func() {
+								ui.Text(c, "已跳过版本："+updater.FormatVersion(sw.draft.SkippedVersion)).
+									FontSize(11.5).FontFeatures("tnum").TextColor(p.TextSecondary)
+								ui.Spacer(c)
+								if miniPillBtn(c, nil, "清除跳过", false) {
+									sw.draft.SkippedVersion = ""
+									a.applyAndSaveSettings(sw.draft)
+									sw.saved = "✓ 已清除跳过版本"
+								}
+							})
+						}
 					})
 				})
-
-				// 分组 2：全局快捷键
-				sectionTitle(c, "全局快捷键")
-				sec2 := settingsCard(c)
-				sec2.Children(func() {
-					shortcutField(c, "区域截图", &sw.draft.SnipShortcut)
-					shortcutField(c, "截图识图 (OCR)", &sw.draft.OCRShortcut)
-					shortcutField(c, "定格与像素标尺", &sw.draft.FreezeShortcut)
-					shortcutField(c, "从剪贴板贴图", &sw.draft.PinShortcut)
-					shortcutField(c, "最近截图历史", &sw.draft.HistoryShortcut)
-				})
 			})
-		})
 
-		ui.Box(c).Height(1).Background(ui.RGBA(255, 255, 255, 0.08))
-		footer := ui.Row(c).Height(46).Padding(0, 14).Gap(8).AlignItems(ui.Center)
-		footer.Children(func() {
-			if miniPillBtn(c, nil, "恢复默认", false) {
-				sw.draft = config.Default(a.picturesDir)
-				sw.saved = "已恢复默认（点保存生效）"
-			}
-			ui.Spacer(c)
-			if actionPillBtn(c, iconCheck, "保存并生效", "保存设置并立即更新全局快捷键", true, false) {
-				a.applyAndSaveSettings(sw.draft)
-				sw.saved = "✓ 设置已生效"
-			}
+			paintTopScrollEdge(c, 58)
+			paintBottomScrollEdge(c, 60)
+
+			header := ui.Row(c).
+				Absolute().Top(0).Left(0).Right(0).
+				Height(50).
+				Padding(0, 16).
+				Gap(8).
+				AlignItems(ui.Center).
+				ZIndex(2).
+				DragWindow()
+			header.Children(func() {
+				if macTrafficCloseBtn(c, "关闭设置", "关闭 (⌘W / Esc)") {
+					if sw.win != nil {
+						go mygo.RunOnMain(func() { a.closeSettingsWindow() })
+					}
+				}
+				ui.Box(c).Width(2)
+				ui.Icon(c, iconSettings).FontSize(15).TextColor(p.Accent)
+				ui.Text(c, "SnipGo 偏好设置").FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
+				statusBadgePill(c, sw.saved, !strings.Contains(sw.saved, "冲突"))
+				ui.Spacer(c)
+			})
+
+			footer := ui.Row(c).
+				Absolute().Bottom(0).Left(0).Right(0).
+				Height(54).
+				Padding(0, 16).
+				Gap(8).
+				AlignItems(ui.Center).
+				ZIndex(2)
+			footer.Children(func() {
+				if actionPillBtn(c, iconUndo, "恢复默认", "恢复所有默认快捷键、主题和通用设置", false, true) {
+					sw.recordingID = ""
+					sw.recordingMods = 0
+					sw.recordingErr = ""
+					sw.draft = config.Default(a.picturesDir)
+					a.applyAndSaveSettings(sw.draft)
+					sw.saved = "✓ 已恢复默认"
+				}
+				ui.Spacer(c)
+				if actionPillBtn(c, iconCheck, "完成", "保存并关闭设置 (⌘W / Esc)", true, false) {
+					a.applyAndSaveSettings(sw.draft)
+					if sw.win != nil {
+						go mygo.RunOnMain(func() { a.closeSettingsWindow() })
+					}
+				}
+			})
 		})
 	})
 }
 
 func sectionTitle(c *ui.Context, title string) {
-	ui.Text(c, title).FontSize(11.5).FontWeight(600).TextColor(ui.RGBA(160, 172, 192, 0.9))
+	ui.Text(c, title).FontSize(11.5).FontWeight(600).TextColor(uiPalette(c).TextSecondary)
 }
 
 func settingsCard(c *ui.Context) ui.Element {
-	return ui.Column(c).
-		Padding(10, 12).
-		Gap(9).
-		Radius(9).
-		Background(ui.RGBA(32, 34, 42, 0.78)).
-		Border(1, ui.RGBA(255, 255, 255, 0.08))
+	return liquidCard(c, ui.Column(c).Padding(12, 14).Gap(9))
 }
 
-func shortcutField(c *ui.Context, label string, val *string) {
-	row := ui.Row(c).Height(28).AlignItems(ui.Center).Gap(10)
+func (a *app) shortcutRecorderRow(c *ui.Context, p palette, sw *settingsWindow, def shortcutItemDef, defCfg config.Settings) {
+	valPtr := def.ptr(&sw.draft)
+	defVal := *def.ptr(&defCfg)
+	recording := sw.recordingID == def.id
+	regErr := a.shortcutError(def.id)
+
+	row := ui.Row(c.Key("sc-row-" + def.id)).Height(30).AlignItems(ui.Center).Gap(8)
 	row.Children(func() {
-		ui.Text(c, label).Width(130).FontSize(12).NoWrap().TextColor(ui.RGBA(232, 235, 242, 0.9))
-		ui.TextInput(c.Key("sc-"+label), val).
-			Grow(1).
-			Height(26).
+		ui.Text(c, def.label).Width(134).FontSize(12).NoWrap().TextColor(p.Text)
+		if regErr != nil && !recording {
+			ui.Text(c, "占用").FontSize(10.5).FontWeight(600).TextColor(ui.RGB(235, 68, 60))
+		}
+		ui.Spacer(c)
+
+		if recording {
+			recBtn := ui.Row(c.Key("sc-rec-"+def.id)).
+				Label("录制"+def.label+"快捷键").
+				Tooltip("按下新组合键，按 Esc 取消，点击退出录制").
+				Height(28).
+				Padding(0, 10).
+				Gap(5).
+				AlignItems(ui.Center).
+				Radius(11).
+				Background(p.ActiveBg).
+				Border(1.5, p.Accent).
+				InsetShadow(0, 1, 0, 0, p.CardTopRim).
+				Cursor(ui.CursorPointer).
+				Focusable().
+				AutoFocus()
+			recBtn.HandleInput(func(ev ui.InputEvent) bool {
+				switch ev.Kind {
+				case ui.InputText:
+					return true
+				case ui.InputKeyUp:
+					sw.recordingMods = ev.Mods
+					c.Invalidate()
+					return true
+				case ui.InputKeyDown:
+					sw.recordingMods = ev.Mods
+					if ev.Mods == 0 && (ev.Key == ui.KeyEscape || ev.PhysicalKey == ui.KeyEscape) {
+						sw.recordingErr = ""
+						a.stopShortcutRecording(sw, true)
+						c.Invalidate()
+						return true
+					}
+					if shortcutKeyToken(ev.PhysicalKey) == "" && shortcutKeyToken(ev.Key) == "" {
+						c.Invalidate()
+						return true
+					}
+					acc, ok := formatRecordedShortcut(ev.Mods, ev.Key, ev.PhysicalKey)
+					if !ok {
+						sw.recordingErr = "请搭配 ⌘ / ⌃ / ⌥ 修饰键或使用 F1–F12"
+						sw.saved = ""
+						c.Invalidate()
+						return true
+					}
+					if conflict := a.findShortcutConflict(sw.draft, def.id, acc); conflict != "" {
+						sw.recordingErr = "与「" + conflict + "」冲突，请换一组"
+						sw.saved = ""
+						c.Invalidate()
+						return true
+					}
+					*valPtr = acc
+					sw.recordingErr = ""
+					a.stopShortcutRecording(sw, false)
+					a.applyAndSaveSettings(sw.draft)
+					if err := a.shortcutError(def.id); err != nil {
+						sw.recordingErr = fmt.Sprintf("快捷键 %s 可能已被系统或其他应用占用，请换一组", strings.Join(formatMacShortcutSymbols(acc), ""))
+						sw.saved = "快捷键冲突"
+					} else {
+						sw.saved = "✓ 快捷键已生效"
+					}
+					c.Invalidate()
+					return true
+				}
+				return false
+			})
+			recBtn.Children(func() {
+				if sw.recordingMods != 0 {
+					for _, sym := range formatModSymbols(sw.recordingMods) {
+						paintKeycap(c, p, sym, true)
+					}
+					ui.Text(c, "…").FontSize(12).FontWeight(600).TextColor(p.ActiveText)
+				} else {
+					ui.Text(c, "按下组合键… (Esc 取消)").FontSize(11).FontWeight(500).NoWrap().TextColor(p.ActiveText)
+				}
+			})
+			if recBtn.Clicked() {
+				sw.recordingErr = ""
+				a.stopShortcutRecording(sw, true)
+			}
+			return
+		}
+
+		if *valPtr != defVal {
+			resetBtn := ui.Box(c.Key("sc-rst-"+def.id)).
+				Label("重置"+def.label+"快捷键").
+				Tooltip("恢复默认："+strings.Join(formatMacShortcutSymbols(defVal), " ")).
+				Size(24, 24).
+				Radius(12).
+				AlignItems(ui.Center).
+				Justify(ui.Center).
+				Cursor(ui.CursorPointer)
+			if resetBtn.Hovered() {
+				resetBtn.Background(p.SubtleBtnHover).Border(1, p.SubtleBorder)
+			}
+			resetBtn.Children(func() {
+				ui.Icon(c, iconUndo).FontSize(12).TextColor(p.TextSecondary)
+			})
+			if resetBtn.Clicked() {
+				*valPtr = defVal
+				sw.recordingErr = ""
+				a.applyAndSaveSettings(sw.draft)
+				sw.saved = "✓ 已恢复默认快捷键"
+			}
+		}
+
+		idleBtn := ui.Row(c.Key("sc-idle-"+def.id)).
+			Label("录制"+def.label).
+			Tooltip("点击后直接按下新组合键").
+			Height(28).
 			Padding(0, 8).
-			Radius(6).
-			FontSize(12).
-			Background(ui.RGBA(14, 15, 19, 0.85)).
-			Border(1, ui.RGBA(255, 255, 255, 0.12)).
-			TextColor(ui.RGB(240, 242, 246))
+			Gap(4).
+			AlignItems(ui.Center).
+			Radius(11).
+			Cursor(ui.CursorPointer)
+		if regErr != nil {
+			idleBtn.Background(ui.RGBA(235, 68, 60, 0.14)).Border(1, ui.RGBA(235, 68, 60, 0.45))
+		} else {
+			bg := p.InputBg
+			bd := p.InputBorder
+			if idleBtn.Hovered() {
+				bg = p.CardBgHover
+				bd = p.ActiveBorder
+			}
+			idleBtn.Background(bg).Border(1, bd)
+		}
+		idleBtn.Children(func() {
+			for _, sym := range formatMacShortcutSymbols(*valPtr) {
+				paintKeycap(c, p, sym, false)
+			}
+		})
+		if idleBtn.Clicked() {
+			a.startShortcutRecording(sw, def.id)
+		}
 	})
+}
+
+func paintKeycap(c *ui.Context, p palette, label string, active bool) {
+	bg := p.CardBg
+	bd := p.SubtleBorder
+	fg := p.Text
+	if active {
+		bg = p.ActiveBg
+		bd = p.ActiveBorder
+		fg = p.ActiveText
+	}
+	ui.Row(c).
+		MinWidth(20).
+		Height(20).
+		Padding(0, 6).
+		AlignItems(ui.Center).
+		Justify(ui.Center).
+		Radius(6).
+		Background(bg).
+		Border(1, bd).
+		InsetShadow(0, 1, 0, 0, p.CardTopRim).
+		Children(func() {
+			ui.Text(c, label).FontSize(11).FontWeight(600).NoWrap().TextColor(fg)
+		})
+}
+
+func (a *app) findShortcutConflict(cfg config.Settings, selfID, candidate string) string {
+	want := canonicalShortcutKey(candidate)
+	if want == "" {
+		return ""
+	}
+	for _, def := range shortcutDefs {
+		if def.id == selfID {
+			continue
+		}
+		if canonicalShortcutKey(*def.ptr(&cfg)) == want {
+			return def.label
+		}
+	}
+	if canonicalShortcutKey(restoreShortcut) == want {
+		return "恢复刚关闭的贴图"
+	}
+	if canonicalShortcutKey(unghostShortcut) == want {
+		return "恢复穿透贴图交互"
+	}
+	return ""
+}
+
+func formatRecordedShortcut(mods ui.Modifiers, key, physical ui.Key) (string, bool) {
+	tok := shortcutKeyToken(physical)
+	if tok == "" {
+		tok = shortcutKeyToken(key)
+	}
+	if tok == "" {
+		return "", false
+	}
+	isFnKey := isFunctionKeyToken(tok)
+	if !isFnKey && mods&(ui.Cmd|ui.Ctrl|ui.Alt) == 0 {
+		return "", false
+	}
+	var parts []string
+	if mods&ui.Ctrl != 0 {
+		parts = append(parts, "Ctrl")
+	}
+	if mods&ui.Alt != 0 {
+		parts = append(parts, "Alt")
+	}
+	if mods&ui.Shift != 0 {
+		parts = append(parts, "Shift")
+	}
+	if mods&ui.Cmd != 0 {
+		parts = append(parts, "Cmd")
+	}
+	parts = append(parts, tok)
+	return strings.Join(parts, "+"), true
+}
+
+func isFunctionKeyToken(tok string) bool {
+	if len(tok) < 2 || tok[0] != 'F' {
+		return false
+	}
+	var n int
+	_, err := fmt.Sscanf(tok[1:], "%d", &n)
+	return err == nil && n >= 1 && n <= 12 && fmt.Sprintf("F%d", n) == tok
+}
+
+func shortcutKeyToken(k ui.Key) string {
+	if k >= ui.KeyA && k <= ui.KeyZ {
+		return string('A' + byte(k-ui.KeyA))
+	}
+	if k >= ui.Key0 && k <= ui.Key9 {
+		return string('0' + byte(k-ui.Key0))
+	}
+	if k >= ui.KeyF1 && k <= ui.KeyF12 {
+		return fmt.Sprintf("F%d", int(k-ui.KeyF1)+1)
+	}
+	switch k {
+	case ui.KeyEnter:
+		return "Enter"
+	case ui.KeyTab:
+		return "Tab"
+	case ui.KeySpace:
+		return "Space"
+	case ui.KeyBackspace:
+		return "Backspace"
+	case ui.KeyDelete:
+		return "Delete"
+	case ui.KeyInsert:
+		return "Insert"
+	case ui.KeyHome:
+		return "Home"
+	case ui.KeyEnd:
+		return "End"
+	case ui.KeyPageUp:
+		return "PageUp"
+	case ui.KeyPageDown:
+		return "PageDown"
+	case ui.KeyLeft:
+		return "Left"
+	case ui.KeyRight:
+		return "Right"
+	case ui.KeyUp:
+		return "Up"
+	case ui.KeyDown:
+		return "Down"
+	case ui.KeyMinus:
+		return "-"
+	case ui.KeyEqual:
+		return "="
+	case ui.KeyComma:
+		return ","
+	case ui.KeyPeriod:
+		return "."
+	case ui.KeySlash:
+		return "/"
+	case ui.KeySemicolon:
+		return ";"
+	case ui.KeyQuote:
+		return "'"
+	case ui.KeyBracketLeft:
+		return "["
+	case ui.KeyBracketRight:
+		return "]"
+	case ui.KeyBackslash:
+		return "\\"
+	case ui.KeyBackquote:
+		return "`"
+	default:
+		return ""
+	}
+}
+
+func splitAcceleratorParts(acc string) ([]string, string) {
+	s := strings.TrimSpace(acc)
+	if s == "" {
+		return nil, ""
+	}
+	var parts []string
+	if strings.HasSuffix(s, "++") {
+		raw := strings.Split(s[:len(s)-2], "+")
+		parts = append(raw, "+")
+	} else {
+		parts = strings.Split(s, "+")
+	}
+	if len(parts) == 0 {
+		return nil, ""
+	}
+	mods := make([]string, 0, len(parts)-1)
+	for _, p := range parts[:len(parts)-1] {
+		mods = append(mods, strings.TrimSpace(p))
+	}
+	return mods, strings.TrimSpace(parts[len(parts)-1])
+}
+
+func parseModFlags(mods []string) (ctrl, alt, shift, cmd bool) {
+	for _, m := range mods {
+		switch strings.ToLower(m) {
+		case "ctrl", "control":
+			ctrl = true
+		case "alt", "option", "altgr":
+			alt = true
+		case "shift":
+			shift = true
+		case "cmd", "command", "super", "meta", "win", "cmdorctrl", "commandorcontrol":
+			cmd = true
+		}
+	}
+	return
+}
+
+func canonicalShortcutKey(acc string) string {
+	mods, key := splitAcceleratorParts(acc)
+	if key == "" {
+		return ""
+	}
+	ctrl, alt, shift, cmd := parseModFlags(mods)
+	mask := 0
+	if ctrl {
+		mask |= 1
+	}
+	if alt {
+		mask |= 2
+	}
+	if shift {
+		mask |= 4
+	}
+	if cmd {
+		mask |= 8
+	}
+	return fmt.Sprintf("%d:%s", mask, strings.ToUpper(key))
+}
+
+func formatModSymbols(mods ui.Modifiers) []string {
+	var out []string
+	if mods&ui.Ctrl != 0 {
+		out = append(out, "⌃")
+	}
+	if mods&ui.Alt != 0 {
+		out = append(out, "⌥")
+	}
+	if mods&ui.Shift != 0 {
+		out = append(out, "⇧")
+	}
+	if mods&ui.Cmd != 0 {
+		out = append(out, "⌘")
+	}
+	return out
+}
+
+func formatMacShortcutSymbols(acc string) []string {
+	mods, key := splitAcceleratorParts(acc)
+	if key == "" {
+		return nil
+	}
+	ctrl, alt, shift, cmd := parseModFlags(mods)
+	var out []string
+	if ctrl {
+		out = append(out, "⌃")
+	}
+	if alt {
+		out = append(out, "⌥")
+	}
+	if shift {
+		out = append(out, "⇧")
+	}
+	if cmd {
+		out = append(out, "⌘")
+	}
+	switch strings.ToLower(key) {
+	case "enter", "return":
+		out = append(out, "↩")
+	case "tab":
+		out = append(out, "⇥")
+	case "backspace":
+		out = append(out, "⌫")
+	case "delete", "del":
+		out = append(out, "⌦")
+	case "escape", "esc":
+		out = append(out, "⎋")
+	case "space":
+		out = append(out, "Space")
+	case "up":
+		out = append(out, "↑")
+	case "down":
+		out = append(out, "↓")
+	case "left":
+		out = append(out, "←")
+	case "right":
+		out = append(out, "→")
+	default:
+		out = append(out, strings.ToUpper(key))
+	}
+	return out
 }
 
 // SavePNG 根据偏好设置执行免弹窗一键快存（或弹出另存为对话框），并可选自动同时复制到剪贴板。
@@ -332,6 +984,7 @@ func (a *app) startDelayedCapture(seconds int) {
 		Y:               pos.Y,
 		Frameless:       true,
 		Transparent:     true,
+		Vibrancy:        vibrancyForGlassLevel(a.cfg.GlassLevel),
 		CornerRadius:    21,
 		Panel:           true,
 		AlwaysOnTop:     true,
@@ -343,6 +996,7 @@ func (a *app) startDelayedCapture(seconds int) {
 		}),
 	})
 	cd.win.SetContentProtection(true)
+	applyWindowTheme(cd.win, themeStateFromConfig(a.cfg))
 
 	go func() {
 		ticker := time.NewTicker(time.Second)
@@ -419,25 +1073,34 @@ func (a *app) stopCountdown() {
 
 func (a *app) paintCountdownView(c *ui.Context, cd *countdownSession) {
 	c.Root().Background(ui.Transparent)
-	if c.Shortcut(0, ui.KeyEscape) {
-		go mygo.RunOnMain(func() { a.stopCountdown() })
-		return
-	}
-	pill := ui.Row(c).
-		Fill().
-		Padding(0, 14).
-		Gap(8).
-		AlignItems(ui.Center).
-		Radius(21).
-		Background(ui.RGBA(20, 21, 26, 0.95)).
-		Border(1, ui.RGBA(64, 172, 255, 0.5))
-	pill.Children(func() {
-		ui.Icon(c, iconTimer).FontSize(15).TextColor(ui.RGB(64, 172, 255))
-		ui.Text(c, fmt.Sprintf("%d 秒后定格屏幕…", cd.remaining)).
-			FontSize(12.5).FontWeight(600).FontFeatures("tnum").NoWrap().TextColor(ui.RGB(244, 245, 248))
-		ui.Spacer(c)
-		if miniPillBtn(c, nil, "取消", false) {
-			go mygo.RunOnMain(func() { a.stopCountdown() })
+	withAppTheme(c, func() {
+		if handlePanelWindowShortcuts(c, func() { a.stopCountdown() }) {
+			return
 		}
+		p := uiPalette(c)
+		pill := ui.Row(c).
+			Fill().
+			Padding(0, 14).
+			Gap(8).
+			AlignItems(ui.Center).
+			Radius(21).
+			Border(1, p.ActiveBorder)
+		if !c.Vibrancy() {
+			pill = liquidGlassCapsule(pill, 21, false).Border(1, p.ActiveBorder)
+		}
+		pill.Children(func() {
+			ui.Icon(c, iconTimer).FontSize(15).TextColor(p.Accent)
+			ui.Row(c).AlignItems(ui.Center).Gap(3).Children(func() {
+				ui.Text(c, fmt.Sprintf("%d", cd.remaining)).
+					FontSize(12.5).FontWeight(700).FontFeatures("tnum").NoWrap().TextColor(p.Accent).
+					ContentTransition(ui.ContentTransition{Numeric: true, Down: true})
+				ui.Text(c, "秒后定格屏幕…").
+					FontSize(12.5).FontWeight(600).NoWrap().TextColor(p.Text)
+			})
+			ui.Spacer(c)
+			if miniPillBtn(c, nil, "取消", false) {
+				go mygo.RunOnMain(func() { a.stopCountdown() })
+			}
+		})
 	})
 }

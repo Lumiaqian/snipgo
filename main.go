@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +19,13 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"snipgo/internal/beautify"
 	"snipgo/internal/capture"
 	"snipgo/internal/config"
 	"snipgo/internal/crop"
 	"snipgo/internal/session"
 	"snipgo/internal/store"
+	"snipgo/internal/updater"
 )
 
 const (
@@ -46,6 +48,7 @@ type app struct {
 	freezeShortEr error
 	pinShortErr   error
 	histShortErr  error
+	delayShortErr error
 	permDenied    bool
 	alertShowing  atomic.Bool
 	redacting     bool
@@ -56,8 +59,13 @@ type app struct {
 	ocr           *ocrWindow
 	histWin       *historyWindow
 	setWin        *settingsWindow
+	tplWin        *templateWindow
+	lastTplOpts   beautify.TemplateOptions
+	hasTplOpts    bool
 	countdown     *countdownSession
 	scrollCap     *scrollCaptureSession
+	snappingPin   bool
+	upd           *updateManager
 
 	// 选区内文字批注临时编辑态
 	textEditing bool
@@ -81,9 +89,11 @@ func main() {
 		}
 		a.stopCountdown()
 		a.stopScrollCapture()
+		a.shutdownUpdater()
 		a.closeOCRWindow()
 		a.closeHistoryWindow()
 		a.closeSettingsWindow()
+		a.closeTemplateWindow()
 		a.closeAllPins()
 		mygo.GlobalShortcut.UnregisterAll()
 	})
@@ -109,6 +119,7 @@ func (a *app) ready() {
 	}
 	a.cfg = config.Load(a.userDataDir, a.picturesDir)
 	a.cfg.OpenAtLogin = mygo.App.OpenAtLogin()
+	a.applyThemeLive(a.cfg)
 	if a.userDataDir != "" {
 		if st, err := store.Open(a.userDataDir, store.DefaultMaxEntries); err == nil {
 			a.history = st
@@ -123,6 +134,8 @@ func (a *app) ready() {
 		Clip:          sysClip{},
 		UI:            a,
 		OnOutput:      a.recordHistory,
+		OnCutout:      a.cutoutSelection,
+		OnTemplate:    a.openTemplateWindow,
 		OnMain:        mygo.RunOnMain,
 	}
 	var err error
@@ -137,12 +150,16 @@ func (a *app) ready() {
 	}
 	a.registerAllShortcuts()
 	a.refreshMenu()
+	a.initUpdater()
 	if !capture.HasPermission() {
 		go func() { _ = capture.RequestPermission() }()
 	}
 }
 
 func (a *app) registerAllShortcuts() {
+	if !mygo.App.IsReady() {
+		return
+	}
 	mygo.GlobalShortcut.UnregisterAll()
 	a.shortcutErr = mygo.GlobalShortcut.Register(a.cfg.SnipShortcut, func() {
 		a.extraStatus = ""
@@ -158,11 +175,30 @@ func (a *app) registerAllShortcuts() {
 	})
 	a.pinShortErr = mygo.GlobalShortcut.Register(a.cfg.PinShortcut, a.PasteClipboardPin)
 	a.histShortErr = mygo.GlobalShortcut.Register(a.cfg.HistoryShortcut, a.toggleHistoryWindow)
-	_ = mygo.GlobalShortcut.Register(a.cfg.DelayShortcut, func() {
+	a.delayShortErr = mygo.GlobalShortcut.Register(a.cfg.DelayShortcut, func() {
 		a.startDelayedCapture(a.cfg.DelaySeconds)
 	})
 	_ = mygo.GlobalShortcut.Register(restoreShortcut, a.RestoreLastPin)
 	_ = mygo.GlobalShortcut.Register(unghostShortcut, a.restorePassthroughPins)
+}
+
+func (a *app) shortcutError(id string) error {
+	switch id {
+	case "snip":
+		return a.shortcutErr
+	case "ocr":
+		return a.ocrShortErr
+	case "freeze":
+		return a.freezeShortEr
+	case "delay":
+		return a.delayShortErr
+	case "pin":
+		return a.pinShortErr
+	case "history":
+		return a.histShortErr
+	default:
+		return nil
+	}
 }
 
 func (a *app) currentDisplays() ([]capture.Display, error) {
@@ -518,8 +554,25 @@ func (a *app) refreshMenu() {
 			},
 		)
 	}
+	items = append(items, mygo.Separator())
+	if a.upd != nil && a.upd.staged != nil {
+		items = append(items, &mygo.MenuItem{
+			Label: fmt.Sprintf("重启并更新至 %s...", updater.FormatVersion(a.upd.staged.Version)),
+			Badge: "就绪",
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.openUpdateWindow() },
+		})
+	} else if rel := a.availableUpdate(); rel != nil {
+		items = append(items, &mygo.MenuItem{
+			Label: fmt.Sprintf("发现新版本 %s...", updater.FormatVersion(rel.Version)),
+			Badge: "新",
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.openUpdateWindow() },
+		})
+	}
 	items = append(items,
-		mygo.Separator(),
+		&mygo.MenuItem{
+			Label: "检查更新...",
+			Click: func(*mygo.MenuItem, *mygo.Window) { a.checkForUpdates(true) },
+		},
 		&mygo.MenuItem{
 			Label:       "偏好设置...",
 			Accelerator: "Cmd+,",
@@ -540,21 +593,87 @@ func (sysClip) WriteText(s string) {
 	mygo.Clipboard.WriteText(s)
 }
 
-// trayIcon 画四角取景框，黑底透明。macOS 会按模板给它着色。
+func (a *app) applyThemeLive(cfg config.Settings) {
+	st := themeStateFromConfig(cfg)
+	setActiveTheme(st)
+	if a.tplWin != nil {
+		applyWindowTheme(a.tplWin.win, st)
+	}
+	if a.setWin != nil {
+		applyWindowTheme(a.setWin.win, st)
+	}
+	if a.histWin != nil {
+		applyWindowTheme(a.histWin.win, st)
+	}
+	if a.ocr != nil {
+		applyWindowTheme(a.ocr.win, st)
+	}
+	if a.upd != nil {
+		applyWindowTheme(a.upd.win, st)
+	}
+	if a.scrollCap != nil {
+		applyWindowTheme(a.scrollCap.ctrlWin, st)
+	}
+	if a.countdown != nil {
+		applyWindowTheme(a.countdown.win, st)
+	}
+	for _, o := range a.overlays {
+		if o != nil && o.win != nil && !o.win.IsDestroyed() {
+			o.win.Invalidate()
+		}
+	}
+	for _, p := range a.pins {
+		if p != nil && p.win != nil && !p.win.IsDestroyed() {
+			p.win.Invalidate()
+		}
+	}
+}
+
+// trayIcon 绘制 36×36 (@2x) 抗锯齿纯黑模板取景框图标（圆角 L 形四角 + 中心对焦点）。macOS 会按模板自动适配深/浅菜单栏着色。
 func trayIcon() []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := image.NewUniform(color.NRGBA{A: 255})
-	for _, r := range []image.Rectangle{
-		image.Rect(5, 5, 13, 8),
-		image.Rect(5, 5, 8, 13),
-		image.Rect(19, 5, 27, 8),
-		image.Rect(24, 5, 27, 13),
-		image.Rect(5, 24, 13, 27),
-		image.Rect(5, 19, 8, 27),
-		image.Rect(19, 24, 27, 27),
-		image.Rect(24, 19, 27, 27),
-	} {
-		draw.Draw(img, r, ink, image.Point{}, draw.Src)
+	const (
+		size       = 36
+		center     = 17.5
+		midHalf    = 11.2 // stroke centerline: outer edge = 11.2 + 1.4 = 12.6
+		rMid       = 3.8  // outer corner radius = 3.8 + 1.4 = 5.2px
+		gap        = 4.2
+		halfStroke = 1.4 // 2.8px stroke width
+		dotRadius  = 2.6
+	)
+	cx0 := midHalf - rMid
+	distSeg := func(px, py, ax, ay, bx, by float64) float64 {
+		vx, vy := bx-ax, by-ay
+		wx, wy := px-ax, py-ay
+		l2 := vx*vx + vy*vy
+		if l2 <= 0 {
+			return math.Hypot(wx, wy)
+		}
+		t := max(0.0, min(1.0, (wx*vx+wy*vy)/l2))
+		return math.Hypot(px-(ax+t*vx), py-(ay+t*vy))
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	for y := range size {
+		for x := range size {
+			ax := math.Abs(float64(x) - center)
+			ay := math.Abs(float64(y) - center)
+
+			dH := distSeg(ax, ay, gap, midHalf, cx0, midHalf)
+			dV := distSeg(ax, ay, midHalf, gap, midHalf, cx0)
+			var dArc float64
+			if ax >= cx0 && ay >= cx0 {
+				dArc = math.Abs(math.Hypot(ax-cx0, ay-cx0) - rMid)
+			} else {
+				dArc = min(math.Hypot(ax-cx0, ay-midHalf), math.Hypot(ax-midHalf, ay-cx0))
+			}
+			dBracket := min(dH, min(dV, dArc)) - halfStroke
+			dDot := math.Hypot(ax, ay) - dotRadius
+			d := min(dBracket, dDot)
+
+			cov := max(0.0, min(1.0, 0.5-d/1.1))
+			if cov > 0 {
+				img.SetNRGBA(x, y, color.NRGBA{A: uint8(math.Round(cov * 255))})
+			}
+		}
 	}
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)

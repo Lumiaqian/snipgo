@@ -276,11 +276,13 @@ func (u testPinUI) ShowPin(img *image.NRGBA, _ []byte, at image.Point, dipW, dip
 		u.onPin(img, at, dipW, dipH)
 	}
 }
-func (testPinUI) SavePNG([]byte)            {}
+func (testPinUI) SavePNG([]byte)              {}
 func (testPinUI) RecognizeImage(*image.NRGBA) {}
 
-func TestToolbarAnnotationBeautifyAndOCRWorkflow(t *testing.T) {
+func TestToolbarAnnotationTemplateAndOCRWorkflow(t *testing.T) {
 	var ocrImg *image.NRGBA
+	var tplImg *image.NRGBA
+	var tplRect image.Rectangle
 	mainQueue := make(chan func(), 4)
 	a := &app{}
 	o := &overlay{bounds: image.Rect(0, 0, 900, 650), index: 0}
@@ -301,6 +303,10 @@ func TestToolbarAnnotationBeautifyAndOCRWorkflow(t *testing.T) {
 		UI: testOCRUI{
 			onOCR: func(img *image.NRGBA) { ocrImg = img },
 		},
+		OnTemplate: func(img *image.NRGBA, r image.Rectangle) {
+			tplImg = img
+			tplRect = r
+		},
 		OnMain: func(fn func()) { mainQueue <- fn },
 	}
 	a.session.StartLive()
@@ -309,7 +315,7 @@ func TestToolbarAnnotationBeautifyAndOCRWorkflow(t *testing.T) {
 	tt := ui.NewTester(a.selectionView(o), 900, 650)
 	tt.Frame()
 
-	// 1. 单击锁定窗口，浮动工具栏展示标注、美化与识字按钮。
+	// 1. 单击锁定窗口，浮动工具栏展示标注、模板与识字按钮。
 	tt.ClickAt(300, 200)
 	tt.Frame()
 	stepBtn, ok := tt.Find("序号")
@@ -333,24 +339,7 @@ func TestToolbarAnnotationBeautifyAndOCRWorkflow(t *testing.T) {
 		t.Fatalf("expected 2 step badges and stable 撤销 X (%v vs %v)", undoBefore.X, undoAfter.X)
 	}
 
-	// 3. 开启「美化」背景并选择「落日霓虹」渐变色卡。
-	beauBtn, ok := tt.Find("美化")
-	if !ok {
-		t.Fatal("missing 美化 button")
-	}
-	tt.ClickAt(beauBtn.X+beauBtn.W/2, beauBtn.Y+beauBtn.H/2)
-	tt.Frame()
-	sunsetBtn, ok := tt.Find("落日霓虹")
-	if !ok {
-		t.Fatalf("missing 落日霓虹 preset chip in sub-bar")
-	}
-	tt.ClickAt(sunsetBtn.X+sunsetBtn.W/2, sunsetBtn.Y+sunsetBtn.H/2)
-	tt.Frame()
-	if a.session.BeautifyPreset() != beautify.PresetSunset {
-		t.Fatalf("expected PresetSunset, got %v", a.session.BeautifyPreset())
-	}
-
-	// 4. 点击「识图」触发无污染原图采集与 OCR 回调（不混入渐变背景框，确保识别率）。
+	// 3. 点击「识图」触发无污染原图采集与 OCR 回调（不混入标注或边框，确保识别率）。
 	ocrBtn, ok := tt.Find("识图")
 	if !ok {
 		t.Fatal("missing 识图 button")
@@ -360,6 +349,51 @@ func TestToolbarAnnotationBeautifyAndOCRWorkflow(t *testing.T) {
 	(<-mainQueue)()
 	if ocrImg == nil || ocrImg.Bounds().Dx() != winRect.Dx()*2 || ocrImg.Bounds().Dy() != winRect.Dy()*2 {
 		t.Fatalf("expected clean raw image delivered to OCR, got %v", ocrImg)
+	}
+
+	// 4. 重新启动选区并绘制红色矩形标注，点击「模板」验证标注已烘培进传入套模板工作台的图像。
+	a.session.StartLive()
+	a.session.InitCursor(300, 200)
+	tt.Frame()
+	tt.ClickAt(300, 200)
+	tt.Frame()
+
+	rectBtn, ok := tt.Find("框")
+	if !ok {
+		t.Fatal("missing 框 button")
+	}
+	tt.ClickAt(rectBtn.X+rectBtn.W/2, rectBtn.Y+rectBtn.H/2)
+	tt.Frame()
+	a.session.Annotations().Color = annotate.Palette[0]
+	a.session.Annotations().Stroke = 3.0
+	tt.Press(180, 140)
+	tt.Frame()
+	tt.Move(340, 240)
+	tt.Frame()
+	tt.Release(340, 240)
+	tt.Frame()
+
+	tplBtn, ok := tt.Find("模板")
+	if !ok {
+		t.Fatal("missing 模板 button")
+	}
+	tt.ClickAt(tplBtn.X+tplBtn.W/2, tplBtn.Y+tplBtn.H/2)
+	tt.Frame()
+	(<-mainQueue)()
+	if tplImg == nil || tplRect != winRect {
+		t.Fatalf("expected OnTemplate delivered with winRect %v, got img=%v rect=%v", winRect, tplImg != nil, tplRect)
+	}
+	// 验证红色矩形边框已被渲染到 tplImg 中：局部坐标 (180-120)*2=120, y 从 (140-80)*2=120 到 (240-80)*2=320。
+	foundRed := false
+	for x := 115; x <= 440; x++ {
+		px := tplImg.NRGBAAt(x, 120)
+		if px.R > 200 && px.A > 200 {
+			foundRed = true
+			break
+		}
+	}
+	if !foundRed {
+		t.Fatalf("expected baked red rect annotation inside template input image")
 	}
 }
 
@@ -392,7 +426,7 @@ func TestToolbarFullWidthWindowStaysInBoundsSingleRow(t *testing.T) {
 	tt.Frame()
 
 	var baseY float32 = -1
-	for _, lbl := range []string{"框", "圆", "箭头", "荧光", "序号", "打码", "擦除", "聚光", "文字", "撤销", "脱敏", "单窗", "美化", "长图", "识图", "贴图", "保存", "取消", "复制"} {
+	for _, lbl := range []string{"框", "圆", "箭头", "荧光", "序号", "打码", "擦除", "聚光", "文字", "放大", "撤销", "脱敏", "抠图", "单窗", "模板", "长图", "识图", "贴图", "保存", "取消", "复制"} {
 		r, ok := tt.Find(lbl)
 		if !ok {
 			t.Fatalf("missing button %q", lbl)
@@ -408,14 +442,12 @@ func TestToolbarFullWidthWindowStaysInBoundsSingleRow(t *testing.T) {
 	}
 
 	if dir := os.Getenv("SNIPGO_PREVIEW_DIR"); dir != "" {
-		// 开启工具与美化子栏后渲染高分屏预览供视觉走查。
-		a.session.Annotations().Tool = annotate.ToolArrow
-		a.session.ToggleBeautify()
-		subO := &overlay{bounds: image.Rect(0, 0, 800, 260), index: 0}
+		// 开启放大镜与标注子栏后渲染 Light + Dark 双外观 Tahoe Liquid Glass 高分屏工具栏对比。
+		subO := &overlay{bounds: image.Rect(0, 0, 800, 230), index: 0}
 		a.overlays = []*overlay{subO}
 		a.session.Cancel()
 		a.session.Live = func() (session.Snapshot, error) {
-			sel := image.Rect(40, 36, 760, 140)
+			sel := image.Rect(40, 24, 760, 114)
 			return session.Snapshot{
 				Frames:      []crop.Screen{{Bounds: subO.bounds, Scale: 2}},
 				FrontWindow: sel,
@@ -425,17 +457,30 @@ func TestToolbarFullWidthWindowStaysInBoundsSingleRow(t *testing.T) {
 			}, nil
 		}
 		a.session.StartLive()
-		a.session.InitCursor(200, 80)
-		a.session.BeginDrag(0, 200, 80)
+		a.session.InitCursor(200, 72)
+		a.session.BeginDrag(0, 200, 72)
 		a.session.EndDrag()
-		a.session.Annotations().Tool = annotate.ToolArrow
-		a.session.ToggleBeautify()
+		a.session.Annotations().Tool = annotate.ToolLoupe
 
 		img := ui.Render(func(c *ui.Context) {
-			ui.Box(c).Fill().Background(ui.RGB(44, 52, 68)).Children(func() {
-				a.selectionView(subO)(c)
+			c.Root().Background(ui.Transparent)
+			ui.Column(c).Fill().Children(func() {
+				ui.Box(c).Width(800).Height(230).
+					Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, false) }).
+					Children(func() {
+						ui.Themed(c.Key("tb-light"), ui.LightTheme()).Fill().Background(ui.Transparent).Children(func() {
+							a.selectionView(subO)(c)
+						})
+					})
+				ui.Box(c).Width(800).Height(230).
+					Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, true) }).
+					Children(func() {
+						ui.Themed(c.Key("tb-dark"), ui.DarkTheme()).Fill().Background(ui.Transparent).Children(func() {
+							a.selectionView(subO)(c)
+						})
+					})
 			})
-		}, 800, 260, 2)
+		}, 800, 460, 2)
 		f, err := os.Create(filepath.Join(dir, "toolbar_preview.png"))
 		if err == nil {
 			_ = png.Encode(f, img)
@@ -450,8 +495,15 @@ func TestToolbarFullWidthWindowStaysInBoundsSingleRow(t *testing.T) {
 			copiedBadge: "已自动复制 · 62 字",
 		}
 		ocrPreview := ui.Render(func(c *ui.Context) {
-			a.paintOCRView(c, ow)
-		}, ocrWinW, ocrWinH, 2)
+			c.Root().Background(ui.Transparent)
+			ui.Box(c).Fill().Padding(16, 16).
+				Draw(func(p *ui.Painter, r ui.Rect) { paintTahoeWallpaper(p, r, true) }).
+				Children(func() {
+					ui.Themed(c, ui.DarkTheme()).Fill().Background(ui.Transparent).Children(func() {
+						a.paintOCRView(c, ow)
+					})
+				})
+		}, ocrWinW+32, ocrWinH+32, 2)
 		f2, err := os.Create(filepath.Join(dir, "ocr_preview.png"))
 		if err == nil {
 			_ = png.Encode(f2, ocrPreview)
@@ -539,11 +591,11 @@ type testOCRUI struct {
 	onOCR func(*image.NRGBA)
 }
 
-func (testOCRUI) SetStatus(string)                    {}
-func (testOCRUI) ShowSelection([]crop.Screen)         {}
-func (testOCRUI) HideSelection()                      {}
+func (testOCRUI) SetStatus(string)                                    {}
+func (testOCRUI) ShowSelection([]crop.Screen)                         {}
+func (testOCRUI) HideSelection()                                      {}
 func (testOCRUI) ShowPin(*image.NRGBA, []byte, image.Point, int, int) {}
-func (testOCRUI) SavePNG([]byte)                      {}
+func (testOCRUI) SavePNG([]byte)                                      {}
 func (u testOCRUI) RecognizeImage(img *image.NRGBA) {
 	if u.onOCR != nil {
 		u.onOCR(img)
@@ -574,5 +626,5 @@ func (u testSessionUI) ShowPin(*image.NRGBA, []byte, image.Point, int, int) {
 		u.onPin()
 	}
 }
-func (testSessionUI) SavePNG([]byte)            {}
+func (testSessionUI) SavePNG([]byte)              {}
 func (testSessionUI) RecognizeImage(*image.NRGBA) {}
