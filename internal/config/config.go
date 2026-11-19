@@ -17,11 +17,17 @@ type Settings struct {
 	HistoryShortcut string `json:"history_shortcut"`
 	DelayShortcut   string `json:"delay_shortcut"`
 
-	QuickSave    bool   `json:"quick_save"`
-	QuickSaveDir string `json:"quick_save_dir"`
-	CopyOnSave   bool   `json:"copy_on_save"`
-	DelaySeconds int    `json:"delay_seconds"`
-	OpenAtLogin  bool   `json:"open_at_login"`
+	QuickSave          bool   `json:"quick_save"`
+	QuickSaveDir       string `json:"quick_save_dir"`
+	CopyOnSave         bool   `json:"copy_on_save"`
+	DelaySeconds       int    `json:"delay_seconds"`
+	OpenAtLogin        bool   `json:"open_at_login"`
+	AutoCheckUpdates   bool   `json:"auto_check_updates"`
+	IncludePrereleases bool   `json:"include_prereleases"`
+	SkippedVersion     string `json:"skipped_version,omitempty"`
+	ThemeAppearance    string `json:"theme_appearance,omitempty"`
+	GlassLevel         string `json:"glass_level,omitempty"`
+	AccentColor        string `json:"accent_color,omitempty"`
 }
 
 // Default 返回带合理默认值的配置。
@@ -35,17 +41,21 @@ func Default(defaultPicturesDir string) Settings {
 		saveDir = filepath.Join(saveDir, "SnipGo")
 	}
 	return Settings{
-		SnipShortcut:    "Cmd+Shift+2",
-		OCRShortcut:     "Alt+Cmd+O",
-		FreezeShortcut:  "Ctrl+Cmd+2",
-		PinShortcut:     "Alt+Cmd+2",
-		HistoryShortcut: "Cmd+Shift+H",
-		DelayShortcut:   "Ctrl+Shift+Cmd+2",
-		QuickSave:       true,
-		QuickSaveDir:    saveDir,
-		CopyOnSave:      true,
-		DelaySeconds:    3,
-		OpenAtLogin:     false,
+		SnipShortcut:     "Cmd+Shift+2",
+		OCRShortcut:      "Alt+Cmd+O",
+		FreezeShortcut:   "Ctrl+Cmd+2",
+		PinShortcut:      "Alt+Cmd+2",
+		HistoryShortcut:  "Cmd+Shift+H",
+		DelayShortcut:    "Ctrl+Shift+Cmd+2",
+		QuickSave:        true,
+		QuickSaveDir:     saveDir,
+		CopyOnSave:       true,
+		DelaySeconds:     3,
+		OpenAtLogin:      false,
+		AutoCheckUpdates: true,
+		ThemeAppearance:  "system",
+		GlassLevel:       "regular",
+		AccentColor:      "system",
 	}
 }
 
@@ -75,6 +85,25 @@ func (s *Settings) Normalize(defaultPicturesDir string) {
 	}
 	if s.DelaySeconds != 3 && s.DelaySeconds != 5 && s.DelaySeconds != 10 {
 		s.DelaySeconds = 3
+	}
+	s.SkippedVersion = strings.TrimSpace(s.SkippedVersion)
+	switch strings.ToLower(strings.TrimSpace(s.ThemeAppearance)) {
+	case "light", "dark", "system":
+		s.ThemeAppearance = strings.ToLower(strings.TrimSpace(s.ThemeAppearance))
+	default:
+		s.ThemeAppearance = "system"
+	}
+	switch strings.ToLower(strings.TrimSpace(s.GlassLevel)) {
+	case "clear", "regular", "frosted":
+		s.GlassLevel = strings.ToLower(strings.TrimSpace(s.GlassLevel))
+	default:
+		s.GlassLevel = "regular"
+	}
+	switch strings.ToLower(strings.TrimSpace(s.AccentColor)) {
+	case "system", "blue", "purple", "pink", "orange", "green", "teal", "graphite":
+		s.AccentColor = strings.ToLower(strings.TrimSpace(s.AccentColor))
+	default:
+		s.AccentColor = "system"
 	}
 }
 
