@@ -3,6 +3,7 @@ package vision
 
 import (
 	"cmp"
+	"image"
 	"regexp"
 	"slices"
 	"strings"
@@ -210,4 +211,53 @@ func abs(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+// TrimTransparent 裁去主体抠图四周多余的全透明空白边（保留 pad 像素呼吸留白）。
+func TrimTransparent(src *image.NRGBA, pad int) *image.NRGBA {
+	if src == nil || src.Bounds().Empty() {
+		return src
+	}
+	b := src.Bounds()
+	minX, minY := b.Max.X, b.Max.Y
+	maxX, maxY := b.Min.X-1, b.Min.Y-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		off := src.PixOffset(b.Min.X, y)
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if src.Pix[off+3] > 8 {
+				if x < minX {
+					minX = x
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+			off += 4
+		}
+	}
+	if maxX < minX || maxY < minY {
+		return src
+	}
+	if pad < 0 {
+		pad = 0
+	}
+	r := image.Rect(
+		max(b.Min.X, minX-pad),
+		max(b.Min.Y, minY-pad),
+		min(b.Max.X, maxX+1+pad),
+		min(b.Max.Y, maxY+1+pad),
+	)
+	out := image.NewNRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for y := range r.Dy() {
+		sOff := src.PixOffset(r.Min.X, r.Min.Y+y)
+		dOff := out.PixOffset(0, y)
+		copy(out.Pix[dOff:dOff+r.Dx()*4], src.Pix[sOff:sOff+r.Dx()*4])
+	}
+	return out
 }

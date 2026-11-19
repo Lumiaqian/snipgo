@@ -24,6 +24,10 @@ const (
 	nsUTF8StringEncoding     = 4
 	cgImageAlphaNoneSkipLast = 5 // 24-bit 不透明 RGBX，避免半透明圆角/窗口阴影干扰 Vision 对比度归一化
 	cgRenderingIntentDef     = 0
+
+	cvPixelBufferLockReadOnly = 1
+	cvPixelFormatOneComp32F   = 0x4C303066 // 'L00f' kCVPixelFormatType_OneComponent32Float
+	cvPixelFormatOneComp8     = 0x4C303038 // 'L008' kCVPixelFormatType_OneComponent8
 )
 
 var (
@@ -38,6 +42,14 @@ var (
 	cfRelease                   func(uintptr)
 	cgImageCreate               func(uintptr, uintptr, uintptr, uintptr, uintptr, uintptr, uint32, uintptr, uintptr, bool, int32) uintptr
 	cgImageRelease              func(uintptr)
+	cvPixelBufferLock           func(uintptr, uint64) int32
+	cvPixelBufferUnlock         func(uintptr, uint64) int32
+	cvPixelBufferGetBaseAddress func(uintptr) unsafe.Pointer
+	cvPixelBufferGetWidth       func(uintptr) uintptr
+	cvPixelBufferGetHeight      func(uintptr) uintptr
+	cvPixelBufferGetBytesPerRow func(uintptr) uintptr
+	cvPixelBufferGetFormatType  func(uintptr) uint32
+	cvPixelBufferRelease        func(uintptr)
 	msgBoundingBox              func(objc.ID, objc.SEL) cgRect
 	msgSetFloat32               func(objc.ID, objc.SEL, float32)
 
@@ -63,6 +75,8 @@ var (
 	selBoundingBox      = objc.RegisterName("boundingBox")
 	selPayloadStringVal = objc.RegisterName("payloadStringValue")
 	selLocalizedDesc    = objc.RegisterName("localizedDescription")
+	selAllInstances     = objc.RegisterName("allInstances")
+	selGenScaledMask    = objc.RegisterName("generateScaledMaskForImageForInstances:fromRequestHandler:error:")
 )
 
 func loadVision() error {
@@ -76,6 +90,7 @@ func loadVision() error {
 			"/usr/lib/libobjc.A.dylib",
 			"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
 			"/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+			"/System/Library/Frameworks/CoreVideo.framework/CoreVideo",
 			"/System/Library/Frameworks/Foundation.framework/Foundation",
 			"/System/Library/Frameworks/Vision.framework/Vision",
 		} {
@@ -92,6 +107,14 @@ func loadVision() error {
 		purego.RegisterLibFunc(&cfRelease, purego.RTLD_DEFAULT, "CFRelease")
 		purego.RegisterLibFunc(&cgImageCreate, purego.RTLD_DEFAULT, "CGImageCreate")
 		purego.RegisterLibFunc(&cgImageRelease, purego.RTLD_DEFAULT, "CGImageRelease")
+		purego.RegisterLibFunc(&cvPixelBufferLock, purego.RTLD_DEFAULT, "CVPixelBufferLockBaseAddress")
+		purego.RegisterLibFunc(&cvPixelBufferUnlock, purego.RTLD_DEFAULT, "CVPixelBufferUnlockBaseAddress")
+		purego.RegisterLibFunc(&cvPixelBufferGetBaseAddress, purego.RTLD_DEFAULT, "CVPixelBufferGetBaseAddress")
+		purego.RegisterLibFunc(&cvPixelBufferGetWidth, purego.RTLD_DEFAULT, "CVPixelBufferGetWidth")
+		purego.RegisterLibFunc(&cvPixelBufferGetHeight, purego.RTLD_DEFAULT, "CVPixelBufferGetHeight")
+		purego.RegisterLibFunc(&cvPixelBufferGetBytesPerRow, purego.RTLD_DEFAULT, "CVPixelBufferGetBytesPerRow")
+		purego.RegisterLibFunc(&cvPixelBufferGetFormatType, purego.RTLD_DEFAULT, "CVPixelBufferGetPixelFormatType")
+		purego.RegisterLibFunc(&cvPixelBufferRelease, purego.RTLD_DEFAULT, "CVPixelBufferRelease")
 
 		msgSend, err := purego.Dlsym(purego.RTLD_DEFAULT, "objc_msgSend")
 		if err != nil {
@@ -250,6 +273,141 @@ func Recognize(img *image.NRGBA) (Result, error) {
 		Barcodes: barcodes,
 		Boxes:    outBoxes,
 	}, nil
+}
+
+// Cutout 调用 macOS 14+ 原生 Vision 前景实例分割（VNGenerateForegroundInstanceMaskRequest），
+// 离线识别主体并生成透明背景 PNG（自动裁剪四周多余透明边，保留 4px 呼吸留白）。
+func Cutout(img *image.NRGBA) (*image.NRGBA, error) {
+	if img == nil || img.Bounds().Empty() {
+		return nil, errors.New("图像为空")
+	}
+	if err := loadVision(); err != nil {
+		return nil, err
+	}
+	reqCls := objc.GetClass("VNGenerateForegroundInstanceMaskRequest")
+	if reqCls == 0 {
+		return nil, errors.New("当前系统不支持离线主体抠图（需要 macOS 14+）")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	pool := objc.ID(objc.GetClass("NSAutoreleasePool")).Send(selAlloc).Send(selInit)
+	defer pool.Send(selDrain)
+
+	cgImg := nrgbaToCGImage(img)
+	if cgImg == 0 {
+		return nil, errors.New("创建 CGImage 失败")
+	}
+	defer cgImageRelease(cgImg)
+
+	emptyDict := objc.ID(objc.GetClass("NSDictionary")).Send(selDictionary)
+	handler := objc.ID(objc.GetClass("VNImageRequestHandler")).Send(selAlloc).Send(selInitCGImage, cgImg, emptyDict)
+	if handler == 0 {
+		return nil, errors.New("创建 VNImageRequestHandler 失败")
+	}
+	handler.Send(selAutorelease)
+
+	req := objc.ID(reqCls).Send(selAlloc).Send(selInit)
+	if req == 0 {
+		return nil, errors.New("创建主体分割请求失败")
+	}
+	req.Send(selAutorelease)
+
+	reqs := [1]objc.ID{req}
+	reqArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&reqs[0])), uintptr(1))
+	var nsErr objc.ID
+	if !objc.Send[bool](handler, selPerformReqs, reqArr, uintptr(unsafe.Pointer(&nsErr))) {
+		if nsErr != 0 {
+			if desc := nsErr.Send(selLocalizedDesc); desc != 0 {
+				return nil, errors.New(cstrings.NSStringToString(desc))
+			}
+		}
+		return nil, errors.New("主体抠图分析失败")
+	}
+
+	resArr := req.Send(selResults)
+	if resArr == 0 || int(objc.Send[uintptr](resArr, selCount)) == 0 {
+		return nil, errors.New("未检测到明显前景主体")
+	}
+	obs := resArr.Send(selObjectAtIndex, uintptr(0))
+	instances := obs.Send(selAllInstances)
+	if instances == 0 || int(objc.Send[uintptr](instances, selCount)) == 0 {
+		return nil, errors.New("未检测到明显前景主体")
+	}
+
+	var maskErr objc.ID
+	pb := uintptr(obs.Send(selGenScaledMask, instances, handler, uintptr(unsafe.Pointer(&maskErr))))
+	if pb == 0 {
+		if maskErr != 0 {
+			if desc := maskErr.Send(selLocalizedDesc); desc != 0 {
+				return nil, errors.New(cstrings.NSStringToString(desc))
+			}
+		}
+		return nil, errors.New("生成前景透明度遮罩失败")
+	}
+	defer cvPixelBufferRelease(pb)
+
+	if cvPixelBufferLock(pb, cvPixelBufferLockReadOnly) != 0 {
+		return nil, errors.New("锁定前景遮罩缓冲失败")
+	}
+	defer cvPixelBufferUnlock(pb, cvPixelBufferLockReadOnly)
+
+	base := cvPixelBufferGetBaseAddress(pb)
+	mw := int(cvPixelBufferGetWidth(pb))
+	mh := int(cvPixelBufferGetHeight(pb))
+	bpr := int(cvPixelBufferGetBytesPerRow(pb))
+	pixFmt := cvPixelBufferGetFormatType(pb)
+	if base == nil || mw <= 0 || mh <= 0 || bpr <= 0 {
+		return nil, errors.New("前景遮罩数据无效")
+	}
+
+	b := img.Bounds()
+	sw, sh := b.Dx(), b.Dy()
+	out := image.NewNRGBA(image.Rect(0, 0, sw, sh))
+	rawBytes := unsafe.Slice((*byte)(base), mh*bpr)
+
+	opaqueCount := 0
+	for y := range sh {
+		my := y * mh / sh
+		rowOff := my * bpr
+		for x := range sw {
+			mx := x * mw / sw
+			var maskA float32
+			switch pixFmt {
+			case cvPixelFormatOneComp32F:
+				off := rowOff + mx*4
+				if off+4 <= len(rawBytes) {
+					maskA = *(*float32)(unsafe.Pointer(&rawBytes[off]))
+				}
+			case cvPixelFormatOneComp8:
+				off := rowOff + mx
+				if off < len(rawBytes) {
+					maskA = float32(rawBytes[off]) / 255.0
+				}
+			default:
+				// 兜底按 32F 读取（Vision 默认输出 OneComponent32Float）
+				off := rowOff + mx*4
+				if off+4 <= len(rawBytes) {
+					maskA = *(*float32)(unsafe.Pointer(&rawBytes[off]))
+				}
+			}
+			if maskA < 0 {
+				maskA = 0
+			} else if maskA > 1 {
+				maskA = 1
+			}
+			c := img.NRGBAAt(b.Min.X+x, b.Min.Y+y)
+			na := uint8(float32(c.A)*maskA + 0.5)
+			if na > 16 {
+				opaqueCount++
+			}
+			out.SetNRGBA(x, y, color.NRGBA{R: c.R, G: c.G, B: c.B, A: na})
+		}
+	}
+	if opaqueCount == 0 {
+		return nil, errors.New("未检测到明显前景主体")
+	}
+	return TrimTransparent(out, 4), nil
 }
 
 // prepareForVision 对极小/贴边裁剪区域补充静区留白（并按需 2x 双线性放大），

@@ -108,3 +108,44 @@ func TestSensitiveBoxesLocatesSecretsAndPII(t *testing.T) {
 		t.Fatalf("expected >=2 sensitive spans (API key + email/phone), got %d (%+v), text=%q", len(boxes), boxes, res.Text)
 	}
 }
+
+func TestCutoutRealForegroundSubject(t *testing.T) {
+	// 构造清晰的居中高对比度前景主体（模拟产品图标/徽章置于柔和浅灰底色上），验证 Vision 前景实例分割真实产出透明通道。
+	canvas := image.NewNRGBA(image.Rect(0, 0, 320, 320))
+	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.NRGBA{R: 235, G: 238, B: 244, A: 255}), image.Point{}, draw.Src)
+	// 中央画一个鲜明红色圆形图标 + 内部白色图形
+	for y := 70; y < 250; y++ {
+		for x := 70; x < 250; x++ {
+			dx := float64(x - 160)
+			dy := float64(y - 160)
+			d := dx*dx + dy*dy
+			if d <= 80*80 {
+				col := color.NRGBA{R: 235, G: 64, B: 52, A: 255}
+				if d >= 34*34 && d <= 52*52 {
+					col = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+				}
+				canvas.SetNRGBA(x, y, col)
+			}
+		}
+	}
+
+	out, err := Cutout(canvas)
+	if err != nil {
+		t.Fatalf("Cutout failed: %v", err)
+	}
+	b := out.Bounds()
+	if b.Empty() || b.Dx() < 60 || b.Dy() < 60 {
+		t.Fatalf("unexpected cutout bounds: %v", b)
+	}
+	// 四角应为透明，中心应不透明。
+	corner := out.NRGBAAt(b.Min.X, b.Min.Y)
+	center := out.NRGBAAt(b.Min.X+b.Dx()/2, b.Min.Y+b.Dy()/2)
+	if corner.A > 40 {
+		t.Fatalf("expected transparent corner after cutout, got alpha=%d", corner.A)
+	}
+	if center.A < 200 {
+		t.Fatalf("expected opaque subject center after cutout, got alpha=%d", center.A)
+	}
+	t.Logf("Vision Cutout succeeded: %dx%d -> trimmed %dx%d (corner.A=%d, center.A=%d)",
+		canvas.Bounds().Dx(), canvas.Bounds().Dy(), b.Dx(), b.Dy(), corner.A, center.A)
+}

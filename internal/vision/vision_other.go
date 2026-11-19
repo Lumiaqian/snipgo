@@ -11,3 +11,8 @@ import (
 func Recognize(*image.NRGBA) (Result, error) {
 	return Result{}, errors.New("当前平台不支持离线 OCR")
 }
+
+// Cutout 在非 macOS 平台返回不支持错误。
+func Cutout(*image.NRGBA) (*image.NRGBA, error) {
+	return nil, errors.New("当前平台不支持离线主体抠图")
+}
