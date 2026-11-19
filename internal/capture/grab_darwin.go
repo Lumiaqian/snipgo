@@ -30,15 +30,15 @@ var (
 	loadOnce sync.Once
 	loadErr  error
 
-	cgImageGetWidth        func(uintptr) uintptr
-	cgImageGetHeight       func(uintptr) uintptr
-	cgImageGetBytesPerRow  func(uintptr) uintptr
-	cgImageGetBitsPerPixel func(uintptr) uintptr
-	cgImageGetBitmapInfo   func(uintptr) uint32
-	cgImageGetDataProvider func(uintptr) uintptr
-	cgDataProviderCopyData func(uintptr) uintptr
-	cfDataGetBytePtr       func(uintptr) *byte
-	cfDataGetLength        func(uintptr) int
+	cgImageGetWidth                func(uintptr) uintptr
+	cgImageGetHeight               func(uintptr) uintptr
+	cgImageGetBytesPerRow          func(uintptr) uintptr
+	cgImageGetBitsPerPixel         func(uintptr) uintptr
+	cgImageGetBitmapInfo           func(uintptr) uint32
+	cgImageGetDataProvider         func(uintptr) uintptr
+	cgDataProviderCopyData         func(uintptr) uintptr
+	cfDataGetBytePtr               func(uintptr) *byte
+	cfDataGetLength                func(uintptr) int
 	cfRetain                       func(uintptr) uintptr
 	cfRelease                      func(uintptr)
 	cgPreflightScreenCaptureAccess func() bool
