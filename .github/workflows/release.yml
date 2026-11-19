@@ -111,6 +111,7 @@ jobs:
           cp "build/darwin-universal/snipgo-${VERSION}.dmg" "dist/SnipGo-${VERSION}-universal.dmg"
 
           ditto -c -k --sequesterRsrc --keepParent "build/darwin-arm64/SnipGo.app" "dist/SnipGo-${VERSION}-arm64.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "build/darwin-amd64/SnipGo.app" "dist/SnipGo-${VERSION}-amd64.app.zip"
           ditto -c -k --sequesterRsrc --keepParent "build/darwin-universal/SnipGo.app" "dist/SnipGo-${VERSION}-universal.app.zip"
 
           (cd dist && shasum -a 256 SnipGo-* > SHA256SUMS.txt)
