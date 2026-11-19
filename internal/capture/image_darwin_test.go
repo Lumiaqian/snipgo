@@ -68,3 +68,17 @@ func TestBGRAPremultipliedClampsBadChannel(t *testing.T) {
 		t.Fatalf("pixel %v, want blue 255", c)
 	}
 }
+
+func TestBGRATrimmedFinalRowStridePadding(t *testing.T) {
+	// 2 行 × 1 像素，stride=64，但最后一行没有尾部对齐填充（总长 64 + 4 = 68 < 128）。
+	raw := make([]byte, 68)
+	raw[0], raw[1], raw[2], raw[3] = 1, 2, 3, 255
+	raw[64], raw[65], raw[66], raw[67] = 4, 5, 6, 255
+	img, err := bgraToNRGBA(raw, 1, 2, 64, false)
+	if err != nil {
+		t.Fatalf("unexpected error on trimmed final row: %v", err)
+	}
+	if c := img.NRGBAAt(0, 1); c != (color.NRGBA{R: 6, G: 5, B: 4, A: 255}) {
+		t.Fatalf("row 1 pixel = %v", c)
+	}
+}

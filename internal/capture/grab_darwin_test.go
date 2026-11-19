@@ -70,7 +70,7 @@ func TestGrabRealDisplays(t *testing.T) {
 		})
 	}
 
-	frames, err := Grab(ctx, displays)
+	frames, err := Grab(ctx, displays, "SnipGo 选区")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,5 +87,48 @@ func TestGrabRealDisplays(t *testing.T) {
 		if got.Dx() != wantW || got.Dy() != wantH {
 			t.Fatalf("显示器 %d 画面 %dx%d，要 %dx%d", displays[i].ID, got.Dx(), got.Dy(), wantW, wantH)
 		}
+	}
+
+	// 验证局部 sourceRect 截图像素尺寸准确。
+	sub := image.Rect(10, 10, min(110, displays[0].Bounds.Max.X), min(90, displays[0].Bounds.Max.Y))
+	if sub.Dx() >= 10 && sub.Dy() >= 10 {
+		subImg, err := GrabRect(ctx, displays[:1], sub, "SnipGo 选区")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantSubW := crop.DIPToPixel(sub.Max.X, 0, displays[0].Scale) - crop.DIPToPixel(sub.Min.X, 0, displays[0].Scale)
+		wantSubH := crop.DIPToPixel(sub.Max.Y, 0, displays[0].Scale) - crop.DIPToPixel(sub.Min.Y, 0, displays[0].Scale)
+		if subImg.Bounds().Dx() != wantSubW || subImg.Bounds().Dy() != wantSubH {
+			t.Fatalf("GrabRect 尺寸 %v，要 %dx%d", subImg.Bounds().Size(), wantSubW, wantSubH)
+		}
+	}
+}
+
+func TestVisibleWindowsDoesNotCrash(t *testing.T) {
+	front, wins := VisibleWindows(image.Pt(500, 500), nil, "SnipGo 选区")
+	if !front.Empty() && (front.Dx() < minDetectWindowDIP || front.Dy() < minDetectWindowDIP) {
+		t.Fatalf("bad front window %v", front)
+	}
+	for _, w := range wins {
+		if w.Empty() {
+			t.Fatalf("empty window rect %v", w)
+		}
+	}
+}
+
+func TestSourceRectConfigRoundTrip(t *testing.T) {
+	if err := loadFrameworks(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := objc.ID(objc.GetClass("SCStreamConfiguration")).Send(selAlloc).Send(selInit)
+	if cfg == 0 {
+		t.Fatal("failed to alloc SCStreamConfiguration")
+	}
+	defer cfg.Send(selRelease)
+	want := cgRect{X: 12, Y: 34, W: 320, H: 180}
+	msgSetRect(cfg, selSetSourceRect, want)
+	got := objc.Send[cgRect](cfg, objc.RegisterName("sourceRect"))
+	if got != want {
+		t.Fatalf("sourceRect round-trip got %+v, want %+v", got, want)
 	}
 }

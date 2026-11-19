@@ -142,3 +142,54 @@ func TestCropRejectsEmptyAndBadScreen(t *testing.T) {
 		t.Fatal("pixel size does not match the scale")
 	}
 }
+
+func TestPixelSizeMatchesCrop(t *testing.T) {
+	screens := []Screen{
+		{Bounds: image.Rect(0, 0, 100, 100), Scale: 2, Pixels: solid(200, 200, color.NRGBA{A: 255})},
+		{Bounds: image.Rect(100, 0, 200, 100), Scale: 1, Pixels: solid(100, 100, color.NRGBA{A: 255})},
+	}
+	for _, sel := range []image.Rectangle{
+		image.Rect(10, 15, 30, 45),
+		image.Rect(90, 10, 110, 20),
+		image.Rect(150, 20, 120, 5),
+	} {
+		img, err := Crop(screens, sel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, h := PixelSize(screens, sel)
+		if w != img.Bounds().Dx() || h != img.Bounds().Dy() {
+			t.Fatalf("sel %v: PixelSize=(%d,%d), Crop=%v", sel, w, h, img.Bounds().Size())
+		}
+	}
+	if w, h := PixelSize(screens, image.Rectangle{}); w != 0 || h != 0 {
+		t.Fatalf("empty selection got %dx%d", w, h)
+	}
+	// 实时透明蒙层下 Pixels 为 nil 时 PixelSize 仍能算出一致像素尺寸。
+	liveScreens := []Screen{
+		{Bounds: image.Rect(0, 0, 100, 100), Scale: 2},
+		{Bounds: image.Rect(100, 0, 200, 100), Scale: 1},
+	}
+	if w, h := PixelSize(liveScreens, image.Rect(90, 10, 110, 20)); w != 40 || h != 20 {
+		t.Fatalf("live PixelSize got %dx%d, want 40x20", w, h)
+	}
+}
+
+func TestStitchAcrossScales(t *testing.T) {
+	red := color.NRGBA{R: 255, A: 255}
+	blue := color.NRGBA{B: 255, A: 255}
+	tiles := []Tile{
+		{Bounds: image.Rect(90, 10, 100, 20), Scale: 2, Pixels: solid(20, 20, red)},
+		{Bounds: image.Rect(100, 10, 110, 20), Scale: 1, Pixels: solid(10, 10, blue)},
+	}
+	got, err := Stitch(tiles, image.Rect(90, 10, 110, 20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Bounds().Dx() != 40 || got.Bounds().Dy() != 20 {
+		t.Fatalf("stitch size %v, want 40x20", got.Bounds().Size())
+	}
+	if got.NRGBAAt(0, 0) != red || got.NRGBAAt(19, 19) != red || got.NRGBAAt(20, 0) != blue || got.NRGBAAt(39, 19) != blue {
+		t.Fatal("stitched pixel mismatch")
+	}
+}

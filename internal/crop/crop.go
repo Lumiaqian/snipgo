@@ -29,6 +29,103 @@ func DIPToPixel(dip, origin int, scale float64) int {
 	return int(math.Round(float64(dip-origin) * scale))
 }
 
+// Tile 是一块已按屏幕交集裁好的局部像素块（用于实时框选确认后的局部采集拼接）。
+type Tile struct {
+	Bounds image.Rectangle // 该局部块覆盖的全局 DIP 矩形
+	Scale  float64
+	Pixels *image.NRGBA
+}
+
+// PixelSize 返回选区 sel 裁剪后将生成的像素宽高，不要求 Screen.Pixels 已加载。
+// 选区无效或没有命中合法屏幕时返回 0, 0。
+func PixelSize(screens []Screen, sel image.Rectangle) (int, int) {
+	sel = sel.Canon()
+	if sel.Empty() {
+		return 0, 0
+	}
+	var hit []Screen
+	for _, s := range screens {
+		if sel.Intersect(s.Bounds.Canon()).Empty() {
+			continue
+		}
+		if !validScale(s.Scale) {
+			return 0, 0
+		}
+		hit = append(hit, s)
+	}
+	switch len(hit) {
+	case 0:
+		return 0, 0
+	case 1:
+		b := hit[0].Bounds.Canon()
+		inter := sel.Intersect(b)
+		w := DIPToPixel(inter.Max.X, b.Min.X, hit[0].Scale) - DIPToPixel(inter.Min.X, b.Min.X, hit[0].Scale)
+		h := DIPToPixel(inter.Max.Y, b.Min.Y, hit[0].Scale) - DIPToPixel(inter.Min.Y, b.Min.Y, hit[0].Scale)
+		if w <= 0 || h <= 0 {
+			return 0, 0
+		}
+		return w, h
+	default:
+		canvas := maxScale(hit)
+		w := DIPToPixel(sel.Max.X, sel.Min.X, canvas)
+		h := DIPToPixel(sel.Max.Y, sel.Min.Y, canvas)
+		if w <= 0 || h <= 0 {
+			return 0, 0
+		}
+		return w, h
+	}
+}
+
+// Stitch 把多块屏各自局部截出的 Tile 拼接成一张完整选区图。
+// 单块屏直接返回原图；跨多块不同缩放屏时按最大缩放最近邻放大拼接。
+func Stitch(tiles []Tile, sel image.Rectangle) (*image.NRGBA, error) {
+	sel = sel.Canon()
+	if sel.Empty() || len(tiles) == 0 {
+		return nil, errNoOverlap
+	}
+	for _, t := range tiles {
+		if !validScale(t.Scale) {
+			return nil, errBadScale
+		}
+		if t.Pixels == nil || t.Pixels.Bounds().Empty() {
+			return nil, errNoPixels
+		}
+	}
+	if len(tiles) == 1 {
+		p := tiles[0].Pixels
+		if p.Bounds().Min == (image.Point{}) {
+			return p, nil
+		}
+		return copyRect(p, p.Bounds()), nil
+	}
+	canvas := tiles[0].Scale
+	for _, t := range tiles[1:] {
+		if t.Scale > canvas {
+			canvas = t.Scale
+		}
+	}
+	outW := DIPToPixel(sel.Max.X, sel.Min.X, canvas)
+	outH := DIPToPixel(sel.Max.Y, sel.Min.Y, canvas)
+	if outW <= 0 || outH <= 0 {
+		return nil, errNoOverlap
+	}
+	dst := image.NewNRGBA(image.Rect(0, 0, outW, outH))
+	for _, t := range tiles {
+		inter := sel.Intersect(t.Bounds.Canon())
+		if inter.Empty() {
+			continue
+		}
+		dr := image.Rect(
+			DIPToPixel(inter.Min.X, sel.Min.X, canvas),
+			DIPToPixel(inter.Min.Y, sel.Min.Y, canvas),
+			DIPToPixel(inter.Max.X, sel.Min.X, canvas),
+			DIPToPixel(inter.Max.Y, sel.Min.Y, canvas),
+		)
+		blit(dst, dr, t.Pixels, t.Pixels.Bounds())
+	}
+	return dst, nil
+}
+
 // Crop 裁出 sel 覆盖到的像素。sel 可以是反向拖出的。
 // 只碰到一块屏时按该屏的缩放取像素，不重采样。
 // 碰到多块屏时，画布用其中最大的缩放，较稀的区域按最近邻放大。
@@ -56,8 +153,12 @@ func Crop(screens []Screen, sel image.Rectangle) (*image.NRGBA, error) {
 	return cropMany(hit, sel)
 }
 
+func validScale(scale float64) bool {
+	return scale > 0 && !math.IsNaN(scale) && !math.IsInf(scale, 0)
+}
+
 func check(s Screen) error {
-	if s.Scale <= 0 || math.IsNaN(s.Scale) || math.IsInf(s.Scale, 0) {
+	if !validScale(s.Scale) {
 		return errBadScale
 	}
 	if s.Pixels == nil {
@@ -81,13 +182,18 @@ func cropOne(s Screen, sel image.Rectangle) (*image.NRGBA, error) {
 	return copyRect(s.Pixels, src), nil
 }
 
-func cropMany(screens []Screen, sel image.Rectangle) (*image.NRGBA, error) {
+func maxScale(screens []Screen) float64 {
 	canvas := screens[0].Scale
 	for _, s := range screens[1:] {
 		if s.Scale > canvas {
 			canvas = s.Scale
 		}
 	}
+	return canvas
+}
+
+func cropMany(screens []Screen, sel image.Rectangle) (*image.NRGBA, error) {
+	canvas := maxScale(screens)
 	outW := DIPToPixel(sel.Max.X, sel.Min.X, canvas)
 	outH := DIPToPixel(sel.Max.Y, sel.Min.Y, canvas)
 	if outW <= 0 || outH <= 0 {

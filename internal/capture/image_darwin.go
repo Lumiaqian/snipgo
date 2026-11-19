@@ -31,7 +31,11 @@ func imageFromBGRA(raw []byte, width, height, stride int, bitmapInfo uint32) (*i
 
 // bgraToNRGBA 把 BGRA 行复制成从 (0,0) 起的 NRGBA。premul 为真时按 alpha 还原颜色。
 func bgraToNRGBA(raw []byte, width, height, stride int, premul bool) (*image.NRGBA, error) {
-	if width <= 0 || height <= 0 || stride < width*4 || len(raw) < stride*height {
+	if width <= 0 || height <= 0 || stride < width*4 {
+		return nil, fmt.Errorf("画面缓冲区是 %dx%d stride %d，字节 %d", width, height, stride, len(raw))
+	}
+	minBytes := (height-1)*stride + width*4
+	if len(raw) < minBytes {
 		return nil, fmt.Errorf("画面缓冲区是 %dx%d stride %d，字节 %d", width, height, stride, len(raw))
 	}
 	dst := image.NewNRGBA(image.Rect(0, 0, width, height))

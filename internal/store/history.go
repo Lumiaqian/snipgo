@@ -1,0 +1,197 @@
+// Package store 管理最近截图的本地有界环形历史（PNG 文件落盘 + 元数据索引，超出上限自动清理旧文件）。
+package store
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"image"
+	"image/draw"
+	"image/png"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+const DefaultMaxEntries = 20
+
+// Entry 表示一条历史截图记录。
+type Entry struct {
+	ID        string    `json:"id"`
+	FileName  string    `json:"file_name"`
+	FilePath  string    `json:"-"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// HistoryStore 管理磁盘上的截图历史。
+type HistoryStore struct {
+	mu      sync.Mutex
+	dir     string
+	max     int
+	seq     uint64
+	entries []Entry
+}
+
+// Open 打开或创建指定目录下的截图历史仓库。
+func Open(baseDir string, maxEntries int) (*HistoryStore, error) {
+	if maxEntries <= 0 {
+		maxEntries = DefaultMaxEntries
+	}
+	dir := filepath.Join(baseDir, "history")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	s := &HistoryStore{
+		dir: dir,
+		max: maxEntries,
+	}
+	s.loadIndex()
+	return s, nil
+}
+
+func (s *HistoryStore) indexPath() string {
+	return filepath.Join(s.dir, "index.json")
+}
+
+func (s *HistoryStore) loadIndex() {
+	data, err := os.ReadFile(s.indexPath())
+	if err != nil {
+		return
+	}
+	var raw []Entry
+	if json.Unmarshal(data, &raw) != nil {
+		return
+	}
+	valid := make([]Entry, 0, len(raw))
+	for _, e := range raw {
+		if e.FileName == "" {
+			continue
+		}
+		full := filepath.Join(s.dir, filepath.Base(e.FileName))
+		if st, err := os.Stat(full); err == nil && !st.IsDir() {
+			e.FilePath = full
+			valid = append(valid, e)
+		}
+	}
+	if len(valid) > s.max {
+		for _, old := range valid[s.max:] {
+			_ = os.Remove(old.FilePath)
+		}
+		valid = valid[:s.max]
+	}
+	s.entries = valid
+}
+
+func (s *HistoryStore) saveIndexLocked() {
+	data, err := json.MarshalIndent(s.entries, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := s.indexPath() + ".tmp"
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Rename(tmp, s.indexPath())
+	}
+}
+
+// Add 写入一张新截图 PNG 到历史记录（最新排在最前），自动淘汰超出容量上限的旧文件。
+func (s *HistoryStore) Add(pngBytes []byte, w, h int) (Entry, error) {
+	if len(pngBytes) == 0 {
+		return Entry{}, fmt.Errorf("empty png data")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.seq++
+	now := time.Now()
+	id := fmt.Sprintf("%s-%d", now.Format("20060102-150405"), s.seq)
+	fname := "SnipGo-" + id + ".png"
+	fpath := filepath.Join(s.dir, fname)
+	if err := os.WriteFile(fpath, pngBytes, 0o644); err != nil {
+		return Entry{}, err
+	}
+
+	entry := Entry{
+		ID:        id,
+		FileName:  fname,
+		FilePath:  fpath,
+		Width:     w,
+		Height:    h,
+		CreatedAt: now,
+	}
+	next := make([]Entry, 0, min(s.max, len(s.entries)+1))
+	next = append(next, entry)
+	for _, old := range s.entries {
+		if len(next) < s.max {
+			next = append(next, old)
+		} else {
+			_ = os.Remove(old.FilePath)
+		}
+	}
+	s.entries = next
+	s.saveIndexLocked()
+	return entry, nil
+}
+
+// List 返回按时间倒序（最新在前）的历史截图副本。
+func (s *HistoryStore) List() []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Entry, len(s.entries))
+	copy(out, s.entries)
+	return out
+}
+
+// Count 返回当前历史条数。
+func (s *HistoryStore) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.entries)
+}
+
+// Delete 删除单条历史记录及其磁盘文件。
+func (s *HistoryStore) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.entries {
+		if e.ID == id {
+			_ = os.Remove(e.FilePath)
+			s.entries = append(s.entries[:i], s.entries[i+1:]...)
+			s.saveIndexLocked()
+			return true
+		}
+	}
+	return false
+}
+
+// Clear 清空所有历史截图记录及磁盘文件。
+func (s *HistoryStore) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.entries {
+		_ = os.Remove(e.FilePath)
+	}
+	s.entries = nil
+	s.saveIndexLocked()
+}
+
+// Load 读取某条历史记录的原始 PNG 字节与解码后的 NRGBA 位图。
+func Load(e Entry) (*image.NRGBA, []byte, error) {
+	data, err := os.ReadFile(e.FilePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	decoded, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil, err
+	}
+	if nrgba, ok := decoded.(*image.NRGBA); ok {
+		return nrgba, data, nil
+	}
+	b := decoded.Bounds()
+	out := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(out, out.Bounds(), decoded, b.Min, draw.Src)
+	return out, data, nil
+}
