@@ -2,7 +2,6 @@
 package beautify
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -21,7 +20,14 @@ const (
 	PresetSunset
 	PresetEmerald
 	PresetSlate
+	PresetAuto
 )
+
+// CardOptions 控制美化卡片的渐变风格与仿真 macOS 窗口顶栏装饰。
+type CardOptions struct {
+	Preset       Preset
+	WindowChrome bool
+}
 
 type gradientSpec struct {
 	c0, c1, c2 color.NRGBA
@@ -48,6 +54,11 @@ var presets = [...]gradientSpec{
 		c1: color.NRGBA{R: 24, G: 24, B: 30, A: 255},
 		c2: color.NRGBA{R: 52, G: 56, B: 68, A: 255},
 	},
+	PresetAuto: {
+		c0: color.NRGBA{R: 56, G: 189, B: 248, A: 255},
+		c1: color.NRGBA{R: 168, G: 85, B: 247, A: 255},
+		c2: color.NRGBA{R: 244, G: 114, B: 182, A: 255},
+	},
 }
 
 // PresetName 返回预设中文名称。
@@ -59,6 +70,8 @@ func PresetName(p Preset) string {
 		return "翡翠极光"
 	case PresetSlate:
 		return "深空暗灰"
+	case PresetAuto:
+		return "主色自适应"
 	default:
 		return "海湾深蓝"
 	}
@@ -75,17 +88,33 @@ func PresetColors(p Preset) (color.NRGBA, color.NRGBA) {
 
 // RenderCard 给原图 src 添加平滑圆角、多层柔和投影与渐变衬底背景。
 func RenderCard(src *image.NRGBA, scale float64, preset Preset) *image.NRGBA {
+	return RenderCardWithOptions(src, scale, CardOptions{Preset: preset})
+}
+
+// RenderCardWithOptions 支持主色调自适应流体渐变（PresetAuto）与仿真 macOS 红黄绿交通灯顶栏 + 1px 玻璃内描边。
+func RenderCardWithOptions(src *image.NRGBA, scale float64, opts CardOptions) *image.NRGBA {
 	if src == nil || src.Bounds().Empty() {
 		return src
 	}
 	if scale <= 0 {
 		scale = 2.0
 	}
+	preset := opts.Preset
 	if int(preset) < 0 || int(preset) >= len(presets) {
 		preset = PresetOcean
 	}
-	spec := presets[preset]
-	sb := src.Bounds()
+	var spec gradientSpec
+	if preset == PresetAuto {
+		spec = ExtractDominantGradient(src)
+	} else {
+		spec = presets[preset]
+	}
+
+	content := src
+	if opts.WindowChrome {
+		content = wrapWithMacOSChrome(src, scale)
+	}
+	sb := content.Bounds()
 	sw, sh := sb.Dx(), sb.Dy()
 
 	pad := max(32, int(math.Round(44*scale)))
@@ -95,7 +124,11 @@ func RenderCard(src *image.NRGBA, scale float64, preset Preset) *image.NRGBA {
 	radius := min(12.0*scale, float64(min(sw, sh))*0.2)
 
 	out := image.NewNRGBA(image.Rect(0, 0, outW, outH))
-	fillGradient(out, spec)
+	if preset == PresetAuto {
+		fillFluidGradient(out, spec)
+	} else {
+		fillGradient(out, spec)
+	}
 
 	ix0, iy0 := float64(pad), float64(pad)
 	ix1, iy1 := float64(pad+sw), float64(pad+sh)
@@ -125,7 +158,11 @@ func RenderCard(src *image.NRGBA, scale float64, preset Preset) *image.NRGBA {
 		}
 	}
 
-	// 绘制圆角裁剪后的原图与 1px 高光细描边。
+	// 绘制圆角裁剪后的内容与 1px 玻璃高光内描边。
+	rimAlpha := 0.24
+	if opts.WindowChrome {
+		rimAlpha = 0.34
+	}
 	for y := 0; y < sh; y++ {
 		dy := pad + y
 		py := float64(dy) + 0.5
@@ -140,17 +177,275 @@ func RenderCard(src *image.NRGBA, scale float64, preset Preset) *image.NRGBA {
 			if d > -0.5 {
 				cov = 0.5 - d
 			}
-			pxCol := src.NRGBAAt(sb.Min.X+x, sb.Min.Y+y)
+			pxCol := content.NRGBAAt(sb.Min.X+x, sb.Min.Y+y)
 			blendPixel(out, dx, dy, pxCol, cov*(float64(pxCol.A)/255.0))
-			// 边缘 1px 微弱白边提升精致感
 			rimDist := math.Abs(d+0.5*scale) - 0.5*scale
 			if rimDist < 0.5 {
-				rimCov := max(0, min(1, 0.5-rimDist)) * 0.22
-				blendPixel(out, dx, dy, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, rimCov)
+				// 顶部边缘反射略强，模拟 macOS 玻璃窗体顶缘受光。
+				topBoost := 1.0
+				if float64(y) < float64(sh)*0.22 {
+					topBoost = 1.35
+				}
+				rimCov := max(0, min(1, 0.5-rimDist)) * rimAlpha * topBoost
+				blendPixel(out, dx, dy, color.NRGBA{R: 255, G: 255, B: 255, A: 255}, min(0.55, rimCov))
 			}
 		}
 	}
 	return out
+}
+
+// ExtractDominantGradient 从截图中采样高饱和主色与明度，生成和谐且有层次的 3 色流体渐变。
+func ExtractDominantGradient(src *image.NRGBA) gradientSpec {
+	if src == nil || src.Bounds().Empty() {
+		return presets[PresetAuto]
+	}
+	b := src.Bounds()
+	stepX := max(1, b.Dx()/28)
+	stepY := max(1, b.Dy()/28)
+
+	// 按 12 个色相桶累计饱和度加权 RGB，优先挑选画面中最具代表性的品牌/重点色。
+	type bucket struct {
+		weight  float64
+		r, g, b float64
+	}
+	var buckets [12]bucket
+	var avgLuma float64
+	var totalN float64
+
+	for y := b.Min.Y; y < b.Max.Y; y += stepY {
+		for x := b.Min.X; x < b.Max.X; x += stepX {
+			c := src.NRGBAAt(x, y)
+			if c.A < 128 {
+				continue
+			}
+			r, g, bl := float64(c.R)/255.0, float64(c.G)/255.0, float64(c.B)/255.0
+			mx := max(r, max(g, bl))
+			mn := min(r, min(g, bl))
+			luma := 0.299*r + 0.587*g + 0.114*bl
+			avgLuma += luma
+			totalN++
+
+			sat := 0.0
+			if mx > 0.001 {
+				sat = (mx - mn) / mx
+			}
+			if sat < 0.14 || mx < 0.12 || mn > 0.92 {
+				continue
+			}
+			hue := rgbHue(r, g, bl, mx, mn)
+			bi := int(hue/30.0) % 12
+			w := sat * sat * (0.4 + 0.6*(1.0-math.Abs(luma-0.5)*1.4))
+			if w > 0 {
+				buckets[bi].weight += w
+				buckets[bi].r += float64(c.R) * w
+				buckets[bi].g += float64(c.G) * w
+				buckets[bi].b += float64(c.B) * w
+			}
+		}
+	}
+	if totalN > 0 {
+		avgLuma /= totalN
+	}
+	bestIdx := -1
+	bestW := 0.0
+	for i, bk := range buckets {
+		if bk.weight > bestW {
+			bestW = bk.weight
+			bestIdx = i
+		}
+	}
+	// 无明显彩色像素（纯黑白灰界面）时，根据明暗生成雅致冷调极光渐变。
+	if bestIdx < 0 || bestW < 0.5 {
+		if avgLuma < 0.45 {
+			return gradientSpec{
+				c0: color.NRGBA{R: 56, G: 112, B: 235, A: 255},
+				c1: color.NRGBA{R: 99, G: 72, B: 224, A: 255},
+				c2: color.NRGBA{R: 24, G: 168, B: 204, A: 255},
+			}
+		}
+		return gradientSpec{
+			c0: color.NRGBA{R: 120, G: 158, B: 240, A: 255},
+			c1: color.NRGBA{R: 158, G: 130, B: 238, A: 255},
+			c2: color.NRGBA{R: 96, G: 196, B: 222, A: 255},
+		}
+	}
+
+	bk := buckets[bestIdx]
+	baseR, baseG, baseB := bk.r/bk.weight/255.0, bk.g/bk.weight/255.0, bk.b/bk.weight/255.0
+	mx := max(baseR, max(baseG, baseB))
+	mn := min(baseR, min(baseG, baseB))
+	h0 := rgbHue(baseR, baseG, baseB, mx, mn)
+
+	// 围绕提取主色相做 ±34° 邻近和谐色偏移，并自动调节明度与截图形成通透反差。
+	litMain := 0.54
+	litDeep := 0.36
+	if avgLuma > 0.65 {
+		litMain = 0.48
+		litDeep = 0.32
+	}
+	return gradientSpec{
+		c0: hslToNRGBA(math.Mod(h0-28+360, 360), 0.72, litMain),
+		c1: hslToNRGBA(h0, 0.68, litDeep),
+		c2: hslToNRGBA(math.Mod(h0+42, 360), 0.76, litMain+0.06),
+	}
+}
+
+func wrapWithMacOSChrome(src *image.NRGBA, scale float64) *image.NRGBA {
+	sb := src.Bounds()
+	sw, sh := sb.Dx(), sb.Dy()
+	barH := max(24, int(math.Round(28*scale)))
+
+	// 采样原图顶部边缘明度，自动决定浅色或深色 macOS 窗口顶栏。
+	var sumLuma float64
+	var n int
+	step := max(1, sw/32)
+	for x := sb.Min.X; x < sb.Max.X; x += step {
+		c := src.NRGBAAt(x, sb.Min.Y)
+		sumLuma += 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+		n++
+	}
+	isDark := n == 0 || (sumLuma/float64(n)) < 138
+
+	barTop := color.NRGBA{R: 46, G: 48, B: 56, A: 255}
+	barBot := color.NRGBA{R: 36, G: 38, B: 46, A: 255}
+	divider := color.NRGBA{R: 255, G: 255, B: 255, A: 22}
+	if !isDark {
+		barTop = color.NRGBA{R: 244, G: 245, B: 248, A: 255}
+		barBot = color.NRGBA{R: 232, G: 234, B: 240, A: 255}
+		divider = color.NRGBA{R: 0, G: 0, B: 0, A: 24}
+	}
+
+	out := image.NewNRGBA(image.Rect(0, 0, sw, sh+barH))
+	for y := range barH {
+		t := float64(y) / float64(max(1, barH-1))
+		rowCol := lerpColor(barTop, barBot, t)
+		for x := range sw {
+			out.SetNRGBA(x, y, rowCol)
+		}
+	}
+	// 1px 分割细线
+	divH := max(1, int(math.Round(scale*0.6)))
+	for y := barH - divH; y < barH; y++ {
+		for x := range sw {
+			blendPixel(out, x, y, divider, float64(divider.A)/255.0)
+		}
+	}
+	// 绘制抗锯齿红/黄/绿交通灯圆点
+	lights := [3]struct {
+		fill   color.NRGBA
+		stroke color.NRGBA
+	}{
+		{color.NRGBA{R: 255, G: 95, B: 86, A: 255}, color.NRGBA{R: 224, G: 68, B: 62, A: 255}},
+		{color.NRGBA{R: 255, G: 189, B: 46, A: 255}, color.NRGBA{R: 222, G: 161, B: 35, A: 255}},
+		{color.NRGBA{R: 39, G: 201, B: 63, A: 255}, color.NRGBA{R: 26, G: 171, B: 41, A: 255}},
+	}
+	dotR := 5.6 * scale
+	dotY := float64(barH) * 0.5
+	startX := 16.0 * scale
+	spacing := 19.0 * scale
+	for i, lt := range lights {
+		cx := startX + float64(i)*spacing
+		minX := max(0, int(math.Floor(cx-dotR-2)))
+		maxX := min(sw, int(math.Ceil(cx+dotR+2)))
+		minY := max(0, int(math.Floor(dotY-dotR-2)))
+		maxY := min(barH, int(math.Ceil(dotY+dotR+2)))
+		for y := minY; y < maxY; y++ {
+			for x := minX; x < maxX; x++ {
+				d := math.Hypot(float64(x)+0.5-cx, float64(y)+0.5-dotY) - dotR
+				if d < 0.5 {
+					cov := min(1, 0.5-d)
+					blendPixel(out, x, y, lt.fill, cov)
+					if d > -1.0*scale {
+						blendPixel(out, x, y, lt.stroke, cov*0.45)
+					}
+				}
+			}
+		}
+	}
+	// 原图拷贝到顶栏下方
+	for y := range sh {
+		sOff := src.PixOffset(sb.Min.X, sb.Min.Y+y)
+		dOff := out.PixOffset(0, barH+y)
+		copy(out.Pix[dOff:dOff+sw*4], src.Pix[sOff:sOff+sw*4])
+	}
+	return out
+}
+
+func fillFluidGradient(dst *image.NRGBA, g gradientSpec) {
+	b := dst.Bounds()
+	w := float64(max(1, b.Dx()-1))
+	h := float64(max(1, b.Dy()-1))
+	for y := 0; y < b.Dy(); y++ {
+		fy := float64(y) / h
+		for x := 0; x < b.Dx(); x++ {
+			fx := float64(x) / w
+			// 三个柔和径向光斑混合模拟 Apple 流体渐变背景。
+			d0 := math.Hypot(fx-0.18, fy-0.22)
+			d1 := math.Hypot(fx-0.84, fy-0.28)
+			d2 := math.Hypot(fx-0.52, fy-0.88)
+			w0 := math.Exp(-d0 * d0 * 2.1)
+			w1 := math.Exp(-d1 * d1 * 2.1)
+			w2 := math.Exp(-d2 * d2 * 1.9)
+			ws := w0 + w1 + w2
+			r := (float64(g.c0.R)*w0 + float64(g.c1.R)*w1 + float64(g.c2.R)*w2) / ws
+			gr := (float64(g.c0.G)*w0 + float64(g.c1.G)*w1 + float64(g.c2.G)*w2) / ws
+			bl := (float64(g.c0.B)*w0 + float64(g.c1.B)*w1 + float64(g.c2.B)*w2) / ws
+			dst.SetNRGBA(b.Min.X+x, b.Min.Y+y, color.NRGBA{
+				R: uint8(max(0, min(255, math.Round(r)))),
+				G: uint8(max(0, min(255, math.Round(gr)))),
+				B: uint8(max(0, min(255, math.Round(bl)))),
+				A: 255,
+			})
+		}
+	}
+}
+
+func rgbHue(r, g, b, mx, mn float64) float64 {
+	d := mx - mn
+	if d < 1e-6 {
+		return 0
+	}
+	var h float64
+	switch mx {
+	case r:
+		h = math.Mod((g-b)/d, 6)
+	case g:
+		h = (b-r)/d + 2
+	default:
+		h = (r-g)/d + 4
+	}
+	h *= 60
+	if h < 0 {
+		h += 360
+	}
+	return h
+}
+
+func hslToNRGBA(h, s, l float64) color.NRGBA {
+	c := (1 - math.Abs(2*l-1)) * s
+	x := c * (1 - math.Abs(math.Mod(h/60.0, 2)-1))
+	m := l - c/2
+	var r, g, b float64
+	switch {
+	case h < 60:
+		r, g, b = c, x, 0
+	case h < 120:
+		r, g, b = x, c, 0
+	case h < 180:
+		r, g, b = 0, c, x
+	case h < 240:
+		r, g, b = 0, x, c
+	case h < 300:
+		r, g, b = x, 0, c
+	default:
+		r, g, b = c, 0, x
+	}
+	return color.NRGBA{
+		R: uint8(max(0, min(255, math.Round((r+m)*255)))),
+		G: uint8(max(0, min(255, math.Round((g+m)*255)))),
+		B: uint8(max(0, min(255, math.Round((b+m)*255)))),
+		A: 255,
+	}
 }
 
 var (
@@ -211,40 +506,67 @@ func RenderTextPin(raw string, scale float64) *image.NRGBA {
 }
 
 func renderColorSwatchCard(col color.NRGBA, scale float64) *image.NRGBA {
-	w := int(math.Round(240 * scale))
-	h := int(math.Round(96 * scale))
+	w := int(math.Round(308 * scale))
+	h := int(math.Round(114 * scale))
 	out := image.NewNRGBA(image.Rect(0, 0, w, h))
-	bg := color.NRGBA{R: 28, G: 28, B: 34, A: 255}
+	bg := color.NRGBA{R: 26, G: 27, B: 32, A: 255}
 	fillSolid(out, bg)
 
-	swSize := int(math.Round(64 * scale))
+	swSize := int(math.Round(82 * scale))
 	pad := int(math.Round(16 * scale))
+	cx := float64(pad) + float64(swSize)*0.5
+	cy := float64(pad) + float64(swSize)*0.5
+	half := float64(swSize) * 0.5
+	swRad := 10.0 * scale
 	for y := pad; y < pad+swSize; y++ {
 		for x := pad; x < pad+swSize; x++ {
-			out.SetNRGBA(x, y, col)
+			d := roundedRectSDF(float64(x)+0.5-cx, float64(y)+0.5-cy, half, half, swRad)
+			if d < 0.5 {
+				blendPixel(out, x, y, col, min(1, 0.5-d))
+			}
 		}
 	}
 
-	hexStr := fmt.Sprintf("#%02X%02X%02X", col.R, col.G, col.B)
-	rgbStr := fmt.Sprintf("rgb(%d, %d, %d)", col.R, col.G, col.B)
+	hexStr := FormatColor(col, ColorHEX)
+	rgbStr := FormatColor(col, ColorRGB)
+	oklchStr := FormatColor(col, ColorOKLCH)
+	twStr := "Tailwind: " + NearestTailwind(col)
 	title := textrender.Render(hexStr, textrender.Options{
-		FontSize:  18 * scale,
+		FontSize:  17.5 * scale,
 		Weight:    0.4,
 		Monospace: true,
 		Color:     color.NRGBA{R: 250, G: 250, B: 252, A: 255},
 	})
-	sub := textrender.Render(rgbStr, textrender.Options{
-		FontSize:  12.5 * scale,
+	sub1 := textrender.Render(rgbStr, textrender.Options{
+		FontSize:  11.5 * scale,
 		Weight:    0.2,
 		Monospace: true,
-		Color:     color.NRGBA{R: 168, G: 172, B: 184, A: 255},
+		Color:     color.NRGBA{R: 184, G: 190, B: 204, A: 255},
+	})
+	sub2 := textrender.Render(oklchStr, textrender.Options{
+		FontSize:  11 * scale,
+		Weight:    0.2,
+		Monospace: true,
+		Color:     color.NRGBA{R: 148, G: 162, B: 186, A: 255},
+	})
+	sub3 := textrender.Render(twStr, textrender.Options{
+		FontSize:  11 * scale,
+		Weight:    0.3,
+		Monospace: true,
+		Color:     color.NRGBA{R: 112, G: 206, B: 255, A: 255},
 	})
 	tx := pad*2 + swSize
 	if title != nil {
-		stamp(out, title, tx, int(math.Round(22*scale)))
+		stamp(out, title, tx, int(math.Round(15*scale)))
 	}
-	if sub != nil {
-		stamp(out, sub, tx, int(math.Round(52*scale)))
+	if sub1 != nil {
+		stamp(out, sub1, tx, int(math.Round(42*scale)))
+	}
+	if sub2 != nil {
+		stamp(out, sub2, tx, int(math.Round(62*scale)))
+	}
+	if sub3 != nil {
+		stamp(out, sub3, tx, int(math.Round(82*scale)))
 	}
 	return out
 }

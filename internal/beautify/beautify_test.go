@@ -57,3 +57,55 @@ func TestParseColorAndRenderTextPin(t *testing.T) {
 		t.Fatal("expected code note card image")
 	}
 }
+
+func TestDeveloperColorFormatsAndPaletteCard(t *testing.T) {
+	sky := color.NRGBA{R: 14, G: 165, B: 233, A: 255}
+	if got := FormatColor(sky, ColorHEX); got != "#0EA5E9" {
+		t.Fatalf("HEX = %q, want #0EA5E9", got)
+	}
+	if got := FormatColor(sky, ColorRGB); got != "rgb(14, 165, 233)" {
+		t.Fatalf("RGB = %q", got)
+	}
+	oklch := FormatColor(sky, ColorOKLCH)
+	if len(oklch) < 10 || oklch[:6] != "oklch(" {
+		t.Fatalf("unexpected OKLCH: %q", oklch)
+	}
+	if tw := NearestTailwind(sky); tw != "sky-500" {
+		t.Fatalf("NearestTailwind = %q, want sky-500", tw)
+	}
+	pal := RenderPaletteCard([]color.NRGBA{
+		{R: 14, G: 165, B: 233, A: 255},
+		{R: 239, G: 68, B: 68, A: 255},
+		{R: 16, G: 185, B: 129, A: 255},
+	}, 2.0)
+	if pal == nil || pal.Bounds().Dx() < 600 || pal.Bounds().Dy() < 200 {
+		t.Fatalf("unexpected palette card size: %v", pal.Bounds())
+	}
+}
+
+func TestAutoDominantGradientAndMacOSChrome(t *testing.T) {
+	// 构造以深青绿色为主的界面截图
+	src := image.NewNRGBA(image.Rect(0, 0, 200, 120))
+	for y := range 120 {
+		for x := range 200 {
+			c := color.NRGBA{R: 24, G: 30, B: 38, A: 255}
+			if x > 30 && x < 170 && y > 30 && y < 90 {
+				c = color.NRGBA{R: 16, G: 185, B: 129, A: 255}
+			}
+			src.SetNRGBA(x, y, c)
+		}
+	}
+	card := RenderCardWithOptions(src, 1.0, CardOptions{
+		Preset:       PresetAuto,
+		WindowChrome: true,
+	})
+	if card == nil || card.Bounds().Dy() <= 120+28+64 {
+		t.Fatalf("expected taller card with macOS window chrome, got %v", card.Bounds())
+	}
+	// 验证红灯交通灯中心 (pad+16, pad+14) 确实呈红色
+	pad := 44
+	redDot := card.NRGBAAt(pad+16, pad+14)
+	if redDot.R < 220 || redDot.G > 120 {
+		t.Fatalf("expected macOS red traffic light at (%d,%d), got %+v", pad+16, pad+14, redDot)
+	}
+}
