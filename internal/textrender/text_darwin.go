@@ -23,7 +23,7 @@ type nsRect struct {
 }
 
 const (
-	nsUTF8StringEncoding        = 4
+	nsUTF8StringEncoding          = 4
 	cgImageAlphaPremultipliedLast = 1 // RGBA byte order
 )
 
@@ -42,13 +42,14 @@ var (
 	msgDrawInRect func(objc.ID, objc.SEL, nsRect, uintptr, objc.ID)
 	msgFont       func(objc.ID, objc.SEL, float64, float64) objc.ID
 	msgColor      func(objc.ID, objc.SEL, float64, float64, float64, float64) objc.ID
+	msgInitBytes  func(objc.ID, objc.SEL, *byte, uintptr, uintptr) objc.ID
 
 	selAlloc        = objc.RegisterName("alloc")
 	selInit         = objc.RegisterName("init")
 	selDrain        = objc.RegisterName("drain")
 	selInitBytes    = objc.RegisterName("initWithBytes:length:encoding:")
 	selAutorelease  = objc.RegisterName("autorelease")
-	selDictWithObjs = objc.RegisterName("dictionaryWithObjects:forKeys:count:")
+	selSetObjForKey = objc.RegisterName("setObject:forKey:")
 	selSysFont      = objc.RegisterName("systemFontOfSize:weight:")
 	selMonoFont     = objc.RegisterName("monospacedSystemFontOfSize:weight:")
 	selSRGBColor    = objc.RegisterName("colorWithSRGBRed:green:blue:alpha:")
@@ -99,6 +100,7 @@ func initAppKit() bool {
 		purego.RegisterFunc(&msgDrawInRect, msgSend)
 		purego.RegisterFunc(&msgFont, msgSend)
 		purego.RegisterFunc(&msgColor, msgSend)
+		purego.RegisterFunc(&msgInitBytes, msgSend)
 		loadOK = true
 	})
 	return loadOK
@@ -151,6 +153,9 @@ func renderNative(text string, opts Options) (*image.NRGBA, bool) {
 		fontSel = selMonoFont
 	}
 	font := msgFont(fontCls, fontSel, opts.FontSize, opts.Weight)
+	if font == 0 && opts.Monospace {
+		font = msgFont(fontCls, selSysFont, opts.FontSize, opts.Weight)
+	}
 	fg := msgColor(
 		objc.ID(objc.GetClass("NSColor")),
 		selSRGBColor,
@@ -159,14 +164,21 @@ func renderNative(text string, opts Options) (*image.NRGBA, bool) {
 		float64(opts.Color.B)/255,
 		float64(opts.Color.A)/255,
 	)
-	keys := [2]objc.ID{makeNSString("NSFont"), makeNSString("NSColor")}
-	vals := [2]objc.ID{font, fg}
-	attrs := objc.ID(objc.GetClass("NSDictionary")).Send(
-		selDictWithObjs,
-		uintptr(unsafe.Pointer(&vals[0])),
-		uintptr(unsafe.Pointer(&keys[0])),
-		uintptr(2),
-	)
+	if font == 0 || fg == 0 {
+		return nil, false
+	}
+	keyFont := makeNSString("NSFont")
+	keyColor := makeNSString("NSColor")
+	if keyFont == 0 || keyColor == 0 {
+		return nil, false
+	}
+	attrs := objc.ID(objc.GetClass("NSMutableDictionary")).Send(selAlloc).Send(selInit)
+	if attrs == 0 {
+		return nil, false
+	}
+	attrs.Send(selAutorelease)
+	attrs.Send(selSetObjForKey, font, keyFont)
+	attrs.Send(selSetObjForKey, fg, keyColor)
 
 	// NSStringDrawingUsesLineFragmentOrigin (1<<0) | NSStringDrawingUsesFontLeading (1<<1)
 	const drawOpts = uintptr(1<<0 | 1<<1)
@@ -235,14 +247,17 @@ func renderNative(text string, opts Options) (*image.NRGBA, bool) {
 }
 
 func makeNSString(s string) objc.ID {
-	b := unsafe.StringData(s)
-	str := objc.ID(objc.GetClass("NSString")).Send(selAlloc).Send(
-		selInitBytes,
-		uintptr(unsafe.Pointer(b)),
-		uintptr(len(s)),
-		uintptr(nsUTF8StringEncoding),
-	)
-	runtime.KeepAlive(s)
+	raw := objc.ID(objc.GetClass("NSString")).Send(selAlloc)
+	if raw == 0 {
+		return 0
+	}
+	var str objc.ID
+	if len(s) == 0 {
+		str = raw.Send(selInit)
+	} else {
+		str = msgInitBytes(raw, selInitBytes, unsafe.StringData(s), uintptr(len(s)), uintptr(nsUTF8StringEncoding))
+		runtime.KeepAlive(s)
+	}
 	if str != 0 {
 		str.Send(selAutorelease)
 	}
