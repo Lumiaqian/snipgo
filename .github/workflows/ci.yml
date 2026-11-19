@@ -1,0 +1,93 @@
+name: CI & Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Test & Package (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests, visual render checks, and vet
+        run: |
+          SNIPGO_PREVIEW_DIR="$(mktemp -d)" CGO_ENABLED=0 go test -count=1 ./...
+          go test -race -count=1 ./...
+          go tool mygo vet .
+          GOOS=linux CGO_ENABLED=0 go vet ./...
+
+      - name: Configure optional Developer ID signing & notarization
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_SIGNING_IDENTITY" ]; then
+            echo "No Developer ID certificate configured; using ad-hoc signing (-)."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+
+          jq --arg id "$MACOS_SIGNING_IDENTITY" '.macos.signingIdentity = $id' mygo.json > mygo.json.tmp
+          mv mygo.json.tmp mygo.json
+
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_PASSWORD" ]; then
+            xcrun notarytool store-credentials notary --keychain "$keychain" \
+              --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+            jq --arg kc "$keychain" '.macos.notarize = {keychainProfile: "notary", keychain: $kc}' mygo.json > mygo.json.tmp
+            mv mygo.json.tmp mygo.json
+          fi
+
+      - name: Build macOS bundles and DMGs (arm64, amd64, universal)
+        run: |
+          VERSION="$(jq -r '.version' mygo.json)"
+          go tool mygo build -platform "darwin/arm64,darwin/amd64,darwin/universal"
+
+          mkdir -p dist
+          cp "build/darwin-arm64/snipgo-${VERSION}-arm64.dmg" "dist/SnipGo-${VERSION}-arm64.dmg"
+          cp "build/darwin-amd64/snipgo-${VERSION}-amd64.dmg" "dist/SnipGo-${VERSION}-amd64.dmg"
+          cp "build/darwin-universal/snipgo-${VERSION}.dmg" "dist/SnipGo-${VERSION}-universal.dmg"
+
+          ditto -c -k --sequesterRsrc --keepParent "build/darwin-arm64/SnipGo.app" "dist/SnipGo-${VERSION}-arm64.app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "build/darwin-universal/SnipGo.app" "dist/SnipGo-${VERSION}-universal.app.zip"
+
+          (cd dist && shasum -a 256 SnipGo-* > SHA256SUMS.txt)
+          ls -lh dist/
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: SnipGo-macOS-${{ github.run_number }}
+          path: dist/*
+          if-no-files-found: error

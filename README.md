@@ -16,18 +16,51 @@ go tool mygo build    # 生成 .app / .dmg
 
 需要 macOS 14+（ScreenCaptureKit `SCScreenshotManager`）。首次使用需在系统设置中授予屏幕录制权限，授权后重开应用。
 
+## 自动打包与发版（GitHub Actions）
+
+仓库内置两条自动化流水线：
+
+- **日常构建与校验（`.github/workflows/ci.yml`）**：每次推送 `main`、发起 PR 或手动触发 `workflow_dispatch` 时，自动执行全套单测、`@2x` 渲染回归、`mygo vet` 与跨平台静态检查，并打包 `arm64` / `amd64` / `universal` 三套 `.dmg` 与 `.app.zip` 上传至 Actions Artifacts。
+- **标签自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（或在 Actions 页面手动填入版本号触发）即可自动构建并发布 GitHub Release（附带 `SHA256SUMS.txt`）：
+  ```sh
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+- **可选 Developer ID 签名与 Apple 公证**：未配置证书机密时默认使用 ad-hoc 签名打包；若在仓库 Secrets 中配置 `MACOS_CERTIFICATE`（Base64 `.p12`）、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（以及公证可选的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`），流水线会自动导入临时钥匙串完成正式签名与公证。
+
 ## 当前状态
 
-已打通核心闭环：`Cmd+Shift+2` → ScreenCaptureKit 冻结所有显示器 → 每屏一个蒙层框选 → 裁剪（支持跨屏、不同缩放）→ 写入剪贴板 → 在原位置悬浮贴图。
+已实现对齐 **Snipaste + Shottr + CleanShot** 核心体验的全功能截图与贴图闭环：
+
+- **实时透明框选（`Cmd+Shift+2`，默认）**：按下快捷键 **0ms 直接弹出透明选区蒙层**，选区内透出原生真实桌面；移动鼠标自动命中 Z 序最上层可见窗口，**单击**锁定窗口，**拖拽**自由框选；支持实时按 **`C`** 复制 `#RRGGBB`（`Shift+C` 复制 `R, G, B`）。
+- **冻结屏幕截图（`Ctrl+Cmd+2`）& 延时倒计时定格（`Ctrl+Shift+Cmd+2`）**：定格全屏画面再框选（支持 3s / 5s / 10s 倒计时从容展开右键菜单与悬停浮层），内置 `11×11` 像素放大镜与 **`R` 键十字射线像素测量尺**（自动吸附 UI 边缘测量宽高间距，单击复制 `W × H px`）。
+- **截图内矢量标注（`1`~`9`）& 点选二次编辑 & 一键敏感脱敏（`X`）**：
+  - 支持**矩形框（`1`）**、**真椭圆框（`2`）**、**流线型实心箭头（`3`）**、**均匀半透明荧光笔（`4`）**、**高对比度递增序号 `①②③`（`5`）**、**像素马赛克（`6`）**、**原生字体文字批注（`7`）**、**聚光灯高亮暗角（`8`）**、**四边插值无痕擦除（`9`）**。
+  - **一键敏感信息自动脱敏（`X`）**：基于离线 `Vision` 文本框定位自动识别 `sk-...` / `ghp_...` / `AKIA...` 密钥、手机号、邮箱、身份证与内网 IP，原地生成可撤销的无痕擦除框。
+  - **图元点选二次编辑**：单击已有标注即可平移、拖拽首尾控制点 `P0`/`P1`、实时换色改线宽、按 `Delete`/`⌫` 删除，支持多步快照 `Cmd+Z` / `Shift+Cmd+Z` 撤销重做。
+- **滚动长截图（`L`）**：穿透绿色采集框自由滚动网页/代码/聊天记录，自动剥离顶部/底部固定栏与右侧滚动条，按高方差纹理带自动对齐与 4px 接缝羽化拼接，右侧实时显示长图预览。
+- **离线极速 OCR 识字 & 二维码秒解（`O` / 全局 `Alt+Cmd+O`）**：调用 macOS 原生 `Vision.framework` 离线识别中英混排文字与二维码（小选区自动留白放大增强），弹出可编辑悬浮识图面板并支持一键复制或打开链接。
+- **纯净单窗抠图（`W`）& 一键渐变美化卡片（`B`）**：锁定窗口后开启「单窗」通过 `SCContentFilter(desktopIndependentWindow)` 剔除壁纸与遮挡窗口；开启「美化」自动合成圆角 + 居中柔和投影 + 4 套渐变背景。
+- **贴图进阶全家桶**：
+  - **万物皆可贴（`Alt+Cmd+2`）**：剪贴板图片、本地图片、代码/文本片段（悬浮便签卡片）、`#RRGGBB` / `rgb()` 色号（设计师色卡）一键变贴图。
+  - **原地二次矢量标注（`E`）& 原生 PNG 拖出**：悬浮贴图可随时进入非破坏性矢量标注模式继续增删修改；按住贴图直接拖出原生 `.png` 文件到微信、Slack、GitHub 或 Finder。
+  - **鼠标点击穿透（`P`）、迷你胶囊折叠（`M`）& 关闭历史恢复（`Shift+Alt+Cmd+2`）**：支持半透明置顶逐像素比对前端稿，按 `Ctrl+Alt+Cmd+2` 一键恢复所有穿透贴图。
+- **最近截图历史抽屉（`Shift+Cmd+H`）& 偏好设置（`Cmd+,`）**：本地环形缓存最近 20 张截图（双列网格预览、直接拖出 PNG、重复制/贴图/识图/删除），支持配置 **`Cmd+S` 免弹窗一键快存**、保存目录与默认倒计时秒数。
 
 | 包 | 职责 |
 |---|---|
-| `main.go` / `overlay.go` | 菜单栏、快捷键、权限引导、选区蒙层与贴图窗口 |
-| `internal/session` | 一轮截图的状态机：Idle → Capturing → Selecting，过期结果丢弃 |
-| `internal/capture` | ScreenCaptureKit 采集（purego 调用），BGRA → NRGBA |
-| `internal/crop` | DIP 选区 → 像素裁剪，跨屏按最大缩放最近邻拼接 |
-
-当前行为限制：松开鼠标即自动复制并贴图，没有调整选区和选择动作的环节；单击（< 2 DIP）直接取消；贴图不能缩放、改透明度或保存。
+| `main.go` / `overlay.go` / `pin.go` / `scroll_ui.go` / `history.go` / `settings.go` / `ocr.go` | 菜单栏、全局快捷键、选区蒙层、滚动长图采集窗、悬浮贴图（含原地重编辑与文件拖出）、识图面板、历史抽屉与偏好设置 |
+| `internal/session` | 截图状态机：Idle → Capturing → Selecting → Adjusting，窗口命中、图元点选二次编辑、单窗/美化/OCR/标尺/历史钩子编排 |
+| `internal/annotate` | 9 种矢量/像素标注图元（含聚光灯与无痕擦除）、命中选中与控制点编辑、快照撤销/重做栈与 Retina 抗锯齿栅格化 |
+| `internal/scrollcap` | 滚动长截图拼接引擎：固定头尾栏与右侧滚动条剥离、底部高方差纹理行匹配与接缝羽化融合 |
+| `internal/vision` | macOS `Vision.framework` 离线中英混排 OCR、文本框归一化坐标回映射、敏感信息自动检测与 QR 二维码识别 |
+| `internal/store` | 本地最近截图环形持久化仓库（`index.json` + PNG 自动淘汰与快速索引） |
+| `internal/config` | 用户偏好设置持久化（免弹窗快存、保存时自动复制、快存目录、延时截图秒数等） |
+| `internal/beautify` | 圆角居中柔和阴影渐变背景卡片合成、剪贴板文本/代码便签与 `#HEX` 色卡渲染 |
+| `internal/measure` | 四向颜色差分边缘吸附像素测量尺 |
+| `internal/textrender` | macOS CoreGraphics + `NSFont` 离屏中英/等宽字体高分屏渲染 |
+| `internal/capture` | ScreenCaptureKit 屏幕/独立单窗采集与 CoreGraphics Z 序遮挡感知窗口探测 |
+| `internal/crop` | DIP 选区 → 像素裁剪与尺寸预算，跨屏按最大缩放最近邻拼接 |
 
 ## 路线图
 
@@ -37,10 +70,10 @@ go tool mygo build    # 生成 .app / .dmg
 
 目标：现有闭环在真实使用环境里可靠，后续功能不在不稳的地基上叠加。
 
-- 真机验证蒙层层级：Panel 处于浮动层，可能低于菜单栏。确认主屏顶部是否露出实时菜单栏、窗口是否被推离 y=0；有问题则提升窗口层级。
-- 截图排除自身窗口：改用 `excludingApplications:` 过滤本应用，避免旧蒙层残留进新截图；贴图是否入镜做成后续设置项。
-- 场景矩阵：单屏 / 双屏不同缩放 / 外接屏在主屏左侧或上方（负坐标）/ 全屏应用与其他 Space / 权限被撤销 / 连按快捷键 / 截图中途退出。
-- 初始提交，建立 `go test` + `mygo vet` 的提交前检查。
+- [x] 选区蒙层层级：提升至 `kCGStatusWindowLevel + 2`（27），盖住实时菜单栏（24）、状态栏（25）、Dock（20）与已有悬浮贴图（3），同时保留中文输入法候选窗（101）正常浮于蒙层之上。
+- [x] 截图排除旧蒙层：按本进程 PID 与选区窗口标题 `excludingWindows:` 过滤未关完的旧蒙层，保留贴图入镜；贴图是否入镜做成后续设置项。
+- [ ] 场景矩阵真机手测：单屏 / 双屏不同缩放 / 外接屏在主屏左侧或上方（负坐标）/ 全屏应用与其他 Space / 权限被撤销 / 连按快捷键 / 截图中途退出。
+- [ ] 建立 `go test` + `mygo vet` 的提交前检查。
 
 验收：上述矩阵逐项手测通过，结果记录在本节。
 
@@ -91,4 +124,4 @@ OCR（Vision）、取色与测量、滚动截图。不做：录屏、云空间�
 - MyGo 的 `CapturePage()` 只捕获自身窗口，桌面采集必须走 ScreenCaptureKit。
 - 坐标统一为 DIP、主屏左上角为原点、y 向下；像素换算只经过 `crop.DIPToPixel`。
 - ScreenCaptureKit 调用必须固定 OS 线程（自动释放池按线程生效）；回调超时后由后台 goroutine 收尾释放。
-- 选区蒙层显示的是冻结画面，裁剪只读冻结像素，不再次截屏。
+- 默认框选使用透明蒙层并在确认时通过 `SCStreamConfiguration.sourceRect` 只采选区像素；冻结模式只读定格像素，不二次截屏。
