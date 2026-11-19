@@ -22,6 +22,7 @@ const (
 	ToolText
 	ToolSpotlight
 	ToolErase
+	ToolLoupe
 )
 
 // EditPart 表示命中已存在标注图元的哪个交互部位。
@@ -46,10 +47,10 @@ type RectF struct {
 
 // Palette 是预设标注调色板（红、橙、绿、蓝、白）。
 var Palette = []color.NRGBA{
-	{R: 255, G: 59, B: 48, A: 255},  // 红
-	{R: 255, G: 149, B: 0, A: 255},  // 橙
-	{R: 52, G: 199, B: 89, A: 255},  // 绿
-	{R: 0, G: 168, B: 255, A: 255},  // 蓝
+	{R: 255, G: 59, B: 48, A: 255},   // 红
+	{R: 255, G: 149, B: 0, A: 255},   // 橙
+	{R: 52, G: 199, B: 89, A: 255},   // 绿
+	{R: 0, G: 168, B: 255, A: 255},   // 蓝
 	{R: 255, G: 255, B: 255, A: 255}, // 白
 }
 
@@ -58,10 +59,23 @@ type Item struct {
 	Tool   Tool
 	Color  color.NRGBA
 	Stroke float64  // 线宽（DIP）
-	P0, P1 PointF   // 矩形 / 椭圆 / 箭头 / 马赛克 / 聚光灯 / 擦除 / 序号 / 文字锚点
+	P0, P1 PointF   // 矩形 / 椭圆 / 箭头 / 马赛克 / 聚光灯 / 擦除 / 序号 / 文字锚点 / 放大镜采样点与镜心
 	Points []PointF // 荧光笔自由曲线轨迹
 	Step   int      // ToolStep 的序号（1, 2, 3...）
 	Text   string   // ToolText 的文本内容
+	Zoom   float64  // ToolLoupe 的局部放大倍率（默认 2.5，范围 1.5~5.0）
+}
+
+// LoupeRadius 根据三档粗细返回局部放大镜气泡的半径（DIP）。
+func LoupeRadius(stroke float64) float64 {
+	switch {
+	case stroke <= 2.2:
+		return 38
+	case stroke >= 4.5:
+		return 68
+	default:
+		return 52
+	}
 }
 
 func cloneItems(src []Item) []Item {
@@ -84,10 +98,11 @@ const maxHistoryDepth = 64
 
 // Canvas 维护一轮选区或贴图内的当前工具、样式、选中图元与快照撤销/重做栈。
 type Canvas struct {
-	Tool     Tool
-	Color    color.NRGBA
-	Stroke   float64
-	Selected int // 当前选中的图元下标，未选中为 -1
+	Tool      Tool
+	Color     color.NRGBA
+	Stroke    float64
+	LoupeZoom float64 // ToolLoupe 默认放大倍率（默认 2.5）
+	Selected  int     // 当前选中的图元下标，未选中为 -1
 
 	items   []Item
 	undo    [][]Item
@@ -106,10 +121,11 @@ type Canvas struct {
 // NewCanvas 返回带默认红色与中等线宽的标注画布。
 func NewCanvas() *Canvas {
 	return &Canvas{
-		Tool:     ToolNone,
-		Color:    Palette[0],
-		Stroke:   3.0,
-		Selected: -1,
+		Tool:      ToolNone,
+		Color:     Palette[0],
+		Stroke:    3.0,
+		LoupeZoom: 2.5,
+		Selected:  -1,
 	}
 }
 
@@ -121,6 +137,9 @@ func (c *Canvas) Reset() {
 	}
 	if c.Stroke <= 0 {
 		c.Stroke = 3.0
+	}
+	if c.LoupeZoom <= 0 {
+		c.LoupeZoom = 2.5
 	}
 	c.Selected = -1
 	c.items = nil
@@ -195,6 +214,18 @@ func (c *Canvas) SetStroke(sw float64) {
 			c.items[c.Selected].Stroke = max(10, sw*4)
 		} else {
 			c.items[c.Selected].Stroke = sw
+		}
+	}
+}
+
+// SetLoupeZoom 设置局部放大镜倍率（1.5x ~ 5.0x）；若当前选中了放大镜图元则实时更新并入撤销栈。
+func (c *Canvas) SetLoupeZoom(z float64) {
+	z = max(1.5, min(5.0, z))
+	c.LoupeZoom = z
+	if c.Selected >= 0 && c.Selected < len(c.items) && c.items[c.Selected].Tool == ToolLoupe {
+		if math.Abs(c.items[c.Selected].Zoom-z) > 0.05 {
+			c.pushUndo()
+			c.items[c.Selected].Zoom = z
 		}
 	}
 }
@@ -292,7 +323,7 @@ func (c *Canvas) HitTest(x, y float64) (idx int, part EditPart) {
 
 func hasTwoEndpoints(t Tool) bool {
 	switch t {
-	case ToolRect, ToolEllipse, ToolArrow, ToolMosaic, ToolSpotlight, ToolErase:
+	case ToolRect, ToolEllipse, ToolArrow, ToolMosaic, ToolSpotlight, ToolErase, ToolLoupe:
 		return true
 	default:
 		return false
@@ -352,6 +383,15 @@ func hitItemBody(pt PointF, it Item) bool {
 		estW := max(36.0, float64(len([]rune(it.Text)))*fSize*0.75)
 		estH := fSize * 1.45
 		return pt.X >= it.P0.X-4 && pt.X <= it.P0.X+estW+4 && pt.Y >= it.P0.Y-4 && pt.Y <= it.P0.Y+estH+4
+	case ToolLoupe:
+		r := LoupeRadius(it.Stroke)
+		if math.Hypot(pt.X-it.P1.X, pt.Y-it.P1.Y) <= r+5 {
+			return true
+		}
+		if math.Hypot(pt.X-it.P0.X, pt.Y-it.P0.Y) <= 12 {
+			return true
+		}
+		return distToSegment(pt, it.P0, it.P1) <= 6
 	}
 	return false
 }
@@ -450,6 +490,20 @@ func (c *Canvas) BeginPointer(x, y float64) bool {
 			Points: []PointF{pt},
 		}
 		return true
+	case ToolLoupe:
+		zoom := c.LoupeZoom
+		if zoom <= 0 {
+			zoom = 2.5
+		}
+		c.drawing = &Item{
+			Tool:   ToolLoupe,
+			Color:  c.Color,
+			Stroke: c.Stroke,
+			P0:     pt,
+			P1:     pt,
+			Zoom:   zoom,
+		}
+		return true
 	default:
 		c.drawing = &Item{
 			Tool:   c.Tool,
@@ -490,6 +544,14 @@ func (c *Canvas) EndPointer(x, y float64) bool {
 	case ToolPen:
 		if len(it.Points) == 1 {
 			it.Points = append(it.Points, PointF{X: it.P0.X + 0.5, Y: it.P0.Y})
+		}
+	case ToolLoupe:
+		// 拖拽距离小于 12 DIP 时原地居中放置放大镜；拉出更远则形成带引线的特写气泡。
+		if math.Hypot(it.P1.X-it.P0.X, it.P1.Y-it.P0.Y) < 12 {
+			it.P1 = it.P0
+		}
+		if it.Zoom <= 0 {
+			it.Zoom = 2.5
 		}
 	default:
 		if math.Hypot(it.P1.X-it.P0.X, it.P1.Y-it.P0.Y) < 2 {

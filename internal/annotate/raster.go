@@ -48,6 +48,31 @@ func Render(dst *image.NRGBA, selDIP image.Rectangle, items []Item) {
 		rasterSpotlights(dst, spotlights, scale)
 	}
 
+	// 第二趟半：局部放大镜特写（从放大前干净底图快照双线性采样，避免多放大镜互相递归重影）。
+	hasLoupe := false
+	for _, it := range items {
+		if it.Tool == ToolLoupe {
+			hasLoupe = true
+			break
+		}
+	}
+	if hasLoupe {
+		loupeSrc := cloneNRGBA(dst)
+		for _, it := range items {
+			if it.Tool != ToolLoupe {
+				continue
+			}
+			p0 := toPx(it.P0)
+			p1 := toPx(it.P1)
+			radPx := max(16, LoupeRadius(it.Stroke)*scale)
+			zoom := it.Zoom
+			if zoom <= 0 {
+				zoom = 2.5
+			}
+			rasterLoupe(dst, loupeSrc, p0, p1, radPx, zoom, scale, it.Color)
+		}
+	}
+
 	// 第三趟：在最上层绘制高对比矢量标注（箭头、框、椭圆、荧光笔、步骤序号、文字批注保持 100% 明亮清晰）。
 	for _, it := range items {
 		p0 := toPx(it.P0)
@@ -70,6 +95,148 @@ func Render(dst *image.NRGBA, selDIP image.Rectangle, items []Item) {
 			rasterStepBadge(dst, p0, scale, it.Step, it.Color)
 		case ToolText:
 			rasterText(dst, p0, scale, it.Stroke, it.Text, it.Color)
+		}
+	}
+}
+
+func cloneNRGBA(src *image.NRGBA) *image.NRGBA {
+	b := src.Bounds()
+	dst := image.NewNRGBA(b)
+	copy(dst.Pix, src.Pix)
+	return dst
+}
+
+func sampleBilinear(src *image.NRGBA, fx, fy float64) color.NRGBA {
+	b := src.Bounds()
+	fx = max(float64(b.Min.X), min(float64(b.Max.X-1), fx))
+	fy = max(float64(b.Min.Y), min(float64(b.Max.Y-1), fy))
+	x0 := int(math.Floor(fx))
+	y0 := int(math.Floor(fy))
+	x1 := min(b.Max.X-1, x0+1)
+	y1 := min(b.Max.Y-1, y0+1)
+	wx := fx - float64(x0)
+	wy := fy - float64(y0)
+	c00 := src.NRGBAAt(x0, y0)
+	c10 := src.NRGBAAt(x1, y0)
+	c01 := src.NRGBAAt(x0, y1)
+	c11 := src.NRGBAAt(x1, y1)
+	lerp := func(a, b, c, d uint8) uint8 {
+		top := float64(a)*(1-wx) + float64(b)*wx
+		bot := float64(c)*(1-wx) + float64(d)*wx
+		return uint8(max(0, min(255, math.Round(top*(1-wy)+bot*wy))))
+	}
+	return color.NRGBA{
+		R: lerp(c00.R, c10.R, c01.R, c11.R),
+		G: lerp(c00.G, c10.G, c01.G, c11.G),
+		B: lerp(c00.B, c10.B, c01.B, c11.B),
+		A: lerp(c00.A, c10.A, c01.A, c11.A),
+	}
+}
+
+// rasterLoupe 绘制圆形局部放大镜特写气泡（支持原地放大或拉出带引线特写，附带高光玻璃边框与柔和投影）。
+func rasterLoupe(dst, src *image.NRGBA, p0, p1 PointF, radPx, zoom, scale float64, accent color.NRGBA) {
+	if zoom < 1.2 {
+		zoom = 2.5
+	}
+	if accent.A == 0 {
+		accent = Palette[0]
+	}
+	ringW := max(2.0, 2.6*scale)
+	outerR := radPx + ringW
+	b := dst.Bounds()
+
+	// 1. 当采样点与镜心分离时，绘制目标小圈与连接引线。
+	distCenters := math.Hypot(p1.X-p0.X, p1.Y-p0.Y)
+	if distCenters > 10*scale {
+		targetR := max(5.0, 7.5*scale)
+		ux := (p1.X - p0.X) / distCenters
+		uy := (p1.Y - p0.Y) / distCenters
+		lineStart := PointF{X: p0.X + ux*targetR, Y: p0.Y + uy*targetR}
+		lineEnd := PointF{X: p1.X - ux*(outerR+1), Y: p1.Y - uy*(outerR+1)}
+		if distCenters > targetR+outerR+2 {
+			stemW := max(1.5, 2.2*scale)
+			stemBox := clampBounds(b, min(lineStart.X, lineEnd.X)-stemW-3, min(lineStart.Y, lineEnd.Y)-stemW-3, max(lineStart.X, lineEnd.X)+stemW+3, max(lineStart.Y, lineEnd.Y)+stemW+3)
+			white := color.NRGBA{R: 255, G: 255, B: 255, A: 235}
+			for y := stemBox.Min.Y; y < stemBox.Max.Y; y++ {
+				py := float64(y) + 0.5
+				for x := stemBox.Min.X; x < stemBox.Max.X; x++ {
+					px := float64(x) + 0.5
+					d := distToSegment(PointF{X: px, Y: py}, lineStart, lineEnd)
+					if cov := smoothCoverage(d - (stemW*0.5 + 1.0*scale)); cov > 0 {
+						blendOver(dst, x, y, white, cov*0.85)
+					}
+					if cov := smoothCoverage(d - stemW*0.5); cov > 0 {
+						blendOver(dst, x, y, accent, cov)
+					}
+				}
+			}
+		}
+		// 目标锚点小圆圈
+		tBox := clampBounds(b, p0.X-targetR-4*scale, p0.Y-targetR-4*scale, p0.X+targetR+4*scale, p0.Y+targetR+4*scale)
+		tStroke := max(1.5, 2.0*scale)
+		for y := tBox.Min.Y; y < tBox.Max.Y; y++ {
+			py := float64(y) + 0.5
+			for x := tBox.Min.X; x < tBox.Max.X; x++ {
+				px := float64(x) + 0.5
+				dc := math.Hypot(px-p0.X, py-p0.Y)
+				if cov := smoothCoverage(math.Abs(dc-targetR) - tStroke*0.5); cov > 0 {
+					blendOver(dst, x, y, accent, cov)
+				}
+				if cov := smoothCoverage(dc - max(1.5, 2.0*scale)); cov > 0 {
+					blendOver(dst, x, y, accent, cov)
+				}
+			}
+		}
+	}
+
+	// 2. 柔和投影 + 放大镜内部双线性放大采样 + 玻璃高光边框。
+	shBlur := 16.0 * scale
+	shOffY := 5.0 * scale
+	box := clampBounds(b, p1.X-outerR-shBlur-2, p1.Y-outerR-shBlur-2, p1.X+outerR+shBlur+2, p1.Y+outerR+shBlur+shOffY+2)
+	shadowCol := color.NRGBA{R: 0, G: 0, B: 0, A: 255}
+	white := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	rimOuter := outerR + max(1.0, 1.2*scale)
+
+	for y := box.Min.Y; y < box.Max.Y; y++ {
+		py := float64(y) + 0.5
+		for x := box.Min.X; x < box.Max.X; x++ {
+			px := float64(x) + 0.5
+			dSh := math.Hypot(px-p1.X, py-(p1.Y+shOffY)) - outerR
+			if dSh < shBlur {
+				t := max(0, min(1, 1.0-max(0, dSh)/shBlur))
+				blendOver(dst, x, y, shadowCol, 0.38*t*t*(3-2*t))
+			}
+
+			dx, dy := px-p1.X, py-p1.Y
+			dist := math.Hypot(dx, dy)
+			if dist > rimOuter+1.5 {
+				continue
+			}
+
+			// 镜内放大像素
+			if cov := smoothCoverage(dist - radPx); cov > 0 {
+				sx := p0.X + dx/zoom
+				sy := p0.Y + dy/zoom
+				col := sampleBilinear(src, sx, sy)
+				blendOver(dst, x, y, col, cov)
+				// 顶部轻微弧形玻璃高光，增强放大镜立体质感
+				if dy < -radPx*0.18 && dist < radPx*0.92 {
+					spec := max(0, min(1, (-dy/radPx-0.18)/0.82)) * 0.14
+					blendOver(dst, x, y, white, cov*spec)
+				}
+			}
+
+			// 白色主镜框
+			dWhite := math.Abs(dist-(radPx+ringW*0.5)) - ringW*0.5
+			if cov := smoothCoverage(dWhite); cov > 0 {
+				blendOver(dst, x, y, white, cov*0.96)
+			}
+			// 外沿主题色细描边
+			accentW := max(1.0, 1.3*scale)
+			dAccent := math.Abs(dist-(outerR+accentW*0.4)) - accentW*0.5
+			if cov := smoothCoverage(dAccent); cov > 0 {
+				blendOver(dst, x, y, accent, cov*0.92)
+			}
 		}
 	}
 }

@@ -219,3 +219,44 @@ func TestSpotlightSmartEraseAndObjectSecondaryEditing(t *testing.T) {
 		t.Fatalf("expected smart-erased bright bg dimmed by spotlight (~92), got %+v", erasedAndDimmed)
 	}
 }
+
+func TestLoupeMagnifiesTargetAndSupportsEndpointEditing(t *testing.T) {
+	sel := image.Rect(0, 0, 260, 180)
+	dst := image.NewNRGBA(image.Rect(0, 0, 260, 180))
+	for y := range 180 {
+		for x := range 260 {
+			dst.SetNRGBA(x, y, color.NRGBA{R: 30, G: 34, B: 42, A: 255})
+		}
+	}
+	// 在 (45, 50) 附近画一个小鲜绿色目标块
+	for y := 44; y <= 56; y++ {
+		for x := 39; x <= 51; x++ {
+			dst.SetNRGBA(x, y, color.NRGBA{R: 48, G: 215, B: 96, A: 255})
+		}
+	}
+
+	c := NewCanvas()
+	c.Tool = ToolLoupe
+	c.Stroke = 3.0
+	c.SetLoupeZoom(3.0)
+	c.BeginPointer(45, 50)
+	c.EndPointer(170, 95)
+
+	if len(c.Items()) != 1 || c.Items()[0].Tool != ToolLoupe {
+		t.Fatalf("expected 1 loupe item, got %+v", c.Items())
+	}
+	// 选中镜心并拖动调整倍率
+	c.Tool = ToolNone
+	if !c.BeginEdit(170, 95) {
+		t.Fatal("expected hit on loupe lens body")
+	}
+	c.EndEdit()
+	c.SetLoupeZoom(2.5)
+
+	Render(dst, sel, c.Items())
+	// 镜心 (170, 95) 处应该采样放大到来自 (45, 50) 的鲜绿色！
+	lensMid := dst.NRGBAAt(170, 95)
+	if lensMid.G < 180 || lensMid.R > 90 {
+		t.Fatalf("expected magnified green at lens center (170,95), got %+v", lensMid)
+	}
+}
