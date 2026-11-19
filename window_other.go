@@ -4,5 +4,6 @@ package main
 
 import "github.com/egoist/mygo"
 
-func prepareOverlayWindow(*mygo.Window) {}
-func preparePinWindow(*mygo.Window)     {}
+func prepareOverlayWindow(*mygo.Window)          {}
+func preparePinWindow(*mygo.Window)              {}
+func applyWindowAppearance(*mygo.Window, string) {}

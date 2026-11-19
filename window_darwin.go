@@ -3,7 +3,10 @@
 package main
 
 import (
+	"runtime"
+	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
 	"github.com/egoist/mygo"
@@ -34,7 +37,14 @@ var (
 	selFirstResponder     = objc.RegisterName("firstResponder")
 	selMakeFirstResponder = objc.RegisterName("makeFirstResponder:")
 	selConstrainFrameRect = objc.RegisterName("constrainFrameRect:toScreen:")
+	selAlloc              = objc.RegisterName("alloc")
+	selInitBytesLenEnc    = objc.RegisterName("initWithBytes:length:encoding:")
+	selRelease            = objc.RegisterName("release")
+	selAppearanceNamed    = objc.RegisterName("appearanceNamed:")
+	selSetAppearance      = objc.RegisterName("setAppearance:")
 )
+
+const nsUTF8StringEncoding = uintptr(4)
 
 const constrainFrameRectEncoding = "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@"
 
@@ -89,4 +99,44 @@ func prepareOverlayWindow(w *mygo.Window) {
 
 func preparePinWindow(w *mygo.Window) {
 	_ = makeBorderlessUnconstrained(w)
+}
+
+// applyWindowAppearance 为原生 NSWindow/NSPanel 设置浅色、深色或跟随系统的 NSAppearance，
+// 使系统 NSGlassEffectView 玻璃材质同步切换到对应的亮/暗外观。
+func applyWindowAppearance(w *mygo.Window, appearance string) {
+	if w == nil || w.IsDestroyed() {
+		return
+	}
+	h := w.NativeHandle()
+	if h == 0 {
+		return
+	}
+	win := objc.ID(h)
+	var name string
+	switch strings.ToLower(strings.TrimSpace(appearance)) {
+	case "light":
+		name = "NSAppearanceNameAqua"
+	case "dark":
+		name = "NSAppearanceNameDarkAqua"
+	default:
+		win.Send(selSetAppearance, 0)
+		return
+	}
+	clsStr := objc.GetClass("NSString")
+	clsApp := objc.GetClass("NSAppearance")
+	if clsStr == 0 || clsApp == 0 {
+		return
+	}
+	b := unsafe.StringData(name)
+	nsName := objc.ID(clsStr).Send(selAlloc).Send(selInitBytesLenEnc,
+		uintptr(unsafe.Pointer(b)), uintptr(len(name)), nsUTF8StringEncoding)
+	runtime.KeepAlive(name)
+	if nsName == 0 {
+		return
+	}
+	defer nsName.Send(selRelease)
+	nsApp := objc.ID(clsApp).Send(selAppearanceNamed, uintptr(nsName))
+	if nsApp != 0 {
+		win.Send(selSetAppearance, uintptr(nsApp))
+	}
 }
