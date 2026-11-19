@@ -21,7 +21,7 @@ import (
 var appIconPNG []byte
 
 const (
-	defaultAppVersion = "0.1.0"
+	defaultAppVersion = "0.1.1"
 	updateWinW        = 500
 	updateWinH        = 440
 	autoCheckDelay    = 12 * time.Second
