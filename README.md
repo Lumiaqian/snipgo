@@ -62,7 +62,7 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 - **贴图交互与拖拽**：贴图支持原地进入矢量标注（`E`）、滚轮缩放、`Shift`/`Alt+滚轮` 调透明度、右键 8px 边缘磁吸与横纵向拼接、点击穿透（`P`）、折叠为迷你胶囊（`M`），以及按住悬停栏左一按钮直接将 `.png` 拖入微信、Slack、GitHub 或 Finder。
 - **最近截图历史（`Cmd+Shift+H`）& 免弹窗快存**：自动环形归档最近 20 张截图（双列网格预览、直接拖出 PNG、复制/贴图/套模板/识图/删除）；偏好设置（`Cmd+,`）支持点击键帽直接按键录入并校验冲突的全部全局快捷键、`Cmd+S` 免弹窗一键快存与保存同时复制到剪贴板。
 - **macOS 26 Tahoe Liquid Glass 体验与物理弹簧动效**：原生 `NSGlassEffectView` 融合着色与 `glass.NewGroup` 合并玻璃按钮组、滑动液态玻璃分段控制器、物理拉伸旋钮开关、渐进式滚动边缘模糊与弹簧入场动画；偏好设置支持实时切换 **外观模式（跟随系统 / 浅色 / 深色）**、**液态玻璃浓度（清透 / 标准 / 浓磨砂）** 与 **8 种系统/自定义主题强调色**；全浮窗统一左上角带清晰 `×` 的 macOS 红灯关闭按钮（`Cmd+W` / `Esc` 关闭，菜单栏常驻，`Cmd+Q` 退出应用）。
-- **内置应用内自动更新**：支持后台每 24 小时静默检测 GitHub Releases 新版本（可选开启 Beta 预览版通道与跳过指定版本），从菜单栏或「偏好设置 → 软件更新」一键检查并展示 Liquid Glass 更新窗与变更日志，下载后经 **SHA-256 哈希与 Bundle ID 双重校验**、在退出时**原子替换 `.app` 包并平滑重启**（保留全部配置、历史记录与权限状态）。
+- **内置签名自动更新**：底层接入 MyGo 官方 `mygo.Updater`（直接从 GitHub Releases 静态下载通道读取 `update-darwin-*.json`，不受 GitHub REST API 限流 403 影响），配合 Liquid Glass 更新窗支持后台每 24 小时静默检测、Beta 预览版通道、跳过指定版本与更新日志展示；下载归档与 `bsdiff` 增量补丁经 **Ed25519 公钥数字签名校验**，退出时原子替换 `.app` 包并平滑重启（保留全部配置、历史记录与权限状态）。
 
 ---
 
@@ -133,12 +133,11 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 |---|---|
 | `main.go` / `theme.go` / `icons.go` | 应用生命周期、菜单栏常驻与 `@2x` 模板托盘图标、全局快捷键、macOS 26/27 原生 Liquid Glass 液态玻璃、深/浅外观自适应配色、渐进式滚动边缘模糊与矢量 SVG 图标集 |
 | `overlay.go` / `template_ui.go` | 多屏透明选区蒙层、实时窗口高亮、双层浮空胶囊工具栏、像素放大镜 / 测量尺，以及所见即所得 10 模板「套模板工作台」 |
-| `pin.go` / `scroll_ui.go` / `ocr.go` / `history.go` / `settings.go` / `updater_ui.go` | 悬浮贴图窗口、滚动长图穿透控制盒、表格识图面板、最近 20 张截图历史抽屉、偏好设置（含外观/玻璃/主题色）、延时倒计时胶囊与 Liquid Glass 软件更新窗 |
+| `pin.go` / `scroll_ui.go` / `ocr.go` / `history.go` / `settings.go` / `updater_ui.go` | 悬浮贴图窗口、滚动长图穿透控制盒、表格识图面板、最近 20 张截图历史抽屉、偏好设置（含外观/玻璃/主题色与快捷键录制）、延时倒计时胶囊，以及基于 `mygo.Updater` Ed25519 签名更新内核的 Liquid Glass 软件更新窗 |
 | `window_darwin.go` / `window_other.go` | `NSWindow` / `NSPanel` 窗口层级（`kCGStatusWindowLevel+2`）、原生 `NSAppearance` 切换、全屏 Space 兼容与非 macOS 占位实现 |
 | [`internal/session`](internal/session) | 截图核心状态机（`Idle → Capturing → Selecting → Adjusting`）、窗口命中、图元点选二次编辑与动作编排 |
 | [`internal/annotate`](internal/annotate) | 10 种矢量与像素标注图元、命中选中与端点编辑、多步撤销/重做栈以及 Retina 抗锯齿栅格化渲染 |
 | [`internal/beautify`](internal/beautify) | 10 套实用模板引擎（`RenderTemplate`）、`HEX / RGB / OKLCH / Tailwind` 色值转换、多色卡与代码便签卡合成 |
-| [`internal/updater`](internal/updater) | GitHub Releases 自动更新检查（SemVer 比较 / 预览版通道）、SHA-256 完整校验、`Ditto` 解包与原子 `.app` 替换器 |
 | [`internal/vision`](internal/vision) | macOS `Vision.framework` 离线中英混排 OCR、二维表格重建（Markdown / TSV）、主体前景抠图、敏感凭证检测与二维码解析 |
 | [`internal/pinops`](internal/pinops) | 贴图逐像素 Diff 热力图、Before/After 拉帘合成、8px 边缘磁吸对齐与多贴图横纵向拼接 |
 | [`internal/scrollcap`](internal/scrollcap) | 滚动长截图增量拼接引擎：固定头尾栏与右侧滚动条剥离、纹理带匹配与接缝羽化融合 |
@@ -176,4 +175,4 @@ go tool mygo build -skip-dmg
 
 ### GitHub Actions 流水线
 - **持续集成（`.github/workflows/ci.yml`）**：推送 `main`、发起 PR 或手动触发时自动运行完整测试、`mygo vet`、跨平台检查并打包 `arm64` / `amd64` / `universal` 构建产物。
-- **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg` / `.app.zip` 与 `SHA256SUMS.txt` 并发布 Release。未配置证书机密时自动使用 ad-hoc 签名；配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（及公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`）即可全自动完成正式签名与 Apple 公证。
+- **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg` / `.app.zip`，并在配置 `MYGO_UPDATER_PRIVATE_KEY` 机密时一并生成带 Ed25519 签名的 `update-darwin-*.json`、`.tar.gz`、`.delta` 增量更新与 `SHA256SUMS.txt` 发布 Release。未配置证书机密时自动使用 ad-hoc 签名；配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（及公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`）即可全自动完成正式签名与 Apple 公证。
