@@ -106,34 +106,62 @@ func cloneNRGBA(src *image.NRGBA) *image.NRGBA {
 	return dst
 }
 
-func sampleBilinear(src *image.NRGBA, fx, fy float64) color.NRGBA {
+func catmullRomWeight(t float64) float64 {
+	a := math.Abs(t)
+	if a <= 1.0 {
+		return (1.5*a-2.5)*a*a + 1.0
+	}
+	if a < 2.0 {
+		return ((-0.5*a+2.5)*a-4.0)*a + 2.0
+	}
+	return 0
+}
+
+func sampleBicubic(src *image.NRGBA, fx, fy float64) color.NRGBA {
 	b := src.Bounds()
+	if b.Empty() {
+		return color.NRGBA{}
+	}
 	fx = max(float64(b.Min.X), min(float64(b.Max.X-1), fx))
 	fy = max(float64(b.Min.Y), min(float64(b.Max.Y-1), fy))
-	x0 := int(math.Floor(fx))
-	y0 := int(math.Floor(fy))
-	x1 := min(b.Max.X-1, x0+1)
-	y1 := min(b.Max.Y-1, y0+1)
-	wx := fx - float64(x0)
-	wy := fy - float64(y0)
-	c00 := src.NRGBAAt(x0, y0)
-	c10 := src.NRGBAAt(x1, y0)
-	c01 := src.NRGBAAt(x0, y1)
-	c11 := src.NRGBAAt(x1, y1)
-	lerp := func(a, b, c, d uint8) uint8 {
-		top := float64(a)*(1-wx) + float64(b)*wx
-		bot := float64(c)*(1-wx) + float64(d)*wx
-		return uint8(max(0, min(255, math.Round(top*(1-wy)+bot*wy))))
+	ix := int(math.Floor(fx))
+	iy := int(math.Floor(fy))
+	dx := fx - float64(ix)
+	dy := fy - float64(iy)
+
+	var wx, wy [4]float64
+	for k := range 4 {
+		wx[k] = catmullRomWeight(dx - float64(k-1))
+		wy[k] = catmullRomWeight(dy - float64(k-1))
+	}
+
+	var sr, sg, sb, sa float64
+	for ky := range 4 {
+		cy := max(b.Min.Y, min(b.Max.Y-1, iy+ky-1))
+		wY := wy[ky]
+		rowBase := (cy - src.Rect.Min.Y) * src.Stride
+		for kx := range 4 {
+			cx := max(b.Min.X, min(b.Max.X-1, ix+kx-1))
+			w := wY * wx[kx]
+			off := rowBase + (cx-src.Rect.Min.X)*4
+			sr += float64(src.Pix[off+0]) * w
+			sg += float64(src.Pix[off+1]) * w
+			sb += float64(src.Pix[off+2]) * w
+			sa += float64(src.Pix[off+3]) * w
+		}
+	}
+	clamp8 := func(v float64) uint8 {
+		return uint8(max(0, min(255, math.Round(v))))
 	}
 	return color.NRGBA{
-		R: lerp(c00.R, c10.R, c01.R, c11.R),
-		G: lerp(c00.G, c10.G, c01.G, c11.G),
-		B: lerp(c00.B, c10.B, c01.B, c11.B),
-		A: lerp(c00.A, c10.A, c01.A, c11.A),
+		R: clamp8(sr),
+		G: clamp8(sg),
+		B: clamp8(sb),
+		A: clamp8(sa),
 	}
 }
 
-// rasterLoupe 绘制圆形局部放大镜特写气泡（支持原地放大或拉出带引线特写，附带高光玻璃边框与柔和投影）。
+// rasterLoupe 绘制圆形局部放大镜特写气泡（支持原地放大或拉出带引线特写，双三次锐利采样、镜外柔和投影与纯净双环描边）。
 func rasterLoupe(dst, src *image.NRGBA, p0, p1 PointF, radPx, zoom, scale float64, accent color.NRGBA) {
 	if zoom < 1.2 {
 		zoom = 2.5
@@ -143,6 +171,8 @@ func rasterLoupe(dst, src *image.NRGBA, p0, p1 PointF, radPx, zoom, scale float6
 	}
 	ringW := max(2.0, 2.6*scale)
 	outerR := radPx + ringW
+	accentW := max(1.0, 1.35*scale)
+	rimOuter := outerR + accentW
 	b := dst.Bounds()
 
 	// 1. 当采样点与镜心分离时，绘制目标小圈与连接引线。
@@ -189,53 +219,51 @@ func rasterLoupe(dst, src *image.NRGBA, p0, p1 PointF, radPx, zoom, scale float6
 		}
 	}
 
-	// 2. 柔和投影 + 放大镜内部双线性放大采样 + 玻璃高光边框。
-	shBlur := 16.0 * scale
-	shOffY := 5.0 * scale
-	box := clampBounds(b, p1.X-outerR-shBlur-2, p1.Y-outerR-shBlur-2, p1.X+outerR+shBlur+2, p1.Y+outerR+shBlur+shOffY+2)
+	// 2. 柔和镜外投影（严格裁切于白色镜框外侧）+ 放大镜内部双三次放大采样 + 纯净白环与外描边。
+	shBlur := 11.0 * scale
+	shOffY := 3.5 * scale
+	box := clampBounds(b, p1.X-rimOuter-shBlur-2, p1.Y-rimOuter-shBlur-2, p1.X+rimOuter+shBlur+2, p1.Y+rimOuter+shBlur+shOffY+2)
 	shadowCol := color.NRGBA{R: 0, G: 0, B: 0, A: 255}
 	white := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
-	rimOuter := outerR + max(1.0, 1.2*scale)
 
 	for y := box.Min.Y; y < box.Max.Y; y++ {
 		py := float64(y) + 0.5
 		for x := box.Min.X; x < box.Max.X; x++ {
 			px := float64(x) + 0.5
-			dSh := math.Hypot(px-p1.X, py-(p1.Y+shOffY)) - outerR
-			if dSh < shBlur {
-				t := max(0, min(1, 1.0-max(0, dSh)/shBlur))
-				blendOver(dst, x, y, shadowCol, 0.38*t*t*(3-2*t))
-			}
-
 			dx, dy := px-p1.X, py-p1.Y
 			dist := math.Hypot(dx, dy)
+			insideRim := smoothCoverage(dist - outerR)
+			if insideRim < 1 {
+				dSh := math.Hypot(dx, py-(p1.Y+shOffY)) - outerR
+				if dSh < shBlur {
+					u := max(0, min(1, max(0, dSh)/shBlur))
+					oneMinus := 1.0 - u
+					blendOver(dst, x, y, shadowCol, 0.20*oneMinus*oneMinus*oneMinus*(1-insideRim))
+				}
+			}
 			if dist > rimOuter+1.5 {
 				continue
 			}
 
+			// 先以纯白底盘填至 outerR，避免白圈与镜内采样像素接缝处透出暗色细缝
+			if insideRim > 0 {
+				blendOver(dst, x, y, white, insideRim)
+			}
 			// 镜内放大像素
 			if cov := smoothCoverage(dist - radPx); cov > 0 {
 				sx := p0.X + dx/zoom
 				sy := p0.Y + dy/zoom
-				col := sampleBilinear(src, sx, sy)
+				col := sampleBicubic(src, sx, sy)
 				blendOver(dst, x, y, col, cov)
-				// 顶部轻微弧形玻璃高光，增强放大镜立体质感
-				if dy < -radPx*0.18 && dist < radPx*0.92 {
-					spec := max(0, min(1, (-dy/radPx-0.18)/0.82)) * 0.14
+				if dy < -radPx*0.22 && dist < radPx*0.90 {
+					spec := max(0, min(1, (-dy/radPx-0.22)/0.78)) * 0.07
 					blendOver(dst, x, y, white, cov*spec)
 				}
 			}
-
-			// 白色主镜框
-			dWhite := math.Abs(dist-(radPx+ringW*0.5)) - ringW*0.5
-			if cov := smoothCoverage(dWhite); cov > 0 {
-				blendOver(dst, x, y, white, cov*0.96)
-			}
 			// 外沿主题色细描边
-			accentW := max(1.0, 1.3*scale)
-			dAccent := math.Abs(dist-(outerR+accentW*0.4)) - accentW*0.5
+			dAccent := math.Abs(dist-(outerR+accentW*0.45)) - accentW*0.5
 			if cov := smoothCoverage(dAccent); cov > 0 {
-				blendOver(dst, x, y, accent, cov*0.92)
+				blendOver(dst, x, y, accent, cov*0.95)
 			}
 		}
 	}

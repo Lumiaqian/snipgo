@@ -301,10 +301,10 @@ func (c *Canvas) Redo() bool {
 // HitTest 从顶层到底层检测点 (x, y) 是否命中已有标注图元或其端点手柄。
 func (c *Canvas) HitTest(x, y float64) (idx int, part EditPart) {
 	pt := PointF{X: x, Y: y}
-	// 若已有选中图元，优先检测其首尾控制手柄（半径 8 DIP）。
+	// 若已有选中图元，优先检测其首尾控制手柄（半径 8.5 DIP）；原地放大镜整圆优先整圆平移。
 	if c.Selected >= 0 && c.Selected < len(c.items) {
 		sel := c.items[c.Selected]
-		if hasTwoEndpoints(sel.Tool) {
+		if hasTwoEndpoints(sel.Tool) && (sel.Tool != ToolLoupe || isCalloutLoupe(sel)) {
 			if math.Hypot(pt.X-sel.P0.X, pt.Y-sel.P0.Y) <= 8.5 {
 				return c.Selected, EditP0
 			}
@@ -319,6 +319,10 @@ func (c *Canvas) HitTest(x, y float64) (idx int, part EditPart) {
 		}
 	}
 	return -1, EditNone
+}
+
+func isCalloutLoupe(it Item) bool {
+	return it.Tool == ToolLoupe && math.Hypot(it.P1.X-it.P0.X, it.P1.Y-it.P0.Y) >= 12
 }
 
 func hasTwoEndpoints(t Tool) bool {
@@ -560,6 +564,9 @@ func (c *Canvas) EndPointer(x, y float64) bool {
 	}
 	c.pushUndo()
 	c.items = append(c.items, it)
+	if it.Tool == ToolLoupe {
+		c.Selected = len(c.items) - 1
+	}
 	return true
 }
 

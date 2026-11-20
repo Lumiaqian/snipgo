@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/beautify"
 	"snipgo/internal/capture"
@@ -72,6 +73,13 @@ type app struct {
 	textEditX   float64
 	textEditY   float64
 	textEditBuf string
+
+	// 实时模式下给放大镜 / 马赛克 / 无痕擦除预览提供局部像素快照
+	previewSnapGen     uint64
+	previewSnapRect    image.Rectangle
+	previewSnapPending image.Rectangle
+	previewSnapImg     *image.NRGBA
+	previewSnapBmp     *ui.Bitmap
 
 	quitting bool
 }

@@ -260,3 +260,69 @@ func TestLoupeMagnifiesTargetAndSupportsEndpointEditing(t *testing.T) {
 		t.Fatalf("expected magnified green at lens center (170,95), got %+v", lensMid)
 	}
 }
+
+func TestLoupeAutoSelectInPlaceMoveAndCleanWhiteRing(t *testing.T) {
+	c := NewCanvas()
+	c.Tool = ToolLoupe
+	c.Stroke = 3.0
+	c.SetLoupeZoom(2.5)
+
+	// 1. 原地放大镜落点后应自动选中，切倍率直接作用于它，且圆心 HitTest 返回 EditMove。
+	c.BeginPointer(80, 70)
+	c.EndPointer(82, 71)
+	if c.Selected != 0 {
+		t.Fatalf("expected newly placed loupe to be selected (idx=0), got %d", c.Selected)
+	}
+	c.SetLoupeZoom(4.0)
+	if got := c.Items()[0].Zoom; got != 4.0 {
+		t.Fatalf("expected SetLoupeZoom to update selected loupe to 4.0, got %v", got)
+	}
+	idx, part := c.HitTest(80, 70)
+	if idx != 0 || part != EditMove {
+		t.Fatalf("in-place loupe HitTest center = (%d, %v), want (0, EditMove)", idx, part)
+	}
+	if !c.BeginEdit(80, 70) {
+		t.Fatal("BeginEdit on in-place loupe failed")
+	}
+	c.MoveEdit(110, 95)
+	c.EndEdit()
+	moved := c.Items()[0]
+	if moved.P0 != (PointF{X: 110, Y: 95}) || moved.P1 != (PointF{X: 110, Y: 95}) {
+		t.Fatalf("expected in-place loupe to translate both P0 and P1, got %+v", moved)
+	}
+
+	// 2. 带引线放大镜保留首尾控制柄检测。
+	c.BeginPointer(40, 40)
+	c.EndPointer(180, 100)
+	if c.Selected != 1 {
+		t.Fatalf("expected callout loupe selected idx=1, got %d", c.Selected)
+	}
+	if idx, part := c.HitTest(40, 40); idx != 1 || part != EditP0 {
+		t.Fatalf("callout loupe HitTest P0 = (%d, %v), want (1, EditP0)", idx, part)
+	}
+	if idx, part := c.HitTest(180, 100); idx != 1 || part != EditP1 {
+		t.Fatalf("callout loupe HitTest P1 = (%d, %v), want (1, EditP1)", idx, part)
+	}
+
+	// 3. 白底渲染验证：白环与镜内接缝绝不渗入黑影灰缝。
+	dst := image.NewNRGBA(image.Rect(0, 0, 260, 180))
+	for y := range 180 {
+		for x := range 260 {
+			dst.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	c2 := NewCanvas()
+	c2.Tool = ToolLoupe
+	c2.Stroke = 3.0 // radPx = 52
+	c2.BeginPointer(130, 90)
+	c2.EndPointer(130, 90)
+	Render(dst, image.Rect(0, 0, 260, 180), c2.Items())
+
+	// 检查白环位置 (dist=53.3，在镜外缘白圈上) 四方位像素必须洁白无暗缝。
+	for _, pt := range []image.Point{{130, 90 - 53}, {130, 90 + 53}, {130 - 53, 90}, {130 + 53, 90}} {
+		px := dst.NRGBAAt(pt.X, pt.Y)
+		if px.R < 245 || px.G < 245 || px.B < 245 {
+			t.Fatalf("unexpected dark seam on white loupe ring at %v: %+v", pt, px)
+		}
+	}
+}

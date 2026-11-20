@@ -6,4 +6,5 @@ import "github.com/egoist/mygo"
 
 func prepareOverlayWindow(*mygo.Window)          {}
 func preparePinWindow(*mygo.Window)              {}
+func invalidatePinShadow(*mygo.Window)           {}
 func applyWindowAppearance(*mygo.Window, string) {}

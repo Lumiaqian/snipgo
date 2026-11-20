@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -165,7 +166,24 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 	})
 	a.pins = append(a.pins, p)
 	p.win.ShowInactive()
+	p.refreshShadowSoon()
 	a.refreshMenu()
+}
+
+func (p *pinWin) refreshShadowSoon() {
+	if p == nil || p.win == nil || p.win.IsDestroyed() || !mygo.App.IsReady() {
+		return
+	}
+	win := p.win
+	invalidatePinShadow(win)
+	go func() {
+		time.Sleep(45 * time.Millisecond)
+		mygo.RunOnMain(func() {
+			if !win.IsDestroyed() {
+				invalidatePinShadow(win)
+			}
+		})
+	}()
 }
 
 func (a *app) pinView(c *ui.Context, p *pinWin) {
@@ -331,7 +349,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					}
 					return true
 				}
-				return p.rulerMode
+				return p.rulerMode || (p.editMode && p.annot.Tool == annotate.ToolLoupe)
 			case ui.InputPointerDown:
 				if ev.Button == 1 || (ev.Button == 0 && ev.Mods == ui.Ctrl) {
 					if p.editMode && p.annot.Tool != annotate.ToolNone {
@@ -349,10 +367,14 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 				}
 				if ev.Button == 0 && p.editMode {
 					ox, oy := toOrig(ev)
-					if _, part := p.annot.HitTest(ox, oy); part != annotate.EditNone && (p.annot.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1) {
-						if p.annot.BeginEdit(ox, oy) {
-							p.annotEditDrg = true
-							return true
+					if idx, part := p.annot.HitTest(ox, oy); part != annotate.EditNone {
+						items := p.annot.Items()
+						hitExistingLoupe := p.annot.Tool == annotate.ToolLoupe && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolLoupe
+						if p.annot.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1 || hitExistingLoupe {
+							if p.annot.BeginEdit(ox, oy) {
+								p.annotEditDrg = true
+								return true
+							}
 						}
 					}
 					if p.annot.Tool == annotate.ToolStep {
@@ -443,7 +465,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					}
 				}
 				if p.editMode {
-					p.paintPinEditLayer(c, w, h)
+					p.paintPinEditLayer(c, w, h, hovered)
 				}
 				if p.rulerMode {
 					p.paintPinRuler(c, w, h)
@@ -452,20 +474,22 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					a.paintPinHoverBar(c, p)
 				}
 			}
-			showBorder := !p.cutout || hovered || p.editMode || p.compareMode
-			if showBorder {
-				pal := uiPalette(c)
-				borderCol := ui.RGBA(128, 128, 128, 0.28)
-				if p.compareMode {
-					borderCol = ui.RGBA(255, 69, 132, 0.85)
-				} else if p.editMode {
-					borderCol = pal.Accent.Alpha(0.85)
-				} else if p.clickThrough {
-					borderCol = pal.Accent.Alpha(0.45)
-				}
-				ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).
-					Border(1, borderCol).
-					IgnoreInput(true)
+			pal := uiPalette(c)
+			borderCol := ui.Transparent
+			switch {
+			case p.compareMode:
+				borderCol = ui.RGBA(255, 69, 132, 0.85)
+			case p.editMode:
+				borderCol = pal.Accent.Alpha(0.85)
+			case p.clickThrough:
+				borderCol = pal.Accent.Alpha(0.45)
+			case hovered:
+				borderCol = pal.Accent.Alpha(0.55)
+			}
+			borderBox := ui.Box(c.Key("pin-border")).Absolute().Left(0).Top(0).Size(w, h).IgnoreInput(true)
+			animBd := borderBox.AnimateColor("pin-bd", borderCol, colorMorph)
+			if animBd.A > 0 {
+				borderBox.Border(1, animBd)
 			}
 		})
 	})
@@ -603,34 +627,41 @@ func (p *pinWin) finishPinEdit() {
 	}
 }
 
-func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32) {
+func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32, hovered bool) {
 	z := float32(max(0.05, p.zoom))
 	items := p.annot.Items()
 	selIdx := p.annot.Selected
 	if d := p.annot.Drawing(); d != nil {
 		items = append(items, *d)
 	}
-	if len(items) > 0 {
-		// 按当前贴图缩放比映射标注坐标预览。
-		scaled := make([]annotate.Item, len(items))
-		for i, it := range items {
-			it.P0.X *= float64(z)
-			it.P0.Y *= float64(z)
-			it.P1.X *= float64(z)
-			it.P1.Y *= float64(z)
-			it.Stroke *= float64(z)
-			if len(it.Points) > 0 {
-				pts := make([]annotate.PointF, len(it.Points))
-				for j, pt := range it.Points {
-					pts[j] = annotate.PointF{X: pt.X * float64(z), Y: pt.Y * float64(z)}
-				}
-				it.Points = pts
+	var hoverLoupe *annotate.Item
+	if hovered && p.hasHover && p.annot.Tool == annotate.ToolLoupe && !p.annotDrag && !p.annotEditDrg {
+		ox := max(0, min(float64(p.origW), p.hoverX/float64(z)))
+		oy := max(0, min(float64(p.origH), p.hoverY/float64(z)))
+		if idx, _ := p.annot.HitTest(ox, oy); !(idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolLoupe) {
+			zoom := p.annot.LoupeZoom
+			if zoom <= 0 {
+				zoom = 2.5
 			}
-			scaled[i] = it
+			hoverLoupe = &annotate.Item{
+				Tool:   annotate.ToolLoupe,
+				Color:  p.annot.Color,
+				Stroke: p.annot.Stroke,
+				P0:     annotate.PointF{X: ox, Y: oy},
+				P1:     annotate.PointF{X: ox, Y: oy},
+				Zoom:   zoom,
+			}
+		}
+	}
+	if len(items) > 0 || hoverLoupe != nil {
+		src := canvasPreviewSource{
+			bmp:  p.baseBmp,
+			img:  p.baseImg,
+			rect: image.Rect(0, 0, p.origW, p.origH),
 		}
 		ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).IgnoreInput(true).
 			Draw(func(pt *ui.Painter, r ui.Rect) {
-				paintCanvasAnnotations(pt, r, scaled, selIdx, 0, 0, r.X, r.Y)
+				paintCanvasAnnotations(pt, r, items, selIdx, 0, 0, r.X, r.Y, z, src, hoverLoupe)
 			})
 	}
 
@@ -781,6 +812,7 @@ func (p *pinWin) toggleCollapsed() {
 		p.win.SetBounds(mygo.Rectangle{X: b.X, Y: b.Y, Width: p.curW, Height: p.curH})
 	}
 	p.win.Invalidate()
+	p.refreshShadowSoon()
 }
 
 func (a *app) togglePinPassthrough(p *pinWin) {
@@ -888,6 +920,7 @@ func (p *pinWin) applyZoom(targetZoom, anchorX, anchorY float64) {
 	p.curH = newH
 	p.win.SetBounds(mygo.Rectangle{X: newX, Y: newY, Width: newW, Height: newH})
 	p.win.Invalidate()
+	p.refreshShadowSoon()
 }
 
 func (a *app) popupPinMenu(p *pinWin) {
@@ -1138,6 +1171,7 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 			p.curH = newCurH
 			p.win.SetBounds(mygo.Rectangle{X: cx - newCurW/2, Y: cy - newCurH/2, Width: newCurW, Height: newCurH})
 			p.win.Invalidate()
+			p.refreshShadowSoon()
 			_ = mygo.Clipboard.WriteImage(data)
 			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
 			a.sessionStatus("贴图已抠出透明主体并复制")

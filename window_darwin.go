@@ -34,6 +34,8 @@ var (
 
 	selSetLevel           = objc.RegisterName("setLevel:")
 	selSetStyleMask       = objc.RegisterName("setStyleMask:")
+	selSetHasShadow       = objc.RegisterName("setHasShadow:")
+	selInvalidateShadow   = objc.RegisterName("invalidateShadow")
 	selFirstResponder     = objc.RegisterName("firstResponder")
 	selMakeFirstResponder = objc.RegisterName("makeFirstResponder:")
 	selConstrainFrameRect = objc.RegisterName("constrainFrameRect:toScreen:")
@@ -98,7 +100,23 @@ func prepareOverlayWindow(w *mygo.Window) {
 }
 
 func preparePinWindow(w *mygo.Window) {
-	_ = makeBorderlessUnconstrained(w)
+	if win := makeBorderlessUnconstrained(w); win != 0 {
+		win.Send(selSetHasShadow, uintptr(1))
+		win.Send(selInvalidateShadow)
+	}
+}
+
+func invalidatePinShadow(w *mygo.Window) {
+	if w == nil || w.IsDestroyed() {
+		return
+	}
+	h := w.NativeHandle()
+	if h == 0 {
+		return
+	}
+	win := objc.ID(h)
+	win.Send(selSetHasShadow, uintptr(1))
+	win.Send(selInvalidateShadow)
 }
 
 // applyWindowAppearance 为原生 NSWindow/NSPanel 设置浅色、深色或跟随系统的 NSAppearance，

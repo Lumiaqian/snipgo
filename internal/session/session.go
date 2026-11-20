@@ -811,11 +811,15 @@ func (s *Session) BeginDrag(owner int, x, y float64) {
 		pt := image.Pt(int(math.Floor(x)), int(math.Floor(y)))
 		ac := s.Annotations()
 		if pt.In(s.sel) {
-			// 若处于选择模式（ToolNone），或点击了当前选中图元的首尾控制柄，优先进入图元二次编辑。
-			if _, part := ac.HitTest(x, y); part != annotate.EditNone && (ac.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1) {
-				if ac.BeginEdit(x, y) {
-					s.drag = dragState{kind: dragAnnotateEdit, owner: owner, x0: x, y0: y, x1: x, y1: y}
-					return
+			// 若处于选择模式（ToolNone）、点击了当前选中图元的首尾控制柄，或点击在已有放大镜内部，优先进入图元二次编辑。
+			if idx, part := ac.HitTest(x, y); part != annotate.EditNone {
+				items := ac.Items()
+				hitExistingLoupe := ac.Tool == annotate.ToolLoupe && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolLoupe
+				if ac.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1 || hitExistingLoupe {
+					if ac.BeginEdit(x, y) {
+						s.drag = dragState{kind: dragAnnotateEdit, owner: owner, x0: x, y0: y, x1: x, y1: y}
+						return
+					}
 				}
 			}
 			if ac.Tool == annotate.ToolNone {

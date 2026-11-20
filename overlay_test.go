@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -731,6 +733,104 @@ func TestClosedPinHistoryRingBuffer(t *testing.T) {
 	}
 	if a.closedPins[len(a.closedPins)-1].origW != 113 {
 		t.Fatalf("latest closed pin origW = %d, want 113", a.closedPins[len(a.closedPins)-1].origW)
+	}
+}
+
+func TestLoupeWYSIWYGPreviewAndCircularClip(t *testing.T) {
+	const dipW, dipH = 400, 360
+	bg := image.NewNRGBA(image.Rect(0, 0, dipW*2, dipH*2))
+	draw.Draw(bg, bg.Bounds(), image.NewUniform(color.NRGBA{R: 24, G: 30, B: 44, A: 255}), image.Point{}, draw.Src)
+	// 在逻辑坐标 [55..105]×[55..105] 绘制大块鲜绿目标（3× 放大后覆盖 ±75 DIP，若未圆形裁切则会溢出到方形外角）。
+	draw.Draw(bg, image.Rect(110, 110, 210, 210), image.NewUniform(color.NRGBA{R: 48, G: 215, B: 96, A: 255}), image.Point{}, draw.Src)
+
+	bounds := image.Rect(0, 0, dipW, dipH)
+	o := &overlay{bitmap: ui.NewBitmap(bg), pixels: bg, bounds: bounds, index: 0}
+	a := &app{}
+	a.overlays = []*overlay{o}
+	a.session = &session.Session{
+		Capture: func(context.Context) (session.Snapshot, error) { return session.Snapshot{}, nil },
+		UI:      testOCRUI{},
+	}
+	a.session.Launch = func(gen int) {
+		a.session.Deliver(gen, session.Snapshot{Frames: []crop.Screen{{Bounds: bounds, Scale: 2, Pixels: bg}}}, nil)
+	}
+	a.session.StartFrozen()
+	a.session.BeginDrag(0, 20, 20)
+	a.session.MoveDrag(0, 360, 220)
+	a.session.EndDrag()
+
+	ac := a.session.Annotations()
+	ac.Tool = annotate.ToolLoupe
+	ac.Stroke = 3.0 // rad = 52
+	ac.SetLoupeZoom(3.0)
+	ac.BeginPointer(80, 80)
+	ac.EndPointer(220, 120)
+
+	rendered := ui.Render(a.selectionView(o), dipW, dipH, 1)
+	centerPx := rendered.RGBAAt(220, 120)
+	if centerPx.G < 180 || centerPx.R > 80 {
+		t.Fatalf("expected WYSIWYG magnified green at loupe center (220,120), got %+v", centerPx)
+	}
+	// dist((±44,-44)) ≈ 62.2 > rad+ring+accent，必须保留深海蓝底色而不是方形绿色外角。
+	for _, corner := range []image.Point{{220 + 44, 120 - 44}, {220 - 44, 120 - 44}, {220 + 44, 120 + 44}} {
+		px := rendered.RGBAAt(corner.X, corner.Y)
+		if px.R > 45 || px.G > 55 || px.B > 75 {
+			t.Fatalf("expected circular clip outside loupe lens at %v, got %+v", corner, px)
+		}
+	}
+}
+
+func TestErasePreviewSamplesDarkBackgroundAndLoupeClickMovesExisting(t *testing.T) {
+	const dipW, dipH = 300, 200
+	bg := image.NewNRGBA(image.Rect(0, 0, dipW*2, dipH*2))
+	draw.Draw(bg, bg.Bounds(), image.NewUniform(color.NRGBA{R: 18, G: 22, B: 30, A: 255}), image.Point{}, draw.Src)
+
+	bounds := image.Rect(0, 0, dipW, dipH)
+	o := &overlay{bitmap: ui.NewBitmap(bg), pixels: bg, bounds: bounds, index: 0}
+	a := &app{}
+	a.overlays = []*overlay{o}
+	a.session = &session.Session{
+		Capture: func(context.Context) (session.Snapshot, error) { return session.Snapshot{}, nil },
+		UI:      testOCRUI{},
+	}
+	a.session.Launch = func(gen int) {
+		a.session.Deliver(gen, session.Snapshot{Frames: []crop.Screen{{Bounds: bounds, Scale: 2, Pixels: bg}}}, nil)
+	}
+	a.session.StartFrozen()
+	a.session.BeginDrag(0, 10, 10)
+	a.session.MoveDrag(0, 290, 190)
+	a.session.EndDrag()
+
+	ac := a.session.Annotations()
+	ac.Tool = annotate.ToolErase
+	ac.BeginPointer(40, 40)
+	ac.EndPointer(120, 80)
+
+	rendered := ui.Render(a.selectionView(o), dipW, dipH, 1)
+	eraseMid := rendered.RGBAAt(80, 60)
+	if eraseMid.R > 45 || eraseMid.G > 50 || eraseMid.B > 60 {
+		t.Fatalf("expected ToolErase preview to match dark background, got %+v", eraseMid)
+	}
+
+	// 验证激活 ToolLoupe 时点击已有放大镜内部会直接拖动，而非叠出第二个放大镜。
+	ac.Reset()
+	ac.Tool = annotate.ToolLoupe
+	a.session.BeginDrag(0, 100, 100)
+	a.session.MoveDrag(0, 101, 101)
+	a.session.EndDrag()
+	if got := len(ac.Items()); got != 1 {
+		t.Fatalf("expected 1 loupe after initial placement, got %d", got)
+	}
+
+	a.session.BeginDrag(0, 110, 105)
+	a.session.MoveDrag(0, 160, 125)
+	a.session.EndDrag()
+	items := ac.Items()
+	if len(items) != 1 {
+		t.Fatalf("expected dragging inside existing loupe to move it instead of stacking, got %d items", len(items))
+	}
+	if items[0].P0 != (annotate.PointF{X: 150, Y: 120}) || items[0].P1 != (annotate.PointF{X: 150, Y: 120}) {
+		t.Fatalf("expected loupe translated by (+50,+20) to (150,120), got %+v", items[0])
 	}
 }
 
