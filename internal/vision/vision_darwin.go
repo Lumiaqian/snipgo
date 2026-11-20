@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"runtime"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -66,6 +67,7 @@ var (
 	selSetLangCorr      = objc.RegisterName("setUsesLanguageCorrection:")
 	selSetRecLangs      = objc.RegisterName("setRecognitionLanguages:")
 	selSetMinTextHeight = objc.RegisterName("setMinimumTextHeight:")
+	selSetUsesCPUOnly   = objc.RegisterName("setUsesCPUOnly:")
 	selSetSymbologies   = objc.RegisterName("setSymbologies:")
 	selResults          = objc.RegisterName("results")
 	selCount            = objc.RegisterName("count")
@@ -156,49 +158,19 @@ func Recognize(img *image.NRGBA) (Result, error) {
 	}
 	defer cgImageRelease(cgImg)
 
-	emptyDict := objc.ID(objc.GetClass("NSDictionary")).Send(selDictionary)
-	handler := objc.ID(objc.GetClass("VNImageRequestHandler")).Send(selAlloc).Send(selInitCGImage, cgImg, emptyDict)
-	if handler == 0 {
-		return Result{}, errors.New("创建 VNImageRequestHandler 失败")
-	}
-	handler.Send(selAutorelease)
-
-	textReq := objc.ID(objc.GetClass("VNRecognizeTextRequest")).Send(selAlloc).Send(selInit)
-	if textReq == 0 {
-		return Result{}, errors.New("创建 VNRecognizeTextRequest 失败")
-	}
-	textReq.Send(selAutorelease)
-	textReq.Send(selSetRecLevel, uintptr(0)) // Accurate
-	textReq.Send(selSetLangCorr, true)
-	msgSetFloat32(textReq, selSetMinTextHeight, 0.0)
-	langs := [3]objc.ID{nsStr("zh-Hans"), nsStr("zh-Hant"), nsStr("en-US")}
-	langArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&langs[0])), uintptr(len(langs)))
-	textReq.Send(selSetRecLangs, langArr)
-
-	barcodeReq := objc.ID(objc.GetClass("VNDetectBarcodesRequest")).Send(selAlloc).Send(selInit)
-	if barcodeReq != 0 {
-		barcodeReq.Send(selAutorelease)
-		qrSym := [1]objc.ID{nsStr("VNBarcodeSymbologyQR")}
-		qrArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&qrSym[0])), uintptr(1))
-		barcodeReq.Send(selSetSymbologies, qrArr)
-	}
-
-	reqs := [2]objc.ID{textReq, barcodeReq}
-	reqCount := 1
-	if barcodeReq != 0 {
-		reqCount = 2
-	}
-	reqArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&reqs[0])), uintptr(reqCount))
-
-	var nsErr objc.ID
-	ok := objc.Send[bool](handler, selPerformReqs, reqArr, uintptr(unsafe.Pointer(&nsErr)))
-	if !ok {
-		if nsErr != 0 {
-			if desc := nsErr.Send(selLocalizedDesc); desc != 0 {
-				return Result{}, errors.New(cstrings.NSStringToString(desc))
-			}
+	// 文本 OCR 与二维码检测拆分为独立 Vision 会话，避免单条流水线（如 Quagga E5RT）异常拖垮文字识别。
+	textReq, textErr := performTextRequest(cgImg, false)
+	if textErr != nil {
+		if isRunningUnderRosetta() {
+			return Result{}, fmt.Errorf("检测到当前运行的是 Intel (amd64) 转译版（Rosetta 2），macOS Apple Vision 离线引擎无法在 Rosetta 下运行，请安装 Apple Silicon (arm64) 版本（%w）", textErr)
 		}
-		return Result{}, errors.New("Vision 识别执行失败")
+		if retryReq, retryErr := performTextRequest(cgImg, true); retryErr == nil {
+			textReq = retryReq
+			textErr = nil
+		}
+	}
+	if textErr != nil {
+		return Result{}, textErr
 	}
 
 	prepW := float64(prepared.Bounds().Dx())
@@ -247,32 +219,111 @@ func Recognize(img *image.NRGBA) (Result, error) {
 		}
 	}
 
-	var barcodes []string
-	seenQR := map[string]bool{}
-	if barcodeReq != 0 {
-		bArr := barcodeReq.Send(selResults)
-		if bArr != 0 {
-			n := int(objc.Send[uintptr](bArr, selCount))
-			for i := range n {
-				obs := bArr.Send(selObjectAtIndex, uintptr(i))
-				val := obs.Send(selPayloadStringVal)
-				if val == 0 {
-					continue
-				}
-				payload := cstrings.NSStringToString(val)
-				if payload != "" && !seenQR[payload] {
-					seenQR[payload] = true
-					barcodes = append(barcodes, payload)
-				}
-			}
-		}
-	}
+	barcodes := detectBarcodes(cgImg)
 
 	return Result{
 		Text:     layoutBlocks(blocks),
 		Barcodes: barcodes,
 		Boxes:    outBoxes,
 	}, nil
+}
+
+func isRunningUnderRosetta() bool {
+	v, err := syscall.SysctlUint32("sysctl.proc_translated")
+	return err == nil && v == 1
+}
+
+func nsErrorDesc(nsErr objc.ID, fallback string) error {
+	if nsErr != 0 {
+		if desc := nsErr.Send(selLocalizedDesc); desc != 0 {
+			return errors.New(cstrings.NSStringToString(desc))
+		}
+	}
+	return errors.New(fallback)
+}
+
+func performTextRequest(cgImg uintptr, cpuOnly bool) (objc.ID, error) {
+	emptyDict := objc.ID(objc.GetClass("NSDictionary")).Send(selDictionary)
+	handler := objc.ID(objc.GetClass("VNImageRequestHandler")).Send(selAlloc).Send(selInitCGImage, cgImg, emptyDict)
+	if handler == 0 {
+		return 0, errors.New("创建 VNImageRequestHandler 失败")
+	}
+	handler.Send(selAutorelease)
+
+	textReq := objc.ID(objc.GetClass("VNRecognizeTextRequest")).Send(selAlloc).Send(selInit)
+	if textReq == 0 {
+		return 0, errors.New("创建 VNRecognizeTextRequest 失败")
+	}
+	textReq.Send(selAutorelease)
+	textReq.Send(selSetRecLevel, uintptr(0)) // Accurate
+	textReq.Send(selSetLangCorr, true)
+	if cpuOnly {
+		textReq.Send(selSetUsesCPUOnly, true)
+	}
+	msgSetFloat32(textReq, selSetMinTextHeight, 0.0)
+	langs := [3]objc.ID{nsStr("zh-Hans"), nsStr("zh-Hant"), nsStr("en-US")}
+	langArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&langs[0])), uintptr(len(langs)))
+	textReq.Send(selSetRecLangs, langArr)
+	runtime.KeepAlive(langs)
+
+	reqs := [1]objc.ID{textReq}
+	reqArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&reqs[0])), uintptr(1))
+	var nsErr objc.ID
+	ok := objc.Send[bool](handler, selPerformReqs, reqArr, uintptr(unsafe.Pointer(&nsErr)))
+	runtime.KeepAlive(reqs)
+	if !ok {
+		return 0, nsErrorDesc(nsErr, "Vision 识别执行失败")
+	}
+	return textReq, nil
+}
+
+func detectBarcodes(cgImg uintptr) []string {
+	barcodeReq := objc.ID(objc.GetClass("VNDetectBarcodesRequest")).Send(selAlloc).Send(selInit)
+	if barcodeReq == 0 {
+		return nil
+	}
+	barcodeReq.Send(selAutorelease)
+	qrSym := [1]objc.ID{nsStr("VNBarcodeSymbologyQR")}
+	qrArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&qrSym[0])), uintptr(1))
+	barcodeReq.Send(selSetSymbologies, qrArr)
+	runtime.KeepAlive(qrSym)
+
+	emptyDict := objc.ID(objc.GetClass("NSDictionary")).Send(selDictionary)
+	handler := objc.ID(objc.GetClass("VNImageRequestHandler")).Send(selAlloc).Send(selInitCGImage, cgImg, emptyDict)
+	if handler == 0 {
+		return nil
+	}
+	handler.Send(selAutorelease)
+
+	reqs := [1]objc.ID{barcodeReq}
+	reqArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&reqs[0])), uintptr(1))
+	var nsErr objc.ID
+	ok := objc.Send[bool](handler, selPerformReqs, reqArr, uintptr(unsafe.Pointer(&nsErr)))
+	runtime.KeepAlive(reqs)
+	if !ok {
+		return nil
+	}
+
+	bArr := barcodeReq.Send(selResults)
+	if bArr == 0 {
+		return nil
+	}
+	n := int(objc.Send[uintptr](bArr, selCount))
+	var barcodes []string
+	seenQR := map[string]bool{}
+	for i := range n {
+		obs := bArr.Send(selObjectAtIndex, uintptr(i))
+		val := obs.Send(selPayloadStringVal)
+		if val == 0 {
+			continue
+		}
+		payload := cstrings.NSStringToString(val)
+		if payload != "" && !seenQR[payload] {
+			seenQR[payload] = true
+			barcodes = append(barcodes, payload)
+		}
+	}
+	return barcodes
 }
 
 // Cutout 调用 macOS 14+ 原生 Vision 前景实例分割（VNGenerateForegroundInstanceMaskRequest），
@@ -316,13 +367,14 @@ func Cutout(img *image.NRGBA) (*image.NRGBA, error) {
 	reqs := [1]objc.ID{req}
 	reqArr := objc.ID(objc.GetClass("NSArray")).Send(selArrayWithObjs, uintptr(unsafe.Pointer(&reqs[0])), uintptr(1))
 	var nsErr objc.ID
-	if !objc.Send[bool](handler, selPerformReqs, reqArr, uintptr(unsafe.Pointer(&nsErr))) {
-		if nsErr != 0 {
-			if desc := nsErr.Send(selLocalizedDesc); desc != 0 {
-				return nil, errors.New(cstrings.NSStringToString(desc))
-			}
+	ok := objc.Send[bool](handler, selPerformReqs, reqArr, uintptr(unsafe.Pointer(&nsErr)))
+	runtime.KeepAlive(reqs)
+	if !ok {
+		err := nsErrorDesc(nsErr, "主体抠图分析失败")
+		if isRunningUnderRosetta() {
+			return nil, fmt.Errorf("检测到当前运行的是 Intel (amd64) 转译版（Rosetta 2），macOS Apple Vision 离线引擎无法在 Rosetta 下运行，请安装 Apple Silicon (arm64) 版本（%w）", err)
 		}
-		return nil, errors.New("主体抠图分析失败")
+		return nil, err
 	}
 
 	resArr := req.Send(selResults)

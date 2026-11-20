@@ -112,9 +112,9 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 ## 📦 下载与安装
 
 1. 前往 [GitHub Releases](https://github.com/Lumiaqian/snipgo/releases) 下载对应架构的最新包：
-   - **Apple Silicon（M1–M4）**：`SnipGo-*-arm64.dmg`
-   - **Intel Mac**：`SnipGo-*-amd64.dmg`
-   - **通用包**：`SnipGo-*-universal.dmg`
+   - **Apple Silicon（M1–M5）**：`SnipGo-*-AppleSilicon-arm64.dmg`
+   - **Intel Mac**：`SnipGo-*-Intel-amd64.dmg`
+   - **通用包**：`SnipGo-*-Universal.dmg`
 2. 拖入 `/Applications`（应用程序）文件夹。
 3. **首次启动与权限说明（需要 macOS 14.0+）**：
    - 未签名版本若触发 macOS“已损坏/无法验证开发者”提示，在终端执行一次移除隔离属性即可正常打开：
@@ -175,4 +175,4 @@ go tool mygo build -skip-dmg
 
 ### GitHub Actions 流水线
 - **持续集成（`.github/workflows/ci.yml`）**：推送 `main`、发起 PR 或手动触发时自动运行完整测试、`mygo vet`、跨平台检查并打包 `arm64` / `amd64` / `universal` 构建产物。
-- **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg` / `.app.zip`，并在配置 `MYGO_UPDATER_PRIVATE_KEY` 机密时一并生成带 Ed25519 签名的 `update-darwin-*.json`、`.tar.gz`、`.delta` 增量更新与 `SHA256SUMS.txt` 发布 Release。未配置证书机密时自动使用 ad-hoc 签名；配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（及公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`）即可全自动完成正式签名与 Apple 公证。
+- **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg`（`AppleSilicon-arm64` / `Intel-amd64` / `Universal`），并在配置 `MYGO_UPDATER_PRIVATE_KEY` 机密时一并生成带 Ed25519 签名的 `update-darwin-*.json`、`.tar.gz`、`.delta` 增量更新与 `SHA256SUMS.txt` 发布 Release。未配置证书机密时自动使用 ad-hoc 签名；配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（及公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`）即可全自动完成正式签名与 Apple 公证。

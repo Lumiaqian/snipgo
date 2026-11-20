@@ -234,24 +234,24 @@ func uiPalette(c *ui.Context) palette {
 	black := ui.RGB(0, 0, 0)
 
 	if dark {
-		cardBg := ui.RGBA(255, 255, 255, 0.08)
-		cardBgHover := ui.RGBA(255, 255, 255, 0.13)
-		cardBorder := ui.RGBA(255, 255, 255, 0.13)
-		inputBg := ui.RGBA(0, 0, 0, 0.30)
-		stageBg := ui.RGBA(12, 14, 20, 0.52)
+		cardBg := ui.RGBA(255, 255, 255, 0.065)
+		cardBgHover := ui.RGBA(255, 255, 255, 0.11)
+		cardBorder := ui.RGBA(255, 255, 255, 0.10)
+		inputBg := ui.RGBA(0, 0, 0, 0.22)
+		stageBg := ui.RGBA(12, 14, 20, 0.48)
 		switch st.GlassLevel {
 		case "clear":
-			cardBg = ui.RGBA(255, 255, 255, 0.05)
-			cardBgHover = ui.RGBA(255, 255, 255, 0.10)
-			cardBorder = ui.RGBA(255, 255, 255, 0.12)
-			inputBg = ui.RGBA(0, 0, 0, 0.20)
-			stageBg = ui.RGBA(12, 14, 20, 0.34)
+			cardBg = ui.RGBA(255, 255, 255, 0.045)
+			cardBgHover = ui.RGBA(255, 255, 255, 0.085)
+			cardBorder = ui.RGBA(255, 255, 255, 0.09)
+			inputBg = ui.RGBA(0, 0, 0, 0.14)
+			stageBg = ui.RGBA(12, 14, 20, 0.32)
 		case "frosted":
-			cardBg = ui.RGBA(255, 255, 255, 0.12)
-			cardBgHover = ui.RGBA(255, 255, 255, 0.18)
-			cardBorder = ui.RGBA(255, 255, 255, 0.18)
-			inputBg = ui.RGBA(0, 0, 0, 0.40)
-			stageBg = ui.RGBA(12, 14, 20, 0.68)
+			cardBg = ui.RGBA(255, 255, 255, 0.105)
+			cardBgHover = ui.RGBA(255, 255, 255, 0.155)
+			cardBorder = ui.RGBA(255, 255, 255, 0.14)
+			inputBg = ui.RGBA(0, 0, 0, 0.30)
+			stageBg = ui.RGBA(12, 14, 20, 0.62)
 		}
 		return palette{
 			Dark:           true,
@@ -260,25 +260,25 @@ func uiPalette(c *ui.Context) palette {
 			TextMuted:      ui.RGBA(198, 206, 220, 0.54),
 			Accent:         accent,
 			AccentText:     white,
-			PanelRim:       ui.RGBA(255, 255, 255, 0.16),
+			PanelRim:       ui.RGBA(255, 255, 255, 0.11),
 			CardBg:         cardBg,
 			CardBgHover:    cardBgHover,
 			CardBorder:     cardBorder,
-			CardTopRim:     ui.RGBA(255, 255, 255, 0.14),
-			ActiveBg:       accent.Alpha(0.34),
-			ActiveBorder:   accent.Mix(white, 0.34).Alpha(0.84),
+			CardTopRim:     ui.RGBA(255, 255, 255, 0.10),
+			ActiveBg:       accent.Alpha(0.30),
+			ActiveBorder:   accent.Mix(white, 0.34).Alpha(0.72),
 			ActiveText:     accent.Mix(white, 0.72),
 			InputBg:        inputBg,
-			InputBorder:    ui.RGBA(255, 255, 255, 0.14),
-			Divider:        ui.RGBA(255, 255, 255, 0.11),
-			SubtleBtnBg:    ui.RGBA(20, 22, 30, 0.44),
-			SubtleBtnHover: ui.RGBA(34, 38, 50, 0.58),
-			SubtleBorder:   ui.RGBA(255, 255, 255, 0.18),
-			BadgeSuccessBg: ui.RGBA(48, 209, 88, 0.18),
-			BadgeSuccessBd: ui.RGBA(48, 209, 88, 0.36),
+			InputBorder:    ui.RGBA(255, 255, 255, 0.10),
+			Divider:        ui.RGBA(255, 255, 255, 0.08),
+			SubtleBtnBg:    ui.RGBA(255, 255, 255, 0.07),
+			SubtleBtnHover: ui.RGBA(255, 255, 255, 0.13),
+			SubtleBorder:   ui.RGBA(255, 255, 255, 0.13),
+			BadgeSuccessBg: ui.RGBA(48, 209, 88, 0.14),
+			BadgeSuccessBd: ui.RGBA(48, 209, 88, 0.24),
 			BadgeSuccessFg: ui.RGB(122, 242, 166),
-			BadgeInfoBg:    accent.Alpha(0.20),
-			BadgeInfoBd:    accent.Mix(white, 0.32).Alpha(0.40),
+			BadgeInfoBg:    accent.Alpha(0.16),
+			BadgeInfoBd:    accent.Mix(white, 0.32).Alpha(0.32),
 			BadgeInfoFg:    accent.Mix(white, 0.48),
 			StageBg:        stageBg,
 			StageDot:       ui.RGBA(255, 255, 255, 0.09),
@@ -311,7 +311,7 @@ func uiPalette(c *ui.Context) palette {
 		TextMuted:      ui.RGBA(60, 64, 76, 0.56),
 		Accent:         accent,
 		AccentText:     white,
-		PanelRim:       ui.RGBA(255, 255, 255, 0.52),
+		PanelRim:       ui.RGBA(255, 255, 255, 0.45),
 		CardBg:         cardBg,
 		CardBgHover:    cardBgHover,
 		CardBorder:     cardBorder,
@@ -342,7 +342,7 @@ func liquidGlassPanel(c *ui.Context, el ui.Element) ui.Element {
 	st := getActiveTheme()
 	el.Fill().Radius(panelCornerRadius).TextColor(p.Text)
 	if c.Vibrancy() {
-		return el.Border(1, p.PanelRim).InsetShadow(0, 1, 0, 0, p.CardTopRim)
+		return el.Border(1, p.PanelRim)
 	}
 	switch st.GlassLevel {
 	case "clear":
@@ -457,26 +457,28 @@ func glassGroupBtn(c *ui.Context, add func(ui.Element) ui.Element, ic *ui.SVG, l
 func liquidPrimaryChrome(c *ui.Context, el ui.Element, radius float32) ui.Element {
 	p := uiPalette(c)
 	col := el.AnimateColor("prim-bg", p.Accent, colorMorph)
-	return el.Radius(radius).Material(glass.Glass{
-		Style:       activeGlassStyle(),
-		Tint:        col,
-		Interactive: true,
-	})
+	return el.Radius(radius).
+		Material(glass.Glass{
+			Style:       activeGlassStyle(),
+			Tint:        col,
+			Interactive: true,
+		}).
+		InsetShadow(0, 1, 0, 0, ui.RGBA(255, 255, 255, 0.24))
 }
 
 // liquidSecondaryChrome 为次级胶囊按钮应用真实 Liquid Glass（浮窗下启用原生 NSGlassEffectView）与弹簧高光。
 func liquidSecondaryChrome(c *ui.Context, el ui.Element, hovered bool, radius float32) ui.Element {
 	p := uiPalette(c)
 	if c.Vibrancy() {
-		tint := ui.RGBA(255, 255, 255, 0.18)
+		tint := ui.RGBA(255, 255, 255, 0.28)
 		if p.Dark {
-			tint = ui.RGBA(24, 26, 34, 0.34)
+			tint = ui.RGBA(255, 255, 255, 0.06)
 		}
 		if hovered {
 			if p.Dark {
-				tint = ui.RGBA(42, 46, 60, 0.48)
+				tint = ui.RGBA(255, 255, 255, 0.14)
 			} else {
-				tint = ui.RGBA(255, 255, 255, 0.36)
+				tint = ui.RGBA(255, 255, 255, 0.48)
 			}
 		}
 		animTint := el.AnimateColor("sec-tint", tint, colorMorph)
@@ -485,19 +487,17 @@ func liquidSecondaryChrome(c *ui.Context, el ui.Element, hovered bool, radius fl
 				Style:  activeGlassStyle(),
 				Tint:   animTint,
 				Native: true,
-			}).
-			Border(1, p.SubtleBorder).
-			InsetShadow(0, 1, 0, 0, p.CardTopRim)
+			})
 	}
-	tint := ui.RGBA(255, 255, 255, 0.22)
+	tint := ui.RGBA(255, 255, 255, 0.24)
 	if p.Dark {
-		tint = ui.RGBA(24, 26, 34, 0.26)
+		tint = ui.RGBA(255, 255, 255, 0.08)
 	}
 	if hovered {
 		if p.Dark {
-			tint = ui.RGBA(38, 42, 54, 0.42)
+			tint = ui.RGBA(255, 255, 255, 0.16)
 		} else {
-			tint = ui.RGBA(255, 255, 255, 0.40)
+			tint = ui.RGBA(255, 255, 255, 0.42)
 		}
 	}
 	return el.Radius(radius).
@@ -510,20 +510,24 @@ func liquidSecondaryChrome(c *ui.Context, el ui.Element, hovered bool, radius fl
 		InsetShadow(0, 1, 0, 0, p.CardTopRim)
 }
 
-type segMatchKey struct{ id string }
-
 // liquidSegmented 绘制 macOS 26 风格可滑动 Liquid Glass 分段选择器，返回被点击项索引（未点击返回 -1）。
 func liquidSegmented(c *ui.Context, groupID string, selected int, labels []string) int {
 	p := uiPalette(c)
 	clicked := -1
+	trackBg := ui.RGBA(0, 0, 0, 0.055)
+	trackBd := ui.RGBA(0, 0, 0, 0.05)
+	if p.Dark {
+		trackBg = ui.RGBA(255, 255, 255, 0.07)
+		trackBd = ui.RGBA(255, 255, 255, 0.07)
+	}
 	track := ui.Row(c.Key(groupID+"-track")).
 		Height(30).
 		Padding(3, 3).
 		Gap(2).
 		AlignItems(ui.Center).
 		Radius(15).
-		Background(p.InputBg).
-		Border(1, p.InputBorder).
+		Background(trackBg).
+		Border(1, trackBd).
 		Shrink(0)
 	track.Children(func() {
 		for i, lbl := range labels {
@@ -547,33 +551,37 @@ func liquidSegmented(c *ui.Context, groupID string, selected int, labels []strin
 					opt.Scale(sc, sc)
 				}
 			}
-			opt.Children(func() {
-				if active {
-					thumbBg := p.ActiveBg.Mix(p.Accent, 0.22)
-					shadowCol := p.Accent.Alpha(0.22)
-					if p.Dark {
-						shadowCol = ui.RGBA(0, 0, 0, 0.36)
-					}
-					thumb := ui.Box(c.Key(fmt.Sprintf("%s-thumb-%d", groupID, i))).
-						Absolute().Fill().
-						Radius(12).
-						Background(thumbBg).
-						Border(1, p.ActiveBorder).
-						InsetShadow(0, 1, 0, 0, p.CardTopRim).
-						Shadow(0, 2, 6, 0, shadowCol).
-						IgnoreInput(true).
-						Transition(ui.ElementTransition{
-							Match:     segMatchKey{id: groupID},
-							Animation: &springSnappy,
-						})
-					_ = thumb
-				} else if opt.Hovered() {
-					ui.Box(c).Absolute().Fill().Radius(12).Background(p.SubtleBtnHover).IgnoreInput(true)
+			if active {
+				thumbBg := ui.RGBA(255, 255, 255, 0.96)
+				thumbBd := ui.RGBA(0, 0, 0, 0.07)
+				shadowCol := ui.RGBA(0, 0, 0, 0.10)
+				topRim := ui.RGBA(255, 255, 255, 0.72)
+				if p.Dark {
+					thumbBg = ui.RGBA(255, 255, 255, 0.19)
+					thumbBd = ui.RGBA(255, 255, 255, 0.15)
+					shadowCol = ui.RGBA(0, 0, 0, 0.28)
+					topRim = ui.RGBA(255, 255, 255, 0.22)
 				}
+				opt.Background(thumbBg).
+					Border(1, thumbBd).
+					InsetShadow(0, 1, 0, 0, topRim).
+					Shadow(0, 1.5, 4, 0, shadowCol)
+			} else if opt.Hovered() {
+				hovBg := ui.RGBA(0, 0, 0, 0.04)
+				if p.Dark {
+					hovBg = ui.RGBA(255, 255, 255, 0.07)
+				}
+				opt.Background(hovBg)
+			}
+			opt.Children(func() {
 				txtCol := p.TextSecondary
 				fw := 500
 				if active {
-					txtCol = p.ActiveText
+					if p.Dark {
+						txtCol = ui.RGB(255, 255, 255)
+					} else {
+						txtCol = p.Text
+					}
 					fw = 600
 				} else if opt.Hovered() {
 					txtCol = p.Text
@@ -802,7 +810,6 @@ func statusBadgePill(c *ui.Context, text string, success bool) {
 	animFg := pill.AnimateColor("sb-fg", fg, colorMorph)
 	pill.Background(animBg).
 		Border(1, animBd).
-		InsetShadow(0, 1, 0, 0, p.CardTopRim).
 		Children(func() {
 			ui.Text(c, text).FontSize(11).FontWeight(500).NoWrap().
 				TextColor(animFg).

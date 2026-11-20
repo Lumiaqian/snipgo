@@ -75,13 +75,9 @@ jobs:
           go tool mygo build -platform "darwin/arm64,darwin/amd64,darwin/universal"
 
           mkdir -p dist
-          cp "build/darwin-arm64/snipgo-${VERSION}-arm64.dmg" "dist/SnipGo-${VERSION}-arm64.dmg"
-          cp "build/darwin-amd64/snipgo-${VERSION}-amd64.dmg" "dist/SnipGo-${VERSION}-amd64.dmg"
-          cp "build/darwin-universal/snipgo-${VERSION}.dmg" "dist/SnipGo-${VERSION}-universal.dmg"
-
-          ditto -c -k --sequesterRsrc --keepParent "build/darwin-arm64/SnipGo.app" "dist/SnipGo-${VERSION}-arm64.app.zip"
-          ditto -c -k --sequesterRsrc --keepParent "build/darwin-amd64/SnipGo.app" "dist/SnipGo-${VERSION}-amd64.app.zip"
-          ditto -c -k --sequesterRsrc --keepParent "build/darwin-universal/SnipGo.app" "dist/SnipGo-${VERSION}-universal.app.zip"
+          cp "build/darwin-arm64/snipgo-${VERSION}-arm64.dmg" "dist/SnipGo-${VERSION}-AppleSilicon-arm64.dmg"
+          cp "build/darwin-amd64/snipgo-${VERSION}-amd64.dmg" "dist/SnipGo-${VERSION}-Intel-amd64.dmg"
+          cp "build/darwin-universal/snipgo-${VERSION}.dmg" "dist/SnipGo-${VERSION}-Universal.dmg"
 
           (cd dist && shasum -a 256 SnipGo-* > SHA256SUMS.txt)
           ls -lh dist/

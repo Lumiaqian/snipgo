@@ -126,13 +126,9 @@ jobs:
           go tool mygo build -platform "darwin/arm64,darwin/amd64,darwin/universal"
 
           mkdir -p dist
-          cp "build/darwin-arm64/snipgo-${VERSION}-arm64.dmg" "dist/SnipGo-${VERSION}-arm64.dmg"
-          cp "build/darwin-amd64/snipgo-${VERSION}-amd64.dmg" "dist/SnipGo-${VERSION}-amd64.dmg"
-          cp "build/darwin-universal/snipgo-${VERSION}.dmg" "dist/SnipGo-${VERSION}-universal.dmg"
-
-          ditto -c -k --sequesterRsrc --keepParent "build/darwin-arm64/SnipGo.app" "dist/SnipGo-${VERSION}-arm64.app.zip"
-          ditto -c -k --sequesterRsrc --keepParent "build/darwin-amd64/SnipGo.app" "dist/SnipGo-${VERSION}-amd64.app.zip"
-          ditto -c -k --sequesterRsrc --keepParent "build/darwin-universal/SnipGo.app" "dist/SnipGo-${VERSION}-universal.app.zip"
+          cp "build/darwin-arm64/snipgo-${VERSION}-arm64.dmg" "dist/SnipGo-${VERSION}-AppleSilicon-arm64.dmg"
+          cp "build/darwin-amd64/snipgo-${VERSION}-amd64.dmg" "dist/SnipGo-${VERSION}-Intel-amd64.dmg"
+          cp "build/darwin-universal/snipgo-${VERSION}.dmg" "dist/SnipGo-${VERSION}-Universal.dmg"
 
           shopt -s nullglob
           for f in build/darwin-*/update-darwin-*.json build/darwin-*/snipgo-*-darwin-*.tar.gz build/darwin-*/snipgo-*-to-*-darwin-*.delta; do
@@ -164,9 +160,9 @@ jobs:
           NOTES_FILE="$RUNNER_TEMP/release-notes.md"
           {
             echo "### 下载安装（macOS 14+）"
-            echo "- **Apple Silicon (M1–M5)**：\`SnipGo-${VERSION}-arm64.dmg\`（推荐）"
-            echo "- **Intel Mac**：\`SnipGo-${VERSION}-amd64.dmg\`"
-            echo "- **通用双架构 (Universal)**：\`SnipGo-${VERSION}-universal.dmg\`"
+            echo "- **Apple Silicon (M1–M5)**：\`SnipGo-${VERSION}-AppleSilicon-arm64.dmg\`（推荐）"
+            echo "- **Intel Mac**：\`SnipGo-${VERSION}-Intel-amd64.dmg\`"
+            echo "- **通用双架构 (Universal)**：\`SnipGo-${VERSION}-Universal.dmg\`"
             if [ "$NOTARIZED" != "true" ]; then
               echo ""
               echo "> **首次打开提示（未配置 Apple 公证时）**：拖入 \`/Applications\` 后如遇系统拦截，可在「系统设置 → 隐私与安全性」点击「仍要打开」，或在终端执行一次 \`xattr -cr /Applications/SnipGo.app\`。"

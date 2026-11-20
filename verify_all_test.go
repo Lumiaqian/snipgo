@@ -447,7 +447,7 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 		table:       tbl,
 		hasTable:    true,
 		mode:        ocrModeMarkdown,
-		copiedBadge: "已复制 Markdown 表格 (3×3)",
+		copiedBadge: "已复制 Markdown",
 	}
 	sheet9Img := ui.Render(func(c *ui.Context) {
 		ui.Box(c).Fill().Padding(16, 16).
@@ -696,6 +696,62 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 		xOff += tile.Bounds().Dx()
 	}
 	savePNGFile(t, filepath.Join(dir, "verify_15_theme_showcase.png"), sheet15)
+
+	// 图 16：新版「识图提取」Liquid Glass 全场景预览（深色交互式表格 / 深色等宽源码 / 浅色纯文本+链接）
+	diffTbl := vision.Table{
+		Cols: 2,
+		Rows: [][]string{
+			{"4个已更改文件 +133-89", "变更统计"},
+			{".github/workflows", "+9 -17"},
+			{"internal/vision", "+120 -68"},
+			{"README.md", "+4 -4"},
+		},
+	}
+	owDarkTable := &ocrWindow{
+		plainText:   "4个已更改文件 +133-89 变更统计\n.github/workflows +9 -17\ninternal/vision +120 -68\nREADME.md +4 -4",
+		text:        diffTbl.Markdown(),
+		table:       diffTbl,
+		hasTable:    true,
+		mode:        ocrModeMarkdown,
+		showRaw:     false,
+		copiedBadge: "已复制 Markdown",
+	}
+	owDarkRaw := &ocrWindow{
+		plainText:   owDarkTable.plainText,
+		text:        diffTbl.TSV(),
+		table:       diffTbl,
+		hasTable:    true,
+		mode:        ocrModeTSV,
+		showRaw:     true,
+		copiedBadge: "已复制 TSV",
+	}
+	owLightPlain := &ocrWindow{
+		plainText:   "SnipGo 支持离线 macOS Vision OCR、二维码提取与结构化表格还原。\n按 ⌥⌘O 一键框选识图，自动复制结果。",
+		text:        "SnipGo 支持离线 macOS Vision OCR、二维码提取与结构化表格还原。\n按 ⌥⌘O 一键框选识图，自动复制结果。",
+		mode:        ocrModePlain,
+		links:       []string{"https://github.com/Lumiaqian/snipgo"},
+		copiedBadge: "已复制 · 58 字",
+	}
+
+	ocrTile1 := renderTile(ocrWinW+32, ocrWinH+32, true, appThemeState{Appearance: "dark", GlassLevel: "regular", Accent: "blue"}, func(c *ui.Context) {
+		a.paintOCRView(c, owDarkTable)
+	})
+	ocrTile2 := renderTile(ocrWinW+32, ocrWinH+32, true, appThemeState{Appearance: "dark", GlassLevel: "regular", Accent: "blue"}, func(c *ui.Context) {
+		a.paintOCRView(c, owDarkRaw)
+	})
+	ocrTile3 := renderTile(ocrWinW+32, ocrWinH+32, false, appThemeState{Appearance: "light", GlassLevel: "regular", Accent: "blue"}, func(c *ui.Context) {
+		a.paintOCRView(c, owLightPlain)
+	})
+
+	s16W := ocrTile1.Bounds().Dx() + ocrTile2.Bounds().Dx() + ocrTile3.Bounds().Dx()
+	s16H := max(ocrTile1.Bounds().Dy(), max(ocrTile2.Bounds().Dy(), ocrTile3.Bounds().Dy()))
+	sheet16 := image.NewNRGBA(image.Rect(0, 0, s16W, s16H))
+	x16 := 0
+	for _, tile := range []*image.RGBA{ocrTile1, ocrTile2, ocrTile3} {
+		draw.Draw(sheet16, tile.Bounds().Add(image.Pt(x16, 0)), tile, tile.Bounds().Min, draw.Src)
+		x16 += tile.Bounds().Dx()
+	}
+	savePNGFile(t, filepath.Join(dir, "verify_16_ocr_redesign.png"), sheet16)
 }
 
 func paintTahoeWallpaper(p *ui.Painter, r ui.Rect, dark bool) {

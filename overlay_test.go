@@ -14,6 +14,7 @@ import (
 	"snipgo/internal/beautify"
 	"snipgo/internal/crop"
 	"snipgo/internal/session"
+	"snipgo/internal/vision"
 )
 
 func TestDimBandsCoverWindowOnce(t *testing.T) {
@@ -567,6 +568,68 @@ func TestOneStepStartLiveOCRAndResultPanel(t *testing.T) {
 	panelTester.Frame()
 	if !panelTester.HasText("识图提取") || !panelTester.HasText("复制全文") || !panelTester.HasText("贴为便签") {
 		t.Fatalf("OCR panel missing expected controls, texts=%v", panelTester.Texts())
+	}
+}
+
+func TestOCRTableViewAndSourceToggle(t *testing.T) {
+	a := &app{}
+	tbl := vision.Table{
+		Cols: 2,
+		Rows: [][]string{
+			{"4个已更改文件 +133 -89", "变更"},
+			{".github/workflows", "+9 -17"},
+			{"internal/vision", "+120 -68"},
+			{"README.md", "+4 -4"},
+		},
+	}
+	var copied string
+	ow := &ocrWindow{
+		loading:     false,
+		plainText:   "4个已更改文件 +133 -89 变更\n.github/workflows +9 -17\ninternal/vision +120 -68\nREADME.md +4 -4",
+		text:        tbl.Markdown(),
+		table:       tbl,
+		hasTable:    true,
+		mode:        ocrModeMarkdown,
+		copiedBadge: "已复制 Markdown",
+		onCopyText: func(s string) {
+			copied = s
+		},
+	}
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.paintOCRView(c, ow)
+	}, ocrWinW, ocrWinH)
+	tt.Frame()
+
+	for _, want := range []string{"纯文本", "Markdown", "表格 TSV", "表格", "源码", "internal/vision", "+120 -68", "复制 Markdown"} {
+		if !tt.HasText(want) {
+			t.Fatalf("missing %q in OCR table view, texts=%v", want, tt.Texts())
+		}
+	}
+
+	// 点击表格单元格可单独复制对应内容并刷新提示徽标。
+	cellRect, ok := tt.Find("+120 -68")
+	if !ok {
+		t.Fatalf("cannot find table cell +120 -68")
+	}
+	tt.ClickAt(cellRect.X+cellRect.W/2, cellRect.Y+cellRect.H/2)
+	tt.Frame()
+	if copied != "+120 -68" || ow.copiedBadge != "已复制单元格" {
+		t.Fatalf("cell click copied=%q badge=%q, want +120 -68 / 已复制单元格", copied, ow.copiedBadge)
+	}
+
+	// 切换到「源码」视图可编辑原始 Markdown 文本。
+	srcRect, ok := tt.Find("源码")
+	if !ok {
+		t.Fatalf("cannot find 源码 toggle")
+	}
+	tt.ClickAt(srcRect.X+srcRect.W/2, srcRect.Y+srcRect.H/2)
+	tt.Frame()
+	if !ow.showRaw {
+		t.Fatal("expected showRaw = true after clicking 源码")
+	}
+	if !tt.HasText("编辑 Markdown 源码") {
+		t.Fatalf("expected raw editor footer hint, texts=%v", tt.Texts())
 	}
 }
 
