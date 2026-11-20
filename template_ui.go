@@ -17,7 +17,7 @@ import (
 
 const (
 	templateWinW = 940
-	templateWinH = 648
+	templateWinH = 664
 )
 
 type templateWindow struct {
@@ -35,7 +35,16 @@ type templateWindow struct {
 	fullCacheImg  *image.NRGBA
 	fullCachePNG  []byte
 	statusBadge   string
+	badge         badgeState
 	enter         panelEnterState
+}
+
+func (tw *templateWindow) setStatusBadge(msg string) {
+	var fallback *string
+	if tw.win == nil {
+		fallback = &tw.statusBadge
+	}
+	tw.badge.Set(msg, tw.win, fallback)
 }
 
 type tplChoiceMatch struct{}
@@ -151,7 +160,7 @@ func (a *app) copyTemplateResult(tw *templateWindow) {
 	}
 	_ = mygo.Clipboard.WriteImage(pngBytes)
 	a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
-	tw.statusBadge = fmt.Sprintf("✓ 已复制 · %d×%d px", out.Bounds().Dx(), out.Bounds().Dy())
+	tw.setStatusBadge(fmt.Sprintf("✓ 已复制 · %d×%d px", out.Bounds().Dx(), out.Bounds().Dy()))
 	a.sessionStatus("模板成图已复制到剪贴板")
 	if tw.win != nil && !tw.win.IsDestroyed() {
 		tw.win.Invalidate()
@@ -167,7 +176,7 @@ func (a *app) saveTemplateResult(tw *templateWindow) {
 	}
 	a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
 	a.SavePNG(pngBytes)
-	tw.statusBadge = "✓ 已触发保存"
+	tw.setStatusBadge("✓ 已触发保存")
 	if tw.win != nil && !tw.win.IsDestroyed() {
 		tw.win.Invalidate()
 	}
@@ -187,7 +196,7 @@ func (a *app) pinTemplateResult(tw *templateWindow) {
 	cur := mygo.Screen.CursorScreenPoint()
 	at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
 	a.ShowPin(out, pngBytes, at, dipW, dipH)
-	tw.statusBadge = "✓ 已钉为悬浮贴图"
+	tw.setStatusBadge("✓ 已钉为悬浮贴图")
 	if tw.win != nil && !tw.win.IsDestroyed() {
 		tw.win.Invalidate()
 	}
@@ -208,7 +217,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 		plainEnter := !typing && c.Shortcut(0, ui.KeyEnter)
 		plainT := !typing && c.Shortcut(0, ui.KeyT)
 
-		if cmdC || cmdEnter || plainEnter {
+		if (!typing && cmdC) || cmdEnter || plainEnter {
 			a.copyTemplateResult(tw)
 		} else if cmdS {
 			a.saveTemplateResult(tw)
@@ -234,40 +243,30 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 		root := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &tw.enter)
 
 		root.Children(func() {
-			// 1. 顶部拖拽标题栏
-			header := ui.Row(c).
-				Height(50).
-				Padding(0, 16).
-				Gap(8).
-				AlignItems(ui.Center).
-				ZIndex(2).
-				DragWindow()
-			header.Children(func() {
-				if macTrafficCloseBtn(c, "关闭模板工作台", "关闭 (⌘W / Esc)") {
-					if tw.win != nil {
-						go mygo.RunOnMain(func() { a.closeTemplateWindow() })
-					}
+			// 1. 顶部无框拖拽标题栏（右侧轻量状态徽标）
+			paintPanelHeader(c, iconTemplate, "SnipGo 套模板", "关闭模板工作台", "关闭 (⌘W / Esc)", func() {
+				if tw.win != nil {
+					a.closeTemplateWindow()
 				}
-				ui.Box(c).Width(2)
-				ui.Icon(c, iconTemplate).FontSize(15).TextColor(p.Accent)
-				ui.Text(c, "SnipGo 套模板").FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
-				statusBadgePill(c, tw.statusBadge, true)
-				ui.Spacer(c)
+			}, func() {
+				statusBadgePill(c, tw.badge.Text(tw.statusBadge), true)
 			})
-			panelHairline(c)
 
-			// 2. 主体左右分栏：左侧所见即所得实时预览画布 + 右侧参数控制栏
-			mainRow := ui.Row(c).Grow(1).AlignItems(ui.Stretch)
+			// 2. 主体左右分栏：左侧独立圆角透明预览画布 + 右侧参数侧边栏
+			mainRow := ui.Row(c).Grow(1).Padding(0, 18, 0, 18).Gap(14).AlignItems(ui.Stretch)
 			mainRow.Children(func() {
-				const sideW = 324
-				stageW := max(260, winW-sideW-40)
-				stageH := max(220, winH-50-54-40)
+				const sideW = 312
+				stageW := max(260, winW-sideW-68)
+				stageH := max(220, winH-48-54-36)
 
-				// 左侧：所见即所得预览舞台（带建筑点阵纹理背景）
 				stage := ui.Box(c).
 					Grow(1).
 					FillHeight().
+					Radius(cardCornerRadius).
+					Clip().
 					Background(p.StageBg).
+					Border(1, p.CardBorder).
+					InsetShadow(0, 1, 0, 0, p.CardTopRim).
 					Padding(16, 16).
 					AlignItems(ui.Center).
 					Justify(ui.Center)
@@ -285,7 +284,6 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 							Shadow(0, 3, 8, 0, ui.RGBA(0, 0, 0, 0.32))
 					}
 
-					// 左下角实时角标：模板名 · 主题名
 					meta := beautify.TemplateMetaByKind(tw.opts.Kind)
 					themes := beautify.TemplateThemes(tw.opts.Kind)
 					themeName := ""
@@ -303,7 +301,8 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 						estInfo += fmt.Sprintf(" · 约 %d×%d px", estW, estH)
 					}
 					liquidGlassCapsule(
-						ui.Row(c).Absolute().Left(14).Bottom(12).Height(26).Padding(0, 11).
+						c,
+						ui.Row(c).Absolute().Left(12).Bottom(12).Height(26).Padding(0, 11).
 							AlignItems(ui.Center).IgnoreInput(true),
 						13,
 						false,
@@ -312,19 +311,17 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 					})
 				})
 
-				panelVHairline(c)
-
 				// 右侧：参数侧边栏（带上下渐进滚动边缘模糊）
 				sideWrap := ui.Box(c).Width(sideW).FillHeight().Clip()
 				sideWrap.Children(func() {
-					sidebar := ui.Scroll(c).Fill().Padding(13, 14).ScrollbarInsets(10, 0, 10)
+					sidebar := ui.Scroll(c).Fill().Padding(2, 2, 8, 2).ScrollbarInsets(2, 0, 6)
 					sidebar.Children(func() {
-						col := ui.Column(c).Gap(8)
+						col := ui.Column(c).Gap(6)
 						col.Children(func() {
 							// A. 模板网格（2列×5行，全部 10 套模板一屏直达）
 							sectionTitle(c, "模板样式")
 							metas := beautify.AllTemplates()
-							grid := ui.Column(c).Gap(5)
+							grid := ui.Column(c).Gap(4)
 							grid.Children(func() {
 								for r := 0; r < len(metas); r += 2 {
 									r := r
@@ -358,8 +355,8 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 										btn := ui.Row(c.Key(4300+i)).
 											Label(th.Name).
 											Tooltip(th.Name).
-											Size(30, 22).
-											Radius(11).
+											Size(28, 20).
+											Radius(10).
 											Padding(2, 2).
 											AlignItems(ui.Center).
 											Justify(ui.Center).
@@ -368,9 +365,9 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 											Cursor(ui.CursorPointer)
 										targetScale := float32(1.0)
 										if btn.Pressed() {
-											targetScale = 0.90
+											targetScale = 0.94
 										} else if active || btn.Hovered() {
-											targetScale = 1.09
+											targetScale = 1.07
 										}
 										if sc := btn.AnimateTo("tpl-sw-sc", targetScale, springPop); sc != 1.0 {
 											btn.Scale(sc, sc)
@@ -386,7 +383,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 											btn.InsetShadow(0, 0, 0, 1.5, ui.RGB(255, 255, 255))
 										}
 										btn.Children(func() {
-											ui.Box(c).Size(7, 7).Radius(3.5).Background(ui.RGB(th.Accent.R, th.Accent.G, th.Accent.B))
+											ui.Box(c).Size(6.5, 6.5).Radius(3.25).Background(ui.RGB(th.Accent.R, th.Accent.G, th.Accent.B))
 										})
 										if btn.Clicked() {
 											tw.opts.Theme = i
@@ -395,22 +392,30 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 								})
 							}
 
-							// C. 文案编辑（标题 / 网址 / 配文）
+							// C. 文案编辑（标题 / 配文）
 							meta := beautify.TemplateMetaByKind(tw.opts.Kind)
 							sectionTitle(c, "卡片文字")
-							txtCard := liquidCard(c, ui.Column(c).Padding(9, 12).Gap(7))
+							txtCard := liquidCard(c, ui.Column(c).Padding(8, 11).Gap(5))
 							txtCard.Children(func() {
-								recessedInputStyle(c, ui.TextInput(c.Key("tpl-title"), &tw.opts.Title).
-									Height(27).
-									Padding(0, 9).
-									FontSize(12).
-									Placeholder(meta.TitlePlaceholder))
+								ui.Column(c).Gap(2).Children(func() {
+									ui.Text(c, "标题").FontSize(10.5).FontWeight(500).TextColor(p.TextMuted)
+									baseTextInput(c.Key("tpl-title"), &tw.opts.Title).
+										Label("卡片标题").
+										Height(27).
+										Padding(0, 10).
+										FontSize(12).
+										Placeholder(meta.TitlePlaceholder)
+								})
 
-								recessedInputStyle(c, ui.TextInput(c.Key("tpl-caption"), &tw.opts.Caption).
-									Height(27).
-									Padding(0, 9).
-									FontSize(12).
-									Placeholder(meta.CaptionPlaceholder))
+								ui.Column(c).Gap(2).Children(func() {
+									ui.Text(c, "配文").FontSize(10.5).FontWeight(500).TextColor(p.TextMuted)
+									baseTextInput(c.Key("tpl-caption"), &tw.opts.Caption).
+										Label("卡片配文").
+										Height(27).
+										Padding(0, 10).
+										FontSize(12).
+										Placeholder(meta.CaptionPlaceholder)
+								})
 
 								if strings.TrimSpace(tw.opts.Title) != "" || strings.TrimSpace(tw.opts.Caption) != "" {
 									clearRow := ui.Row(c).Justify(ui.End)
@@ -425,7 +430,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 
 							// D. 版式与日期选项
 							sectionTitle(c, "版式选项")
-							optCard := liquidCard(c, ui.Column(c).Padding(9, 12).Gap(8))
+							optCard := liquidCard(c, ui.Column(c).Padding(8, 11).Gap(7))
 							optCard.Children(func() {
 								liquidSwitch(c, "tpl-date", &tw.opts.ShowDate, "显示日期水印")
 								padSel := 1
@@ -446,15 +451,11 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 							})
 						})
 					})
-					paintTopScrollEdge(c, 11)
-					paintBottomScrollEdge(c, 11)
 				})
 			})
 
-			panelHairline(c)
-
-			// 3. 底部导出动作栏（支持直接拖出 PNG）
-			footer := ui.Row(c).Height(54).Padding(0, 16).Gap(8).AlignItems(ui.Center).ZIndex(2)
+			// 3. 底部浮动导出动作栏（支持直接拖出 PNG）
+			footer := ui.Row(c).Height(54).Padding(0, 18).Gap(8).AlignItems(ui.Center).ZIndex(2)
 			footer.Children(func() {
 				dragBtn := ui.Row(c).
 					Label("拖出PNG").
@@ -499,11 +500,9 @@ func (a *app) paintTemplateChoiceCard(c *ui.Context, tw *templateWindow, meta be
 		Label(meta.Name).
 		Tooltip(meta.ShortDesc).
 		Grow(1).
-		Height(36).
-		Padding(0, 9).
-		Gap(6).
+		Height(33).
 		AlignItems(ui.Center).
-		Radius(12).
+		Radius(11).
 		Cursor(ui.CursorPointer)
 	targetScale := float32(1.0)
 	if btn.Pressed() {
@@ -529,6 +528,7 @@ func (a *app) paintTemplateChoiceCard(c *ui.Context, tw *templateWindow, meta be
 				Background(p.ActiveBg).
 				Border(1, p.ActiveBorder).
 				InsetShadow(0, 1, 0, 0, p.CardTopRim).
+				ZIndex(0).
 				IgnoreInput(true).
 				Transition(ui.ElementTransition{
 					Match:     tplChoiceMatch{},
@@ -542,8 +542,10 @@ func (a *app) paintTemplateChoiceCard(c *ui.Context, tw *templateWindow, meta be
 			icCol = p.ActiveText
 			titleCol = p.ActiveText
 		}
-		ui.Icon(c, ic).FontSize(14).Shrink(0).TextColor(icCol)
-		ui.Text(c, meta.Name).FontSize(11.5).FontWeight(600).NoWrap().MaxLines(1).Ellipsis("…").Grow(1).TextColor(titleCol)
+		ui.Row(c).FillWidth().Padding(0, 9).Gap(6).AlignItems(ui.Center).ZIndex(1).Children(func() {
+			ui.Icon(c, ic).FontSize(14).Shrink(0).TextColor(icCol)
+			ui.Text(c, meta.Name).FontSize(11.5).FontWeight(600).NoWrap().MaxLines(1).Ellipsis("…").Grow(1).TextColor(titleCol)
+		})
 	})
 	if btn.Clicked() {
 		tw.opts.Kind = meta.Kind

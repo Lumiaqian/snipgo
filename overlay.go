@@ -541,6 +541,7 @@ func (a *app) paintMask(c *ui.Context, o *overlay) {
 			}
 			pos := hudTopLeft(win, border)
 			liquidGlassCapsule(
+				c,
 				ui.Box(c).Absolute().
 					Left(float32(pos.X)).Top(float32(pos.Y)).
 					ZIndex(5).
@@ -559,6 +560,7 @@ func (a *app) paintMask(c *ui.Context, o *overlay) {
 	}
 	if a.session.AutoOCR() && len(a.overlays) > 0 && o == a.overlays[0] {
 		liquidGlassCapsule(
+			c,
 			ui.Row(c).Absolute().
 				Left(float32(max(12, win.Dx()/2-200))).Top(44).
 				Height(34).
@@ -924,6 +926,7 @@ func (a *app) paintTextEditor(c *ui.Context, o *overlay) {
 	col := a.session.Annotations().Color
 
 	box := liquidGlassCapsule(
+		c,
 		ui.Row(c).Absolute().
 			Left(float32(lx)).Top(float32(ly)).
 			Width(220).
@@ -936,12 +939,11 @@ func (a *app) paintTextEditor(c *ui.Context, o *overlay) {
 	).Border(1.5, ui.RGB(col.R, col.G, col.B))
 	_ = box.Clicked()
 	box.Children(func() {
-		inp := recessedInputStyle(c,
-			ui.TextInput(c.Key("annot-text-input"), &a.textEditBuf).
-				Grow(1).
-				Placeholder("输入批注，回车确认").
-				AutoFocus(),
-		).Radius(8)
+		inp := baseTextInput(c.Key("annot-text-input"), &a.textEditBuf).
+			Grow(1).
+			Placeholder("输入批注，回车确认").
+			AutoFocus().
+			Radius(8)
 		if inp.Submitted() {
 			a.commitOrCloseTextEdit()
 			a.invalidateAll()
@@ -984,17 +986,20 @@ func (a *app) paintRuler(c *ui.Context, o *overlay, win image.Rectangle) {
 	pos := loupePos(win, image.Pt(int(cx), int(cy)), 240, 32)
 	pal := uiPalette(c)
 	liquidGlassCapsule(
-		ui.Box(c).Absolute().
+		c,
+		ui.Row(c).Absolute().
 			Left(float32(pos.X)).Top(float32(pos.Y)).
 			ZIndex(7).
 			Padding(5, 10).
+			Gap(6).
+			AlignItems(ui.Center).
 			IgnoreInput(true),
 		13,
 		o.bitmap == nil,
-	).Border(1, ui.RGBA(255, 69, 58, 0.72)).
-		Children(func() {
-			ui.Text(c, badge).FontSize(11.5).FontWeight(500).FontFeatures("tnum").TextColor(pal.Text)
-		})
+	).Children(func() {
+		ui.Box(c).Size(6, 6).Radius(3).Shrink(0).Background(ui.RGB(255, 69, 58))
+		ui.Text(c, badge).FontSize(11.5).FontWeight(500).FontFeatures("tnum").TextColor(pal.Text)
+	})
 }
 
 func (a *app) paintLoupe(c *ui.Context, o *overlay, win image.Rectangle) {
@@ -1028,6 +1033,7 @@ func (a *app) paintLoupe(c *ui.Context, o *overlay, win image.Rectangle) {
 	pal := uiPalette(c)
 
 	liquidGlassCapsule(
+		c,
 		ui.Box(c).Absolute().
 			Left(float32(pos.X)).Top(float32(pos.Y)).
 			Size(float32(boxW), float32(boxH)).
@@ -1082,6 +1088,7 @@ func (a *app) paintPickedPaletteBar(c *ui.Context, o *overlay, win image.Rectang
 	}
 	pal := uiPalette(c)
 	bar := liquidGlassCapsule(
+		c,
 		ui.Row(c).Absolute().
 			Left(float32(max(12, win.Dx()/2-210))).Top(14).
 			Height(34).
@@ -1191,6 +1198,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 	nativeGlass := o.bitmap == nil
 	wrap.Children(func() {
 		bar := liquidGlassCapsule(
+			c,
 			ui.Row(c).
 				Height(mainBarH).
 				Padding(4, 8).
@@ -1248,10 +1256,11 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 				a.commitOrCloseTextEdit()
 				chosen = a.session.Cutout
 			}
-			canWin := a.session.CanWindowOnly()
-			if iconToolBtn(c, iconWindowOnly, "单窗", "纯净单窗抠图（去壁纸遮挡）(W)", a.session.WindowOnly(), !canWin) && canWin {
-				a.session.ToggleWindowOnly()
-				a.invalidateAll()
+			if a.session.CanWindowOnly() {
+				if iconToolBtn(c, iconWindowOnly, "单窗", "纯净单窗抠图（去壁纸遮挡）(W)", a.session.WindowOnly(), false) {
+					a.session.ToggleWindowOnly()
+					a.invalidateAll()
+				}
 			}
 			if iconToolBtn(c, iconTemplate, "模板", "套用便签 / 拍立得 / 浏览器 / 分享卡等模板 (B)", false, false) {
 				a.commitOrCloseTextEdit()
@@ -1263,14 +1272,13 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 					a.invalidateAll()
 				}
 			}
-
-			toolbarDivider(c)
-
 			if iconToolBtn(c, iconScrollCap, "长图", "滚动长截图 (L)", false, false) {
 				a.commitOrCloseTextEdit()
 				selCopy := sel
 				chosen = func() { a.startScrollCapture(selCopy) }
 			}
+
+			toolbarDivider(c)
 
 			if actionPillBtn(c, iconOCR, "识图", "提取图中文字与二维码 (O)", false, true) {
 				a.commitOrCloseTextEdit()
@@ -1295,6 +1303,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 
 		if showSubBar {
 			sub := liquidGlassCapsule(
+				c,
 				ui.Row(c).
 					Height(subBarH).
 					Padding(4, 10).
@@ -1365,15 +1374,17 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 						if hasSelIt && selIt.Tool == annotate.ToolLoupe && selIt.Zoom > 0 {
 							curZoom = selIt.Zoom
 						}
-						for i, z := range [...]float64{2.0, 2.5, 3.0, 4.0} {
-							lbl := fmt.Sprintf("%.1f×", z)
-							if z == float64(int(z)) {
-								lbl = fmt.Sprintf("%d×", int(z))
+						zoomVals := [...]float64{2.0, 2.5, 3.0, 4.0}
+						zoomSel := 0
+						for i, z := range zoomVals {
+							if math.Abs(curZoom-z) < 0.15 {
+								zoomSel = i
+								break
 							}
-							if compactTabBtn(c.Key(260+i), lbl, math.Abs(curZoom-z) < 0.15) {
-								ac.SetLoupeZoom(z)
-								a.invalidateAll()
-							}
+						}
+						if picked := compactSegmented(c, "loupe-zoom", zoomSel, []string{"2×", "2.5×", "3×", "4×"}); picked >= 0 && picked != zoomSel {
+							ac.SetLoupeZoom(zoomVals[picked])
+							a.invalidateAll()
 						}
 					}
 				}
@@ -1435,138 +1446,6 @@ func (a *app) runVisionAutoRedact(img *image.NRGBA, sel image.Rectangle) {
 		}
 		a.invalidateAll()
 	})
-}
-
-func toolbarDivider(c *ui.Context) {
-	ui.Box(c).Size(1, 18).Margin(0, 3).Shrink(0).Background(uiPalette(c).Divider)
-}
-
-func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) bool {
-	p := uiPalette(c)
-	btn := ui.Row(c).
-		Label(label).
-		Tooltip(tip).
-		Size(26, 26).
-		AlignItems(ui.Center).
-		Justify(ui.Center).
-		Radius(13).
-		Shrink(0)
-	if !disabled {
-		btn.Cursor(ui.CursorPointer)
-		targetScale := float32(1.0)
-		if btn.Pressed() {
-			targetScale = 0.93
-		}
-		if sc := btn.AnimateTo("btn-sc", targetScale, springPop); sc != 1.0 {
-			btn.Scale(sc, sc)
-		}
-	}
-	hovered := !disabled && btn.Hovered()
-	switch {
-	case active:
-		liquidActiveChipChrome(c, btn, 13)
-	case hovered:
-		liquidSecondaryChrome(c, btn, true, 13)
-	}
-	btn.Children(func() {
-		col := p.Text
-		if disabled {
-			col = ui.Color{R: p.TextMuted.R, G: p.TextMuted.G, B: p.TextMuted.B, A: uint8(float32(p.TextMuted.A) * 0.55)}
-		} else if active {
-			col = p.ActiveText
-		}
-		ui.Icon(c, ic).FontSize(15.5).TextColor(col)
-	})
-	if disabled {
-		return false
-	}
-	return btn.Clicked()
-}
-
-func iconSquareBtn(c *ui.Context, ic *ui.SVG, tip string, active, disabled bool) bool {
-	// 取 tooltip 首词作为无障碍 Label，便于自动化与读屏定位。
-	lbl := tip
-	for i, r := range tip {
-		if r == ' ' || r == '(' {
-			lbl = tip[:i]
-			break
-		}
-	}
-	return iconToolBtn(c, ic, lbl, tip, active, disabled)
-}
-
-func actionPillBtn(c *ui.Context, ic *ui.SVG, label, tip string, primary, subtleBg bool) bool {
-	p := uiPalette(c)
-	btn := ui.Row(c).
-		Label(label).
-		Tooltip(tip).
-		Height(26).
-		Padding(0, 9).
-		Gap(4).
-		AlignItems(ui.Center).
-		Radius(13).
-		Shrink(0).
-		Cursor(ui.CursorPointer)
-	targetScale := float32(1.0)
-	if btn.Pressed() {
-		targetScale = 0.94
-	}
-	if sc := btn.AnimateTo("btn-sc", targetScale, springPop); sc != 1.0 {
-		btn.Scale(sc, sc)
-	}
-	hovered := btn.Hovered()
-	switch {
-	case primary:
-		liquidPrimaryChrome(c, btn, 13)
-	case hovered || subtleBg:
-		liquidSecondaryChrome(c, btn, hovered, 13)
-	}
-	btn.Children(func() {
-		col := p.Text
-		if primary {
-			col = p.AccentText
-		}
-		if ic != nil {
-			ui.Icon(c, ic).FontSize(14).TextColor(col)
-		}
-		ui.Text(c, label).FontSize(12).FontWeight(500).NoWrap().TextColor(col)
-	})
-	return btn.Clicked()
-}
-
-func strokeDotBtn(c *ui.Context, label, tip string, dotR float32, active bool) bool {
-	p := uiPalette(c)
-	btn := ui.Box(c).
-		Label(label).
-		Tooltip(tip).
-		Size(24, 24).
-		Radius(12).
-		Shrink(0).
-		Cursor(ui.CursorPointer)
-	targetScale := float32(1.0)
-	if btn.Pressed() {
-		targetScale = 0.92
-	}
-	if sc := btn.AnimateTo("btn-sc", targetScale, springPop); sc != 1.0 {
-		btn.Scale(sc, sc)
-	}
-	hovered := btn.Hovered()
-	switch {
-	case active:
-		liquidActiveChipChrome(c, btn, 12)
-	case hovered:
-		liquidSecondaryChrome(c, btn, true, 12)
-	}
-	btn.Draw(func(painter *ui.Painter, r ui.Rect) {
-		col := p.TextSecondary
-		if active {
-			col = p.ActiveText
-		}
-		cx := r.X + r.W*0.5
-		cy := r.Y + r.H*0.5
-		painter.Fill(ui.Rect{X: cx - dotR, Y: cy - dotR, W: dotR * 2, H: dotR * 2}, col, dotR)
-	})
-	return btn.Clicked()
 }
 
 func (a *app) ownsPoint(o *overlay, pt image.Point) bool {

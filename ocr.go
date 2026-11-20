@@ -37,14 +37,135 @@ type ocrWindow struct {
 	errMsg      string
 	text        string
 	plainText   string
+	mdText      string
+	mdReady     bool
+	tsvText     string
+	tsvReady    bool
 	table       vision.Table
 	hasTable    bool
 	mode        ocrViewMode
 	showRaw     bool
 	links       []string
 	copiedBadge string
+	badge       badgeState
 	enter       panelEnterState
 	onCopyText  func(string)
+}
+
+func (ow *ocrWindow) setCopiedBadge(msg string) {
+	var fallback *string
+	if ow.win == nil {
+		fallback = &ow.copiedBadge
+	}
+	ow.badge.Set(msg, ow.win, fallback)
+}
+
+func (ow *ocrWindow) ensureModeBuffers() {
+	if !ow.mdReady {
+		if ow.mode == ocrModeMarkdown && ow.text != "" {
+			ow.mdText = ow.text
+		} else if ow.hasTable {
+			ow.mdText = ow.table.Markdown()
+		}
+		ow.mdReady = true
+	}
+	if !ow.tsvReady {
+		if ow.mode == ocrModeTSV && ow.text != "" {
+			ow.tsvText = ow.text
+		} else if ow.hasTable {
+			ow.tsvText = ow.table.TSV()
+		}
+		ow.tsvReady = true
+	}
+}
+
+func (ow *ocrWindow) switchMode(next ocrViewMode) {
+	ow.ensureModeBuffers()
+	switch ow.mode {
+	case ocrModePlain:
+		ow.plainText = ow.text
+	case ocrModeMarkdown:
+		ow.mdText = ow.text
+	case ocrModeTSV:
+		ow.tsvText = ow.text
+	}
+	ow.mode = next
+	switch next {
+	case ocrModeMarkdown:
+		ow.text = ow.mdText
+	case ocrModeTSV:
+		ow.text = ow.tsvText
+	default:
+		ow.text = ow.plainText
+	}
+}
+
+func isMarkdownSeparatorRow(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	hasDash := false
+	for _, cell := range cells {
+		c := strings.TrimSpace(cell)
+		if c == "" {
+			continue
+		}
+		c = strings.TrimPrefix(c, ":")
+		c = strings.TrimSuffix(c, ":")
+		if len(c) < 2 || strings.Trim(c, "-") != "" {
+			return false
+		}
+		hasDash = true
+	}
+	return hasDash
+}
+
+func parseEditedTable(mode ocrViewMode, raw string) (vision.Table, bool) {
+	norm := strings.ReplaceAll(raw, "\r\n", "\n")
+	lines := strings.Split(norm, "\n")
+	var rows [][]string
+	maxCols := 0
+	for _, ln := range lines {
+		var cells []string
+		switch mode {
+		case ocrModeMarkdown:
+			trimmed := strings.TrimSpace(ln)
+			if trimmed == "" || !strings.Contains(trimmed, "|") {
+				continue
+			}
+			trimmed = strings.TrimPrefix(trimmed, "|")
+			trimmed = strings.TrimSuffix(trimmed, "|")
+			parts := strings.Split(trimmed, "|")
+			for _, part := range parts {
+				cells = append(cells, strings.TrimSpace(part))
+			}
+			if isMarkdownSeparatorRow(cells) {
+				continue
+			}
+		case ocrModeTSV:
+			if strings.TrimSpace(ln) == "" || !strings.Contains(ln, "\t") {
+				continue
+			}
+			for _, part := range strings.Split(ln, "\t") {
+				cells = append(cells, strings.TrimSpace(part))
+			}
+		default:
+			return vision.Table{}, false
+		}
+		if len(cells) > maxCols {
+			maxCols = len(cells)
+		}
+		rows = append(rows, cells)
+	}
+	if len(rows) == 0 || maxCols < 2 {
+		return vision.Table{}, false
+	}
+	for i := range rows {
+		for len(rows[i]) < maxCols {
+			rows[i] = append(rows[i], "")
+		}
+	}
+	return vision.Table{Rows: rows, Cols: maxCols}, true
 }
 
 func (ow *ocrWindow) copyText(s string) {
@@ -150,12 +271,18 @@ func (a *app) openOCRWindow(img *image.NRGBA, anchor image.Rectangle) {
 				ow.text = txt
 				ow.table = tbl
 				ow.hasTable = hasTbl
+				if hasTbl {
+					ow.mdText = tbl.Markdown()
+					ow.mdReady = true
+					ow.tsvText = tbl.TSV()
+					ow.tsvReady = true
+				}
 				ow.mode = ocrModePlain
 				ow.links = links
 				if txt != "" {
-					mygo.Clipboard.WriteText(txt)
+					ow.copyText(txt)
 					nChars := utf8.RuneCountInString(txt)
-					ow.copiedBadge = fmt.Sprintf("已复制 · %d 字", nChars)
+					ow.setCopiedBadge(fmt.Sprintf("已复制 · %d 字", nChars))
 					a.sessionStatus(fmt.Sprintf("识图已复制（%d 字）", nChars))
 				}
 			}
@@ -221,40 +348,20 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &ow.enter)
 
 		card.Children(func() {
-			// 1. 顶部可拖拽标题栏（无硬分割线，右侧展示轻量状态反馈胶囊）
-			header := ui.Row(c).
-				Height(48).
-				Padding(0, 18).
-				Gap(8).
-				AlignItems(ui.Center).
-				DragWindow()
-			header.Children(func() {
-				if macTrafficCloseBtn(c, "关闭识图", "关闭 (⌘W / Esc)") {
-					if ow.win != nil {
-						go mygo.RunOnMain(func() { a.closeOCRWindow() })
-					}
+			// 1. 顶部无框拖拽标题栏（右侧自动消隐状态胶囊）
+			paintPanelHeader(c, iconOCR, "识图提取", "关闭识图", "关闭 (⌘W / Esc)", func() {
+				if ow.win != nil {
+					a.closeOCRWindow()
 				}
-				ui.Box(c).Width(2)
-				ui.Icon(c, iconOCR).FontSize(15).TextColor(p.Accent)
-				ui.Text(c, "识图提取").FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
-
-				ui.Spacer(c)
-
+			}, func() {
 				if ow.loading {
 					statusBadgePill(c, "正在识别…", false)
-				} else if ow.copiedBadge != "" {
-					ui.Row(c.Key("ocr-copied-badge")).
-						Height(22).Padding(0, 9).Gap(4).AlignItems(ui.Center).Radius(11).
-						Background(p.BadgeSuccessBg).
-						Border(1, p.BadgeSuccessBd).
-						Children(func() {
-							ui.Icon(c, iconCheck).FontSize(11).TextColor(p.BadgeSuccessFg)
-							ui.Text(c, ow.copiedBadge).FontSize(11).FontWeight(500).NoWrap().TextColor(p.BadgeSuccessFg)
-						})
+				} else {
+					statusBadgePill(c, ow.badge.Text(ow.copiedBadge), true)
 				}
 			})
 
-			// 2. 浮动格式切换栏（检测到 2×2 及以上表格时出现，融入玻璃基底无整条灰带）
+			// 2. 浮动格式切换栏（检测到 2×2 及以上表格时出现）
 			if !ow.loading && ow.hasTable {
 				modeRow := ui.Row(c).
 					Padding(0, 18, 10, 18).
@@ -270,24 +377,26 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 						{ocrModeMarkdown, "Markdown", "已复制 Markdown"},
 						{ocrModeTSV, "表格 TSV", "已复制 TSV"},
 					}
-					if picked := liquidSegmented(c, "ocr-mode", int(ow.mode), []string{tabs[0].label, tabs[1].label, tabs[2].label}); picked >= 0 {
+					if picked := liquidSegmented(c, "ocr-mode", int(ow.mode), []string{tabs[0].label, tabs[1].label, tabs[2].label}); picked >= 0 && tabs[picked].mode != ow.mode {
 						tab := tabs[picked]
-						ow.mode = tab.mode
-						switch tab.mode {
-						case ocrModeMarkdown:
-							ow.text = ow.table.Markdown()
-						case ocrModeTSV:
-							ow.text = ow.table.TSV()
-						default:
-							ow.text = ow.plainText
-						}
+						ow.switchMode(tab.mode)
 						ow.copyText(ow.text)
-						ow.copiedBadge = tab.badge
+						ow.setCopiedBadge(tab.badge)
 					}
 					ui.Spacer(c)
 					if ow.mode == ocrModeMarkdown || ow.mode == ocrModeTSV {
-						if toggled, raw := ocrViewToggle(c, ow.showRaw); toggled {
-							ow.showRaw = raw
+						sel := 0
+						if ow.showRaw {
+							sel = 1
+						}
+						if picked := compactSegmented(c, "ocr-view-toggle", sel, []string{"表格", "源码"}); picked >= 0 {
+							nextRaw := picked == 1
+							if ow.showRaw && !nextRaw {
+								if tbl, ok := parseEditedTable(ow.mode, ow.text); ok {
+									ow.table = tbl
+								}
+							}
+							ow.showRaw = nextRaw
 						}
 					}
 				})
@@ -331,7 +440,7 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 								}
 								if miniPillBtn(c, iconCopy, "复制", false) {
 									ow.copyText(lk)
-									ow.copiedBadge = "已复制链接"
+									ow.setCopiedBadge("已复制链接")
 								}
 							})
 						}
@@ -368,7 +477,7 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 				})
 			})
 
-			// 5. 顶部浮动外延式底部操作栏
+			// 5. 底部操作栏
 			footer := ui.Row(c).
 				Height(54).
 				Padding(0, 18).
@@ -399,7 +508,7 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 					ctaLabel, ctaTip, copiedMsg := ocrPrimaryActionCopy(ow)
 					if actionPillBtn(c, iconCopy, ctaLabel, ctaTip, true, false) {
 						ow.copyText(ow.text)
-						ow.copiedBadge = copiedMsg
+						ow.setCopiedBadge(copiedMsg)
 					}
 				}
 			})
@@ -427,43 +536,6 @@ func (a *app) pinExtractedText(txt string) {
 	a.ShowPin(card, buf.Bytes(), at, dipW, dipH)
 }
 
-func miniPillBtn(c *ui.Context, ic *ui.SVG, label string, primary bool) bool {
-	p := uiPalette(c)
-	btn := ui.Row(c).
-		Label(label).
-		Height(24).
-		Padding(0, 10).
-		Gap(4).
-		AlignItems(ui.Center).
-		Radius(12).
-		Shrink(0).
-		Cursor(ui.CursorPointer)
-	targetScale := float32(1.0)
-	if btn.Pressed() {
-		targetScale = 0.94
-	}
-	if sc := btn.AnimateTo("mini-sc", targetScale, springPop); sc != 1.0 {
-		btn.Scale(sc, sc)
-	}
-	hov := btn.Hovered()
-	if primary {
-		liquidPrimaryChrome(c, btn, 12)
-	} else {
-		liquidSecondaryChrome(c, btn, hov, 12)
-	}
-	btn.Children(func() {
-		col := p.Text
-		if primary {
-			col = p.AccentText
-		}
-		if ic != nil {
-			ui.Icon(c, ic).FontSize(11.5).TextColor(col)
-		}
-		ui.Text(c, label).FontSize(11).FontWeight(500).NoWrap().TextColor(col)
-	})
-	return btn.Clicked()
-}
-
 func ocrPrimaryActionCopy(ow *ocrWindow) (label, tip, copied string) {
 	if ow.hasTable {
 		switch ow.mode {
@@ -475,79 +547,6 @@ func ocrPrimaryActionCopy(ow *ocrWindow) (label, tip, copied string) {
 	}
 	nChars := utf8.RuneCountInString(strings.TrimSpace(ow.text))
 	return "复制全文", "复制文本框中的全部内容", fmt.Sprintf("已复制 · %d 字", nChars)
-}
-
-func ocrViewToggle(c *ui.Context, showRaw bool) (toggled, nextRaw bool) {
-	p := uiPalette(c)
-	trackBg := ui.RGBA(0, 0, 0, 0.055)
-	trackBd := ui.RGBA(0, 0, 0, 0.05)
-	if p.Dark {
-		trackBg = ui.RGBA(255, 255, 255, 0.07)
-		trackBd = ui.RGBA(255, 255, 255, 0.07)
-	}
-	labels := [2]string{"表格", "源码"}
-	selected := 0
-	if showRaw {
-		selected = 1
-	}
-	track := ui.Row(c.Key("ocr-view-toggle")).
-		Height(26).
-		Padding(2, 2).
-		Gap(2).
-		AlignItems(ui.Center).
-		Radius(13).
-		Background(trackBg).
-		Border(1, trackBd).
-		Shrink(0)
-	track.Children(func() {
-		for i, lbl := range labels {
-			i, lbl := i, lbl
-			active := i == selected
-			opt := ui.Box(c.Key(fmt.Sprintf("ocr-vt-%d", i))).
-				Label(lbl).
-				Height(22).
-				Padding(0, 9).
-				Radius(11).
-				AlignItems(ui.Center).
-				Justify(ui.Center).
-				Cursor(ui.CursorPointer).
-				Shrink(0)
-			if active {
-				thumbBg := ui.RGBA(255, 255, 255, 0.94)
-				thumbBd := ui.RGBA(0, 0, 0, 0.06)
-				if p.Dark {
-					thumbBg = ui.RGBA(255, 255, 255, 0.19)
-					thumbBd = ui.RGBA(255, 255, 255, 0.15)
-				}
-				opt.Background(thumbBg).Border(1, thumbBd)
-			} else if opt.Hovered() {
-				hovBg := ui.RGBA(0, 0, 0, 0.04)
-				if p.Dark {
-					hovBg = ui.RGBA(255, 255, 255, 0.07)
-				}
-				opt.Background(hovBg)
-			}
-			opt.Children(func() {
-				txtCol := p.TextSecondary
-				fw := 500
-				if active {
-					txtCol = p.Text
-					if p.Dark {
-						txtCol = ui.RGB(255, 255, 255)
-					}
-					fw = 600
-				} else if opt.Hovered() {
-					txtCol = p.Text
-				}
-				ui.Text(c, lbl).FontSize(11).FontWeight(fw).NoWrap().TextColor(txtCol)
-			})
-			if opt.Clicked() {
-				toggled = true
-				nextRaw = i == 1
-			}
-		}
-	})
-	return toggled, nextRaw
 }
 
 func paintOCREmptyState(c *ui.Context, ic *ui.SVG, accent ui.Color, title, subtitle string, isErr bool) {
@@ -637,7 +636,7 @@ func paintOCRTableCell(c *ui.Context, key, cell string, weight float32, isHeader
 	})
 	if box.Clicked() {
 		ow.copyText(cell)
-		ow.copiedBadge = "已复制单元格"
+		ow.setCopiedBadge("已复制单元格")
 	}
 }
 
@@ -755,37 +754,4 @@ func paintOCRTextView(c *ui.Context, ow *ocrWindow) {
 
 	lines, chars := ocrTextStats(ow.text)
 	paintOCRCardFooter(c, hint, fmt.Sprintf("%d 行 · %d 字", lines, chars))
-}
-
-func compactTabBtn(c *ui.Context, label string, active bool) bool {
-	p := uiPalette(c)
-	btn := ui.Row(c).
-		Label(label).
-		Height(24).
-		Padding(0, 10).
-		AlignItems(ui.Center).
-		Radius(12).
-		Shrink(0).
-		Cursor(ui.CursorPointer)
-	targetScale := float32(1.0)
-	if btn.Pressed() {
-		targetScale = 0.94
-	}
-	if sc := btn.AnimateTo("tab-sc", targetScale, springPop); sc != 1.0 {
-		btn.Scale(sc, sc)
-	}
-	switch {
-	case active:
-		liquidActiveChipChrome(c, btn, 12)
-	default:
-		liquidSecondaryChrome(c, btn, btn.Hovered(), 12)
-	}
-	btn.Children(func() {
-		col := p.TextSecondary
-		if active {
-			col = p.ActiveText
-		}
-		ui.Text(c, label).FontSize(11).FontWeight(500).NoWrap().TextColor(col)
-	})
-	return btn.Clicked()
 }

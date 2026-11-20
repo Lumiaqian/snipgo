@@ -3,9 +3,6 @@ package main
 import (
 	"fmt"
 	"image"
-	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -24,26 +21,16 @@ type historyWindow struct {
 	entries     []store.Entry
 	thumbs      map[string]*ui.Bitmap
 	statusBadge string
+	badge       badgeState
 	enter       panelEnterState
 }
 
-// tempPNGDragData 将内存 PNG 写入临时目录并返回原生文件拖拽载荷（供贴图直接拖入微信/Slack/浏览器）。
-func tempPNGDragData(pngBytes []byte, prefix string) transfer.Data {
-	if len(pngBytes) == 0 {
-		return transfer.Data{}
+func (hw *historyWindow) setStatusBadge(msg string) {
+	var fallback *string
+	if hw.win == nil {
+		fallback = &hw.statusBadge
 	}
-	dir := filepath.Join(os.TempDir(), "snipgo-drag")
-	_ = os.MkdirAll(dir, 0o755)
-	name := fmt.Sprintf("%s-%s.png", prefix, time.Now().Format("20060102-150405.000"))
-	full := filepath.Join(dir, name)
-	if os.WriteFile(full, pngBytes, 0o644) != nil {
-		return transfer.Data{}
-	}
-	d, err := transfer.FileData(full)
-	if err != nil {
-		return transfer.Data{}
-	}
-	return d
+	hw.badge.Set(msg, hw.win, fallback)
 }
 
 func (a *app) recordHistory(pngBytes []byte, pxW, pxH int) {
@@ -178,57 +165,12 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &hw.enter)
 
 		card.Children(func() {
-			if len(hw.entries) == 0 {
-				ui.Column(c).Fill().Padding(58, 16, 16, 16).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
-					ui.Icon(c, iconHistory).FontSize(26).TextColor(p.TextMuted)
-					ui.Text(c, "暂无截图记录").FontSize(13.5).TextColor(p.TextSecondary)
-					ui.Text(c, "完成复制、贴图或保存后会自动归档到这里（最多保留 20 张）").
-						FontSize(11.5).TextColor(p.TextMuted)
-				})
-			} else {
-				// 双列滚动缩略图网格（位于浮动标题栏下方，带渐进式滚动边缘模糊）
-				scroller := ui.Scroll(c).Fill().Padding(58, 16, 16, 16).ScrollbarInsets(54, 0, 0)
-				scroller.Children(func() {
-					colWrap := ui.Column(c).Gap(10)
-					colWrap.Children(func() {
-						for rowIdx := 0; rowIdx < len(hw.entries); rowIdx += 2 {
-							rIdx := rowIdx
-							rowEl := ui.Row(c.Key(1000 + rIdx)).Gap(10)
-							rowEl.Children(func() {
-								a.paintHistoryCard(c.Key(2000+rIdx), hw, hw.entries[rIdx])
-								if rIdx+1 < len(hw.entries) {
-									a.paintHistoryCard(c.Key(2000+rIdx+1), hw, hw.entries[rIdx+1])
-								} else {
-									ui.Box(c).Grow(1)
-								}
-							})
-						}
-					})
-				})
-				paintTopScrollEdge(c, 58)
-			}
-
-			// 浮动标题栏
-			header := ui.Row(c).
-				Absolute().Top(0).Left(0).Right(0).
-				Height(50).
-				Padding(0, 16).
-				Gap(8).
-				AlignItems(ui.Center).
-				ZIndex(2).
-				DragWindow()
-			header.Children(func() {
-				if macTrafficCloseBtn(c, "关闭历史", "关闭 (⌘W / Esc)") {
-					if hw.win != nil {
-						go mygo.RunOnMain(func() { a.closeHistoryWindow() })
-					}
+			paintPanelHeader(c, iconHistory, fmt.Sprintf("最近截图历史（%d）", len(hw.entries)), "关闭历史", "关闭 (⌘W / Esc)", func() {
+				if hw.win != nil {
+					a.closeHistoryWindow()
 				}
-				ui.Box(c).Width(2)
-				ui.Icon(c, iconHistory).FontSize(15).TextColor(p.Accent)
-				ui.Text(c, fmt.Sprintf("最近截图历史（%d）", len(hw.entries))).
-					FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
-				statusBadgePill(c, hw.statusBadge, true)
-				ui.Spacer(c)
+			}, func() {
+				statusBadgePill(c, hw.badge.Text(hw.statusBadge), true)
 				if len(hw.entries) > 0 {
 					if miniPillBtn(c, iconTrash, "清空全部", false) {
 						if a.history != nil {
@@ -239,6 +181,41 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 					}
 				}
 			})
+
+			if len(hw.entries) == 0 {
+				ui.Column(c).Grow(1).Padding(16, 18, 24, 18).AlignItems(ui.Center).Justify(ui.Center).Gap(8).Children(func() {
+					ui.Icon(c, iconHistory).FontSize(26).TextColor(p.TextMuted)
+					ui.Text(c, "暂无截图记录").FontSize(13.5).TextColor(p.TextSecondary)
+					ui.Text(c, "完成复制、贴图或保存后会自动归档到这里（最多保留 20 张）").
+						FontSize(11.5).TextColor(p.TextMuted)
+				})
+			} else {
+				ui.Row(c).Height(22).Padding(0, 18, 4, 18).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "按住缩略图可拖出 PNG · 单击复制 · 双击贴图").FontSize(11).TextColor(p.TextMuted)
+				})
+				scrollWrap := ui.Box(c).Grow(1).FillWidth().Clip()
+				scrollWrap.Children(func() {
+					scroller := ui.Scroll(c).Fill().Padding(4, 18, 16, 18).ScrollbarInsets(4, 0, 8)
+					scroller.Children(func() {
+						colWrap := ui.Column(c).Gap(10)
+						colWrap.Children(func() {
+							for rowIdx := 0; rowIdx < len(hw.entries); rowIdx += 2 {
+								rIdx := rowIdx
+								rowEl := ui.Row(c.Key(1000 + rIdx)).Gap(10)
+								rowEl.Children(func() {
+									a.paintHistoryCard(c.Key(2000+rIdx), hw, hw.entries[rIdx])
+									if rIdx+1 < len(hw.entries) {
+										a.paintHistoryCard(c.Key(2000+rIdx+1), hw, hw.entries[rIdx+1])
+									} else {
+										ui.Box(c).Grow(1)
+									}
+								})
+							}
+						})
+					})
+					paintBottomScrollEdge(c, 14)
+				})
+			}
 		})
 	})
 }
@@ -268,7 +245,7 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 		InsetShadow(0, 1, 0, 0, p.CardTopRim)
 
 	itemCard.Children(func() {
-		// 缩略图区域：直接按住即可作为原生 PNG 文件拖进微信/Slack/浏览器！
+		// 缩略图区域：拖拽导 PNG、单击复制、双击直接转为贴图
 		thumbBox := ui.Box(c).
 			Height(116).
 			Radius(10).
@@ -277,7 +254,8 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 			Border(1, p.CardBorder).
 			AlignItems(ui.Center).
 			Justify(ui.Center).
-			Tooltip("按住可直接将此截图作为 PNG 文件拖入微信 / 浏览器")
+			Cursor(ui.CursorPointer).
+			Tooltip("拖出 PNG · 单击复制 · 双击贴图")
 		if e.FilePath != "" {
 			fpath := e.FilePath
 			thumbBox.DragDataFrom(func() transfer.Data {
@@ -293,6 +271,21 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 				ui.Image(c, bmp).Height(116).Fit(ui.Contain)
 			}
 		})
+		if thumbBox.DoubleClicked() {
+			if img, raw, err := store.Load(e); err == nil {
+				dipW := max(80, e.Width/2)
+				dipH := max(60, e.Height/2)
+				cur := mygo.Screen.CursorScreenPoint()
+				at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
+				go mygo.RunOnMain(func() { a.ShowPin(img, raw, at, dipW, dipH) })
+				hw.setStatusBadge("已转为悬浮贴图")
+			}
+		} else if thumbBox.Clicked() {
+			if _, raw, err := store.Load(e); err == nil {
+				_ = mygo.Clipboard.WriteImage(raw)
+				hw.setStatusBadge("已复制到剪贴板")
+			}
+		}
 
 		// 尺寸与时间戳
 		metaRow := ui.Row(c).AlignItems(ui.Center).Gap(3)
@@ -305,7 +298,7 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 			if pinMiniIconBtn(c, iconCopy, "复制到剪贴板") {
 				if _, raw, err := store.Load(e); err == nil {
 					_ = mygo.Clipboard.WriteImage(raw)
-					hw.statusBadge = "已复制到剪贴板"
+					hw.setStatusBadge("已复制到剪贴板")
 				}
 			}
 			if pinMiniIconBtn(c, iconPin, "转为悬浮贴图") {
@@ -315,6 +308,7 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 					cur := mygo.Screen.CursorScreenPoint()
 					at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
 					go mygo.RunOnMain(func() { a.ShowPin(img, raw, at, dipW, dipH) })
+					hw.setStatusBadge("已转为悬浮贴图")
 				}
 			}
 			if pinMiniIconBtn(c, iconTemplate, "套模板（便签 / 拍立得 / 浏览器…）") {

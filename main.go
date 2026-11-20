@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/egoist/mygo"
@@ -94,6 +95,7 @@ func main() {
 		a.closeSettingsWindow()
 		a.closeTemplateWindow()
 		a.closeAllPins()
+		cleanupAllDragTempFiles()
 		mygo.GlobalShortcut.UnregisterAll()
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
@@ -119,6 +121,11 @@ func (a *app) ready() {
 	a.cfg = config.Load(a.userDataDir, a.picturesDir)
 	a.cfg.OpenAtLogin = mygo.App.OpenAtLogin()
 	a.applyThemeLive(a.cfg)
+	mygo.Theme.OnUpdated(func() {
+		if a.cfg.ThemeAppearance == "" || a.cfg.ThemeAppearance == "system" {
+			a.applyThemeLive(a.cfg)
+		}
+	})
 	if a.userDataDir != "" {
 		if st, err := store.Open(a.userDataDir, store.DefaultMaxEntries); err == nil {
 			a.history = st
@@ -450,6 +457,10 @@ func (a *app) refreshMenu() {
 	if a.histShortErr != nil {
 		histAcc = ""
 	}
+	delayAcc := a.cfg.DelayShortcut
+	if a.delayShortErr != nil {
+		delayAcc = ""
+	}
 	delaySec := a.cfg.DelaySeconds
 	if delaySec <= 0 {
 		delaySec = 3
@@ -486,7 +497,7 @@ func (a *app) refreshMenu() {
 		},
 		{
 			Label:       fmt.Sprintf("%d 秒延时定格截图", delaySec),
-			Accelerator: a.cfg.DelayShortcut,
+			Accelerator: delayAcc,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.startDelayedCapture(delaySec)
 			},
@@ -534,8 +545,14 @@ func (a *app) refreshMenu() {
 	if status != "" {
 		items = append(items, &mygo.MenuItem{Label: status, Disabled: true})
 	}
-	if a.shortcutErr != nil {
-		items = append(items, &mygo.MenuItem{Label: "快捷键 " + a.cfg.SnipShortcut + " 注册失败", Disabled: true})
+	var conflictLabels []string
+	for _, def := range shortcutDefs {
+		if a.shortcutError(def.id) != nil {
+			conflictLabels = append(conflictLabels, def.label)
+		}
+	}
+	if len(conflictLabels) > 0 {
+		items = append(items, &mygo.MenuItem{Label: "快捷键被占用：" + strings.Join(conflictLabels, "、"), Disabled: true})
 	}
 	if a.permDenied {
 		items = append(items,

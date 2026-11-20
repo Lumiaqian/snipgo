@@ -228,12 +228,17 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 	// 图 6：滚动长截图实时控制面板 + 贴图原地二次标注模式 + 拖出文件手柄预览
 	st := scrollcap.New()
 	st.Push(spotCrop)
+	tallPreview := image.NewNRGBA(image.Rect(0, 0, spotCrop.Bounds().Dx(), spotCrop.Bounds().Dy()*3))
+	draw.Draw(tallPreview, tallPreview.Bounds(), image.NewUniform(color.NRGBA{R: 22, G: 26, B: 36, A: 255}), image.Point{}, draw.Src)
+	for i := range 3 {
+		draw.Draw(tallPreview, spotCrop.Bounds().Sub(spotCrop.Bounds().Min).Add(image.Pt(0, i*spotCrop.Bounds().Dy())), spotCrop, spotCrop.Bounds().Min, draw.Src)
+	}
 	scrollSess := &scrollCaptureSession{
 		sel:     sel,
 		stitch:  st,
-		preview: ui.NewBitmap(spotCrop),
-		pxW:     1200,
-		pxH:     3480,
+		preview: ui.NewBitmap(tallPreview),
+		pxW:     tallPreview.Bounds().Dx(),
+		pxH:     tallPreview.Bounds().Dy(),
 		frames:  6,
 	}
 	pEdit := &pinWin{
@@ -301,9 +306,10 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 	hw := &historyWindow{thumbs: map[string]*ui.Bitmap{}}
 	a.histWin = hw
 	a.reloadHistoryWindow()
-	hw.statusBadge = "按住缩略图可直接拖出 PNG"
+	hw.statusBadge = "✓ 已复制到剪贴板"
 
 	sw := &settingsWindow{
+		tab:   1,
 		draft: a.cfg,
 		saved: "✓ 设置已生效",
 	}

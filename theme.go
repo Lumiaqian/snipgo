@@ -20,10 +20,11 @@ const (
 
 // Apple 设计规范一致的流体物理弹簧与色彩渐变动效预设。
 var (
-	springSnappy = ui.Animation{Spring: ui.SpringOptions{Duration: 320 * time.Millisecond, Bounce: 0.14}}
-	springSmooth = ui.Animation{Spring: ui.SpringOptions{Duration: 360 * time.Millisecond, Bounce: 0}}
-	springPop    = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0.24}}
-	colorMorph   = ui.Animation{Duration: 240 * time.Millisecond, Ease: ui.EaseInOut, Oklab: true, NonMotion: true}
+	springPanel  = ui.Animation{Spring: ui.SpringOptions{Duration: 240 * time.Millisecond, Bounce: 0}}
+	springSnappy = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.08}}
+	springSmooth = ui.Animation{Spring: ui.SpringOptions{Duration: 320 * time.Millisecond, Bounce: 0}}
+	springPop    = ui.Animation{Spring: ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.08}}
+	colorMorph   = ui.Animation{Duration: 220 * time.Millisecond, Ease: ui.EaseInOut, Oklab: true, NonMotion: true}
 )
 
 // appThemeState 保存实时生效的外观模式、液态玻璃浓度与主题强调色。
@@ -129,21 +130,36 @@ func activeGlassStyle() glass.Style {
 	return glass.Regular
 }
 
-func vibrancyTintFor(st appThemeState) string {
-	switch st.GlassLevel {
+func effectiveDarkMode(st appThemeState) bool {
+	switch st.Appearance {
+	case "dark":
+		return true
+	case "light":
+		return false
+	default:
+		return mygo.App.IsReady() && mygo.Theme.IsDark()
+	}
+}
+
+func vibrancyTintForMode(level string, dark bool) string {
+	switch level {
 	case "clear":
 		return ""
 	case "frosted":
-		if st.Appearance == "dark" {
-			return "rgba(18, 20, 28, 0.48)"
+		if dark {
+			return "rgba(18, 20, 28, 0.46)"
 		}
 		return "rgba(248, 250, 255, 0.44)"
 	default:
-		if st.Appearance == "dark" {
+		if dark {
 			return "rgba(18, 20, 28, 0.16)"
 		}
 		return ""
 	}
+}
+
+func vibrancyTintFor(st appThemeState) string {
+	return vibrancyTintForMode(st.GlassLevel, effectiveDarkMode(st))
 }
 
 // applyWindowTheme 为原生浮窗同步 macOS 26/27 玻璃浓度、玻璃着色与浅/深外观。
@@ -366,7 +382,7 @@ type panelEnterState struct {
 	started bool
 }
 
-// liquidPanelEnter 为真实弹窗提供 Apple 物理弹簧材质入场动效（未启用时直接以终态渲染）。
+// liquidPanelEnter 为真实弹窗提供 Apple 临界阻尼弹簧入场动效（未启用时直接以终态渲染）。
 func liquidPanelEnter(el ui.Element, state *panelEnterState) ui.Element {
 	if state == nil || !state.enabled {
 		return el
@@ -375,19 +391,28 @@ func liquidPanelEnter(el ui.Element, state *panelEnterState) ui.Element {
 		state.started = true
 		el.Jump("panel-enter", 0)
 	}
-	t := el.AnimateTo("panel-enter", 1, springSnappy)
-	sc := 0.965 + 0.035*t
-	dy := (1 - t) * 8
+	t := el.AnimateTo("panel-enter", 1, springPanel)
+	sc := 0.975 + 0.025*t
+	dy := (1 - t) * 6
 	op := min(float32(1), max(float32(0), t))
 	return el.Scale(sc, sc).Translate(0, dy).Opacity(op)
 }
 
 // liquidGlassCapsule 为浮动胶囊、工具栏、取色徽章与贴图浮层应用 macOS 26/27 液态玻璃胶囊。
-func liquidGlassCapsule(el ui.Element, radius float32, native bool) ui.Element {
-	return el.Radius(radius).Material(glass.Glass{
+func liquidGlassCapsule(c *ui.Context, el ui.Element, radius float32, native bool) ui.Element {
+	el.Radius(radius).Material(glass.Glass{
 		Style:  activeGlassStyle(),
 		Native: native,
 	})
+	if !native {
+		p := uiPalette(c)
+		shadowCol := ui.RGBA(0, 0, 0, 0.14)
+		if p.Dark {
+			shadowCol = ui.RGBA(0, 0, 0, 0.34)
+		}
+		el.Border(1, p.PanelRim).Shadow(0, 4, 14, 0, shadowCol)
+	}
+	return el
 }
 
 // liquidGlassGroup 将相邻操作胶囊包裹在 macOS 26 风格的融合液态玻璃组内。
@@ -510,10 +535,28 @@ func liquidSecondaryChrome(c *ui.Context, el ui.Element, hovered bool, radius fl
 		InsetShadow(0, 1, 0, 0, p.CardTopRim)
 }
 
+type segMatchKey struct{ id string }
+
 // liquidSegmented 绘制 macOS 26 风格可滑动 Liquid Glass 分段选择器，返回被点击项索引（未点击返回 -1）。
 func liquidSegmented(c *ui.Context, groupID string, selected int, labels []string) int {
+	return renderSegmented(c, groupID, selected, labels, false)
+}
+
+// compactSegmented 绘制紧凑型（26px 高）macOS 26 风格可滑动 Liquid Glass 分段选择器，用于二级属性栏与视图切换。
+func compactSegmented(c *ui.Context, groupID string, selected int, labels []string) int {
+	return renderSegmented(c, groupID, selected, labels, true)
+}
+
+func renderSegmented(c *ui.Context, groupID string, selected int, labels []string, compact bool) int {
 	p := uiPalette(c)
 	clicked := -1
+	trackH, pad, optH, optPadX, fs := float32(30), float32(3), float32(24), float32(11), float32(11.5)
+	if compact {
+		trackH, pad, optH, optPadX, fs = 26, 2, 22, 9, 11
+	}
+	trackR := trackH * 0.5
+	optR := optH * 0.5
+
 	trackBg := ui.RGBA(0, 0, 0, 0.055)
 	trackBd := ui.RGBA(0, 0, 0, 0.05)
 	if p.Dark {
@@ -521,11 +564,11 @@ func liquidSegmented(c *ui.Context, groupID string, selected int, labels []strin
 		trackBd = ui.RGBA(255, 255, 255, 0.07)
 	}
 	track := ui.Row(c.Key(groupID+"-track")).
-		Height(30).
-		Padding(3, 3).
+		Height(trackH).
+		Padding(pad, pad).
 		Gap(2).
 		AlignItems(ui.Center).
-		Radius(15).
+		Radius(trackR).
 		Background(trackBg).
 		Border(1, trackBd).
 		Shrink(0)
@@ -535,38 +578,20 @@ func liquidSegmented(c *ui.Context, groupID string, selected int, labels []strin
 			active := i == selected
 			opt := ui.Box(c.Key(fmt.Sprintf("%s-opt-%d", groupID, i))).
 				Label(lbl).
-				Height(24).
-				Padding(0, 11).
-				Radius(12).
-				AlignItems(ui.Center).
-				Justify(ui.Center).
+				Height(optH).
+				Radius(optR).
 				Cursor(ui.CursorPointer).
 				Shrink(0)
 			if opt.Pressed() {
-				sc := opt.AnimateTo("seg-sc", 0.95, springSnappy)
+				sc := opt.AnimateTo("seg-sc", 0.96, springPop)
 				opt.Scale(sc, sc)
 			} else {
-				sc := opt.AnimateTo("seg-sc", 1.0, springSnappy)
+				sc := opt.AnimateTo("seg-sc", 1.0, springPop)
 				if sc < 0.999 {
 					opt.Scale(sc, sc)
 				}
 			}
-			if active {
-				thumbBg := ui.RGBA(255, 255, 255, 0.96)
-				thumbBd := ui.RGBA(0, 0, 0, 0.07)
-				shadowCol := ui.RGBA(0, 0, 0, 0.10)
-				topRim := ui.RGBA(255, 255, 255, 0.72)
-				if p.Dark {
-					thumbBg = ui.RGBA(255, 255, 255, 0.19)
-					thumbBd = ui.RGBA(255, 255, 255, 0.15)
-					shadowCol = ui.RGBA(0, 0, 0, 0.28)
-					topRim = ui.RGBA(255, 255, 255, 0.22)
-				}
-				opt.Background(thumbBg).
-					Border(1, thumbBd).
-					InsetShadow(0, 1, 0, 0, topRim).
-					Shadow(0, 1.5, 4, 0, shadowCol)
-			} else if opt.Hovered() {
+			if !active && opt.Hovered() {
 				hovBg := ui.RGBA(0, 0, 0, 0.04)
 				if p.Dark {
 					hovBg = ui.RGBA(255, 255, 255, 0.07)
@@ -574,6 +599,31 @@ func liquidSegmented(c *ui.Context, groupID string, selected int, labels []strin
 				opt.Background(hovBg)
 			}
 			opt.Children(func() {
+				if active {
+					thumbBg := ui.RGBA(255, 255, 255, 0.96)
+					thumbBd := ui.RGBA(0, 0, 0, 0.07)
+					shadowCol := ui.RGBA(0, 0, 0, 0.10)
+					topRim := ui.RGBA(255, 255, 255, 0.72)
+					if p.Dark {
+						thumbBg = ui.RGBA(255, 255, 255, 0.19)
+						thumbBd = ui.RGBA(255, 255, 255, 0.15)
+						shadowCol = ui.RGBA(0, 0, 0, 0.28)
+						topRim = ui.RGBA(255, 255, 255, 0.22)
+					}
+					ui.Box(c.Key(fmt.Sprintf("%s-thumb-%d", groupID, i))).
+						Absolute().Fill().
+						Radius(optR).
+						Background(thumbBg).
+						Border(1, thumbBd).
+						InsetShadow(0, 1, 0, 0, topRim).
+						Shadow(0, 1.5, 4, 0, shadowCol).
+						ZIndex(0).
+						IgnoreInput(true).
+						Transition(ui.ElementTransition{
+							Match:     segMatchKey{id: groupID},
+							Animation: &springSnappy,
+						})
+				}
 				txtCol := p.TextSecondary
 				fw := 500
 				if active {
@@ -586,7 +636,9 @@ func liquidSegmented(c *ui.Context, groupID string, selected int, labels []strin
 				} else if opt.Hovered() {
 					txtCol = p.Text
 				}
-				ui.Text(c, lbl).FontSize(11.5).FontWeight(fw).NoWrap().TextColor(txtCol)
+				ui.Box(c).FillHeight().Padding(0, optPadX).AlignItems(ui.Center).Justify(ui.Center).ZIndex(1).Children(func() {
+					ui.Text(c, lbl).FontSize(fs).FontWeight(fw).NoWrap().TextColor(txtCol)
+				})
 			})
 			if opt.Clicked() {
 				clicked = i
@@ -669,17 +721,6 @@ func liquidCard(c *ui.Context, el ui.Element) ui.Element {
 		InsetShadow(0, 1, 0, 0, p.CardTopRim)
 }
 
-// recessedInputStyle 为单行与多行输入框应用自适应深浅外观的内凹圆角槽样式。
-func recessedInputStyle(c *ui.Context, el ui.Element) ui.Element {
-	p := uiPalette(c)
-	return el.
-		Radius(inputCornerRadius).
-		Background(p.InputBg).
-		Border(1, p.InputBorder).
-		TextColor(p.Text).
-		CaretColor(p.Accent)
-}
-
 func scrollEdgeBlurRadius() float32 {
 	switch getActiveTheme().GlassLevel {
 	case "clear":
@@ -731,9 +772,9 @@ func macTrafficCloseBtn(c *ui.Context, label, tip string) bool {
 	pressed := btn.Pressed()
 	targetScale := float32(1.0)
 	if pressed {
-		targetScale = 0.90
+		targetScale = 0.93
 	} else if hovered {
-		targetScale = 1.07
+		targetScale = 1.06
 	}
 	sc := btn.AnimateTo("traffic-scale", targetScale, springPop)
 	if sc != 1.0 {

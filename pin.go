@@ -485,6 +485,7 @@ func (a *app) recognizePin(p *pinWin) {
 func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 	pal := uiPalette(c)
 	bar := liquidGlassCapsule(
+		c,
 		ui.Row(c).Absolute().
 			Right(8).Top(8).
 			Height(32).
@@ -634,6 +635,7 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32) {
 
 	// 底部内嵌紧凑标注工具栏
 	bar := liquidGlassCapsule(
+		c,
 		ui.Row(c).Absolute().
 			Right(8).Bottom(8).
 			Height(36).
@@ -685,31 +687,10 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32) {
 	})
 }
 
-func pinMiniIconBtn(c *ui.Context, ic *ui.SVG, tip string) bool {
-	p := uiPalette(c)
-	btn := ui.Row(c).
-		Tooltip(tip).
-		Size(24, 24).
-		AlignItems(ui.Center).
-		Justify(ui.Center).
-		Radius(12).
-		Shrink(0).
-		Cursor(ui.CursorPointer)
-	if btn.Pressed() {
-		btn.Scale(0.92, 0.92)
-	}
-	if btn.Hovered() {
-		liquidSecondaryChrome(c, btn, true, 12)
-	}
-	btn.Children(func() {
-		ui.Icon(c, ic).FontSize(13.5).TextColor(p.Text)
-	})
-	return btn.Clicked()
-}
-
 func (a *app) paintCollapsedPill(c *ui.Context, p *pinWin) {
 	pal := uiPalette(c)
 	pill := liquidGlassCapsule(
+		c,
 		ui.Row(c).
 			Size(collapsedPillW, collapsedPillH).
 			Padding(0, 12).
@@ -728,18 +709,7 @@ func (a *app) paintCollapsedPill(c *ui.Context, p *pinWin) {
 			FontSize(11.5).
 			FontFeatures("tnum").
 			TextColor(pal.Text)
-		expandBtn := ui.Row(c).
-			Height(20).
-			Padding(0, 7).
-			AlignItems(ui.Center).
-			Radius(10).
-			Background(pal.ActiveBg).
-			Border(1, pal.ActiveBorder).
-			Cursor(ui.CursorPointer)
-		expandBtn.Children(func() {
-			ui.Text(c, "展开").FontSize(11).FontWeight(500).TextColor(pal.ActiveText)
-		})
-		if expandBtn.Clicked() {
+		if miniPillBtn(c, nil, "展开", false) {
 			go mygo.RunOnMain(func() { p.toggleCollapsed() })
 		}
 	})
@@ -786,6 +756,7 @@ func (p *pinWin) paintPinRuler(c *ui.Context, w, h float32) {
 	by := max(float32(4), min(cy+12, h-28))
 	pal := uiPalette(c)
 	liquidGlassCapsule(
+		c,
 		ui.Box(c).Absolute().Left(bx).Top(by).
 			Padding(4, 9).
 			IgnoreInput(true),
@@ -1288,6 +1259,7 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 		// 左上 / 右上极简角标
 		pal := uiPalette(c)
 		liquidGlassCapsule(
+			c,
 			ui.Row(c).Absolute().Left(8).Top(8).Height(20).Padding(0, 8).AlignItems(ui.Center).ZIndex(5).
 				IgnoreInput(true),
 			10,
@@ -1296,6 +1268,7 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 			ui.Text(c, "对比 A").FontSize(10.5).FontWeight(500).NoWrap().TextColor(pal.Text)
 		})
 		liquidGlassCapsule(
+			c,
 			ui.Row(c).Absolute().Right(8).Top(8).Height(20).Padding(0, 8).AlignItems(ui.Center).ZIndex(5).
 				IgnoreInput(true),
 			10,
@@ -1307,6 +1280,7 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 
 	// 底部对比控制条
 	bar := liquidGlassCapsule(
+		c,
 		ui.Row(c).Absolute().
 			Right(8).Bottom(8).
 			Height(34).
@@ -1319,12 +1293,13 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 	)
 	_ = bar.Clicked()
 	bar.Children(func() {
-		if compactTabBtn(c.Key("cmp-split"), "拉帘", !p.compareDiff) {
-			p.compareDiff = false
-		}
 		diffLabel := fmt.Sprintf("热力图 · %.2f%%", p.compareDiffRes.DiffPercent)
-		if compactTabBtn(c.Key("cmp-diff"), diffLabel, p.compareDiff) {
-			p.compareDiff = true
+		cmpSel := 0
+		if p.compareDiff {
+			cmpSel = 1
+		}
+		if picked := compactSegmented(c, "pin-cmp", cmpSel, []string{"拉帘", diffLabel}); picked >= 0 {
+			p.compareDiff = picked == 1
 		}
 		if miniPillBtn(c, iconCopy, "复制", true) {
 			a.copyCompareComposite(p)

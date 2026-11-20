@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -630,6 +631,89 @@ func TestOCRTableViewAndSourceToggle(t *testing.T) {
 	}
 	if !tt.HasText("编辑 Markdown 源码") {
 		t.Fatalf("expected raw editor footer hint, texts=%v", tt.Texts())
+	}
+}
+
+func TestOCREditPreserveAndTableResync(t *testing.T) {
+	a := &app{}
+	tbl := vision.Table{
+		Cols: 2,
+		Rows: [][]string{
+			{"模块", "状态"},
+			{"OCR", "正常"},
+		},
+	}
+	ow := &ocrWindow{
+		loading:   false,
+		plainText: "原始纯文本",
+		text:      "用户编辑后的纯文本",
+		table:     tbl,
+		hasTable:  true,
+		mode:      ocrModePlain,
+	}
+
+	// 切换到 Markdown 后再切回纯文本，应保留用户在纯文本模式下的手动编辑。
+	ow.switchMode(ocrModeMarkdown)
+	if ow.mode != ocrModeMarkdown || !strings.Contains(ow.text, "| 模块 | 状态 |") {
+		t.Fatalf("expected Markdown text after switch, got mode=%v text=%q", ow.mode, ow.text)
+	}
+	// 在 Markdown 源码里手动修改单元格后切去 TSV 再切回，保留编辑并可重新解析同步表格视图。
+	ow.text = "| 模块 | 状态 |\n| --- | --- |\n| OCR | 已升级 |"
+	ow.switchMode(ocrModePlain)
+	if ow.text != "用户编辑后的纯文本" {
+		t.Fatalf("expected plainText edit preserved, got %q", ow.text)
+	}
+	ow.switchMode(ocrModeMarkdown)
+	if !strings.Contains(ow.text, "已升级") {
+		t.Fatalf("expected Markdown edit preserved, got %q", ow.text)
+	}
+	parsed, ok := parseEditedTable(ocrModeMarkdown, ow.text)
+	if !ok || len(parsed.Rows) != 2 || parsed.Rows[1][1] != "已升级" {
+		t.Fatalf("parseEditedTable markdown = (%+v, %v), want updated row", parsed, ok)
+	}
+	ow.table = parsed
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.paintOCRView(c, ow)
+	}, ocrWinW, ocrWinH)
+	tt.Frame()
+	if !tt.HasText("已升级") {
+		t.Fatalf("expected updated table cell in view, texts=%v", tt.Texts())
+	}
+
+	tsvParsed, ok := parseEditedTable(ocrModeTSV, "A\tB\n1\t2")
+	if !ok || tsvParsed.Cols != 2 || tsvParsed.Rows[1][0] != "1" {
+		t.Fatalf("parseEditedTable TSV = (%+v, %v)", tsvParsed, ok)
+	}
+}
+
+func TestTemplateCmdCTypingDoesNotHijack(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 120, 80))
+	a := &app{}
+	tw := &templateWindow{
+		srcImg:     src,
+		srcScale:   2,
+		previewSrc: src,
+		opts:       beautify.DefaultTemplateOptions(),
+	}
+	tw.opts.Title = "输入标题测试"
+	tw.refreshPreview()
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.paintTemplateView(c, tw)
+	}, templateWinW, templateWinH)
+	tt.Frame()
+
+	// 先点击标题输入框让输入框获得焦点，再按 Cmd+C 不应触发「复制成图」。
+	titleRect, ok := tt.Find("卡片标题")
+	if !ok {
+		t.Fatalf("cannot find 卡片标题 input, texts=%v", tt.Texts())
+	}
+	tt.ClickAt(titleRect.X+titleRect.W/2, titleRect.Y+titleRect.H/2)
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyC)
+	tt.Frame()
+	if tw.statusBadge != "" {
+		t.Fatalf("expected Cmd+C while typing not to trigger copyTemplateResult, got badge=%q", tw.statusBadge)
 	}
 }
 

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -118,6 +121,13 @@ func TestSettingsShortcutRecorderInteractive(t *testing.T) {
 	}, settingsWinW, settingsWinH)
 	tt.SetScale(2)
 
+	// 0. 切换到「全局快捷键」分页。
+	tt.Frame()
+	if err := tt.Click("全局快捷键"); err != nil {
+		t.Fatalf("click shortcuts tab: %v", err)
+	}
+	tt.Frame()
+
 	// 1. 点击「区域截图」旁边的快捷键录制按钮进入录制状态。
 	if err := tt.Click("录制区域截图"); err != nil {
 		t.Fatalf("click snip recorder: %v", err)
@@ -177,5 +187,57 @@ func TestSettingsShortcutRecorderInteractive(t *testing.T) {
 	}
 	if sw.draft.HistoryShortcut != config.Default(dir).HistoryShortcut {
 		t.Fatalf("Esc should preserve HistoryShortcut, got %q", sw.draft.HistoryShortcut)
+	}
+}
+
+func TestVibrancyTintForMode(t *testing.T) {
+	if got := vibrancyTintForMode("frosted", true); got != "rgba(18, 20, 28, 0.46)" {
+		t.Fatalf("dark frosted tint = %q", got)
+	}
+	if got := vibrancyTintForMode("frosted", false); got != "rgba(248, 250, 255, 0.44)" {
+		t.Fatalf("light frosted tint = %q", got)
+	}
+	if got := vibrancyTintForMode("regular", true); got != "rgba(18, 20, 28, 0.16)" {
+		t.Fatalf("dark regular tint = %q", got)
+	}
+	if got := vibrancyTintForMode("regular", false); got != "" {
+		t.Fatalf("light regular tint = %q, want empty", got)
+	}
+	if got := vibrancyTintForMode("clear", true); got != "" {
+		t.Fatalf("clear tint = %q, want empty", got)
+	}
+}
+
+func TestDragTempPruning(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+
+	oldFile := filepath.Join(dir, "old.png")
+	if err := os.WriteFile(oldFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := now.Add(-2 * time.Hour)
+	_ = os.Chtimes(oldFile, oldTime, oldTime)
+
+	for i := range 5 {
+		p := filepath.Join(dir, string(rune('a'+i))+".png")
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ts := now.Add(time.Duration(i) * time.Second)
+		_ = os.Chtimes(p, ts, ts)
+	}
+
+	pruneDragTempDirIn(dir, now, 30*time.Minute, 3)
+
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Fatalf("expected expired file %s to be pruned", oldFile)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 newest files kept before adding 1 new file (cap=3), got %d", len(entries))
 	}
 }

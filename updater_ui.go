@@ -19,7 +19,7 @@ import (
 var appIconPNG []byte
 
 const (
-	defaultAppVersion = "0.1.3"
+	defaultAppVersion = "0.1.4"
 	updateGitHubRepo  = "Lumiaqian/snipgo"
 	updateWinW        = 500
 	updateWinH        = 440
@@ -510,23 +510,12 @@ func (a *app) paintUpdateView(c *ui.Context, u *updateManager) {
 		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &u.enter)
 
 		card.Children(func() {
-			// 1. 顶部浮动标题栏
-			header := ui.Row(c).
-				Height(50).
-				Padding(0, 16).
-				Gap(8).
-				AlignItems(ui.Center).
-				ZIndex(2).
-				DragWindow()
-			header.Children(func() {
-				if macTrafficCloseBtn(c, "关闭更新窗口", "关闭 (⌘W / Esc)") {
-					if u.win != nil {
-						go mygo.RunOnMain(func() { a.closeUpdateWindow() })
-					}
+			// 1. 顶部无框拖拽标题栏（状态徽标右对齐）
+			paintPanelHeader(c, iconUpdate, "SnipGo 软件更新", "关闭更新窗口", "关闭 (⌘W / Esc)", func() {
+				if u.win != nil {
+					a.closeUpdateWindow()
 				}
-				ui.Box(c).Width(2)
-				ui.Icon(c, iconUpdate).FontSize(15).TextColor(p.Accent)
-				ui.Text(c, "SnipGo 软件更新").FontSize(13.5).FontWeight(600).NoWrap().TextColor(p.Text)
+			}, func() {
 				switch u.state {
 				case updReady:
 					statusBadgePill(c, "✓ 更新就绪", true)
@@ -539,20 +528,16 @@ func (a *app) paintUpdateView(c *ui.Context, u *updateManager) {
 				case updUpToDate:
 					statusBadgePill(c, "已是最新", true)
 				}
-				ui.Spacer(c)
 			})
-			panelHairline(c)
 
 			// 2. 主内容区
-			body := ui.Column(c).Grow(1).Padding(14, 18).Gap(12)
+			body := ui.Column(c).Grow(1).Padding(4, 18, 4, 18).Gap(12)
 			body.Children(func() {
 				a.paintUpdateHero(c, p, u)
 				a.paintUpdateBody(c, p, u)
 			})
 
-			panelHairline(c)
-
-			// 3. 底部操作栏
+			// 3. 底部浮动操作栏
 			a.paintUpdateFooter(c, p, u)
 		})
 	})
@@ -738,22 +723,42 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 		})
 
 	default:
-		statusCard := liquidCard(c, ui.Column(c).Grow(1).Padding(18, 20).Gap(8).Justify(ui.Center).AlignItems(ui.Center))
+		statusCard := liquidCard(c, ui.Column(c).Grow(1).Padding(18, 20).Gap(10).Justify(ui.Center).AlignItems(ui.Center))
 		statusCard.Children(func() {
+			var ic *ui.SVG
+			var col ui.Color
+			var headline, sub string
 			switch u.state {
 			case updChecking:
-				ui.Icon(c, iconUpdate).FontSize(26).TextColor(p.Accent)
-				ui.Text(c, "正在拉取签名更新清单…").FontSize(12.5).TextColor(p.Text)
+				ic, col = iconUpdate, p.Accent
+				headline = "正在拉取签名更新清单…"
+				sub = "读取 GitHub Releases 静态签名索引"
 			case updUpToDate:
-				ui.Icon(c, iconCheck).FontSize(26).TextColor(p.BadgeSuccessFg)
-				ui.Text(c, "当前安装的 SnipGo 已是最新正式版，无需更新。").FontSize(12.5).TextColor(p.Text)
+				ic, col = iconCheck, p.BadgeSuccessFg
+				headline = "当前安装的 SnipGo 已是最新正式版"
+				sub = "无需更新，所有功能均处于最新状态"
 			case updError:
-				ui.Icon(c, iconClose).FontSize(24).TextColor(ui.RGB(235, 68, 60))
-				msg := u.errMsg
-				if msg == "" {
-					msg = "网络请求失败，请检查网络连接或系统代理设置"
+				ic, col = iconClose, ui.RGB(235, 68, 60)
+				headline = "检查或下载更新失败"
+				sub = u.errMsg
+				if sub == "" {
+					sub = "网络请求失败，请检查网络连接或系统代理设置"
 				}
-				ui.Text(c, msg).FontSize(12).LineHeight(1.45).TextColor(ui.RGB(235, 68, 60))
+			}
+			if ic != nil {
+				ui.Box(c).Size(44, 44).Radius(22).Background(col.Alpha(0.14)).
+					AlignItems(ui.Center).Justify(ui.Center).
+					Children(func() {
+						ui.Icon(c, ic).FontSize(20).TextColor(col)
+					})
+			}
+			ui.Text(c, headline).FontSize(13).FontWeight(600).TextColor(p.Text)
+			if sub != "" {
+				subCol := p.TextMuted
+				if u.state == updError {
+					subCol = ui.RGB(235, 68, 60)
+				}
+				ui.Text(c, sub).FontSize(11.5).LineHeight(1.45).TextColor(subCol)
 			}
 			if !u.lastChecked.IsZero() {
 				ui.Text(c, "上次检查时间："+u.lastChecked.Format("15:04:05")).
@@ -764,12 +769,12 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 }
 
 func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
-	footer := ui.Row(c).Height(54).Padding(0, 16).Gap(8).AlignItems(ui.Center).ZIndex(2)
+	footer := ui.Row(c).Height(54).Padding(0, 18).Gap(8).AlignItems(ui.Center).ZIndex(2)
 	footer.Children(func() {
 		switch u.state {
 		case updAvailable:
 			liquidGlassGroup(c, 13, 6, func(add func(ui.Element) ui.Element) {
-				if glassGroupBtn(c, add, nil, "跳过此版本", "跳过此版本，以后不再自动弹窗提示") {
+				if glassGroupBtn(c, add, nil, "跳过", "跳过此版本，以后不再自动弹窗提示") {
 					if u.release != nil {
 						a.cfg.SkippedVersion = u.release.Version
 						if a.userDataDir != "" {
@@ -782,7 +787,7 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 					}
 					go mygo.RunOnMain(func() { a.closeUpdateWindow() })
 				}
-				if glassGroupBtn(c, add, nil, "稍后提醒", "暂时关闭更新窗口") {
+				if glassGroupBtn(c, add, nil, "稍后", "暂时关闭更新窗口") {
 					go mygo.RunOnMain(func() { a.closeUpdateWindow() })
 				}
 			})
