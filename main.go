@@ -635,11 +635,13 @@ func (a *app) applyThemeLive(cfg config.Settings) {
 	}
 	for _, o := range a.overlays {
 		if o != nil && o.win != nil && !o.win.IsDestroyed() {
+			applyWindowAppearance(o.win, st.Appearance)
 			o.win.Invalidate()
 		}
 	}
 	for _, p := range a.pins {
 		if p != nil && p.win != nil && !p.win.IsDestroyed() {
+			applyWindowAppearance(p.win, st.Appearance)
 			p.win.Invalidate()
 		}
 	}

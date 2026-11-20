@@ -213,7 +213,6 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 							}
 						})
 					})
-					paintBottomScrollEdge(c, 14)
 				})
 			}
 		})

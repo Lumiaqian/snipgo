@@ -191,20 +191,30 @@ func TestSettingsShortcutRecorderInteractive(t *testing.T) {
 }
 
 func TestVibrancyTintForMode(t *testing.T) {
-	if got := vibrancyTintForMode("frosted", true); got != "rgba(18, 20, 28, 0.46)" {
-		t.Fatalf("dark frosted tint = %q", got)
+	cases := []struct {
+		level string
+		dark  bool
+		css   string
+		tintA uint8
+		washA uint8
+	}{
+		{"clear", true, "", 0, 0},
+		{"clear", false, "rgba(248, 250, 255, 0.28)", 71, 51},
+		{"regular", true, "rgba(18, 20, 28, 0.18)", 46, 0},
+		{"regular", false, "rgba(248, 250, 255, 0.48)", 122, 87},
+		{"frosted", true, "rgba(18, 20, 28, 0.48)", 122, 0},
+		{"frosted", false, "rgba(250, 252, 255, 0.68)", 173, 122},
 	}
-	if got := vibrancyTintForMode("frosted", false); got != "rgba(248, 250, 255, 0.44)" {
-		t.Fatalf("light frosted tint = %q", got)
-	}
-	if got := vibrancyTintForMode("regular", true); got != "rgba(18, 20, 28, 0.16)" {
-		t.Fatalf("dark regular tint = %q", got)
-	}
-	if got := vibrancyTintForMode("regular", false); got != "" {
-		t.Fatalf("light regular tint = %q, want empty", got)
-	}
-	if got := vibrancyTintForMode("clear", true); got != "" {
-		t.Fatalf("clear tint = %q, want empty", got)
+	for _, tc := range cases {
+		if got := vibrancyTintForMode(tc.level, tc.dark); got != tc.css {
+			t.Fatalf("vibrancyTintForMode(%q, %v) = %q, want %q", tc.level, tc.dark, got, tc.css)
+		}
+		if col := glassTintColor(tc.level, tc.dark); col.A != tc.tintA {
+			t.Fatalf("glassTintColor(%q, %v).A = %d, want %d", tc.level, tc.dark, col.A, tc.tintA)
+		}
+		if wash := panelSurfaceWash(tc.level, tc.dark); wash.A != tc.washA {
+			t.Fatalf("panelSurfaceWash(%q, %v).A = %d, want %d", tc.level, tc.dark, wash.A, tc.washA)
+		}
 	}
 }
 

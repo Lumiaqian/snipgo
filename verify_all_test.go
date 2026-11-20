@@ -325,17 +325,17 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 							a.paintCountdownView(c, cd)
 						})
 						ui.Row(c).Gap(16).Children(func() {
-							ui.Box(c).Size(historyWinW, 540).Children(func() {
+							ui.Box(c).Size(historyWinW, historyWinH).Children(func() {
 								a.paintHistoryView(c, hw)
 							})
-							ui.Box(c).Size(settingsWinW, 540).Children(func() {
+							ui.Box(c).Size(settingsWinW, settingsWinH).Children(func() {
 								a.paintSettingsView(c, sw)
 							})
 						})
 					})
 				})
 			})
-	}, historyWinW+settingsWinW+44, 622, 2)
+	}, historyWinW+settingsWinW+44, max(historyWinH, settingsWinH)+82, 2)
 	savePNGFile(t, filepath.Join(dir, "verify_7_history_and_settings.png"), histAndSetImg)
 	a.histWin = nil
 
@@ -683,13 +683,13 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 		},
 		saved: "实时预览（点保存生效）",
 	}
-	tile1 := renderTile(settingsWinW, 540, false, appThemeState{Appearance: "light", GlassLevel: "clear", Accent: "purple"}, func(c *ui.Context) {
+	tile1 := renderTile(settingsWinW, settingsWinH, false, appThemeState{Appearance: "light", GlassLevel: "clear", Accent: "purple"}, func(c *ui.Context) {
 		a.paintSettingsView(c, swPurple)
 	})
-	tile2 := renderTile(updateWinW, 540, true, appThemeState{Appearance: "dark", GlassLevel: "regular", Accent: "pink"}, func(c *ui.Context) {
+	tile2 := renderTile(updateWinW, settingsWinH, true, appThemeState{Appearance: "dark", GlassLevel: "regular", Accent: "pink"}, func(c *ui.Context) {
 		a.paintUpdateView(c, uAvail)
 	})
-	tile3 := renderTile(440, 540, false, appThemeState{Appearance: "light", GlassLevel: "frosted", Accent: "green"}, func(c *ui.Context) {
+	tile3 := renderTile(440, settingsWinH, false, appThemeState{Appearance: "light", GlassLevel: "frosted", Accent: "green"}, func(c *ui.Context) {
 		a.paintOCRView(c, owTbl)
 	})
 
@@ -758,6 +758,54 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 		x16 += tile.Bounds().Dx()
 	}
 	savePNGFile(t, filepath.Join(dir, "verify_16_ocr_redesign.png"), sheet16)
+
+	// 图 17：深色壁纸下的浅色三档玻璃偏好设置 + 无边缘雾条更新日志对比
+	var row1Tiles []*image.RGBA
+	for _, lvl := range []string{"clear", "regular", "frosted"} {
+		swLight := &settingsWindow{draft: swPurple.draft}
+		swLight.draft.GlassLevel = lvl
+		swLight.draft.AccentColor = "system"
+		row1Tiles = append(row1Tiles, renderTile(settingsWinW, settingsWinH, true, appThemeState{
+			Appearance: "light",
+			GlassLevel: lvl,
+			Accent:     "system",
+		}, func(c *ui.Context) {
+			a.paintSettingsView(c, swLight)
+		}))
+	}
+	var row2Tiles []*image.RGBA
+	for _, appMode := range []string{"dark", "light"} {
+		row2Tiles = append(row2Tiles, renderTile(updateWinW, updateWinH, true, appThemeState{
+			Appearance: appMode,
+			GlassLevel: "regular",
+			Accent:     "system",
+		}, func(c *ui.Context) {
+			a.paintUpdateView(c, uAvail)
+		}))
+	}
+	r1W, r1H := 0, 0
+	for _, tile := range row1Tiles {
+		r1W += tile.Bounds().Dx()
+		r1H = max(r1H, tile.Bounds().Dy())
+	}
+	r2W, r2H := 0, 0
+	for _, tile := range row2Tiles {
+		r2W += tile.Bounds().Dx()
+		r2H = max(r2H, tile.Bounds().Dy())
+	}
+	sheet17 := image.NewNRGBA(image.Rect(0, 0, max(r1W, r2W), r1H+r2H))
+	draw.Draw(sheet17, sheet17.Bounds(), image.NewUniform(color.NRGBA{R: 16, G: 20, B: 32, A: 255}), image.Point{}, draw.Src)
+	x17 := 0
+	for _, tile := range row1Tiles {
+		draw.Draw(sheet17, tile.Bounds().Add(image.Pt(x17, 0)), tile, tile.Bounds().Min, draw.Src)
+		x17 += tile.Bounds().Dx()
+	}
+	x17 = 0
+	for _, tile := range row2Tiles {
+		draw.Draw(sheet17, tile.Bounds().Add(image.Pt(x17, r1H)), tile, tile.Bounds().Min, draw.Src)
+		x17 += tile.Bounds().Dx()
+	}
+	savePNGFile(t, filepath.Join(dir, "verify_17_light_on_dark_and_updater.png"), sheet17)
 }
 
 func paintTahoeWallpaper(p *ui.Painter, r ui.Rect, dark bool) {

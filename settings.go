@@ -17,7 +17,7 @@ import (
 
 const (
 	settingsWinW = 500
-	settingsWinH = 490
+	settingsWinH = 448
 )
 
 type settingsWindow struct {
@@ -500,7 +500,6 @@ func (a *app) paintSettingsGeneralTab(c *ui.Context, p palette, sw *settingsWind
 			})
 		})
 	})
-	paintBottomScrollEdge(c, 12)
 }
 
 func sectionTitle(c *ui.Context, title string) {
@@ -1118,7 +1117,11 @@ func (a *app) paintCountdownView(c *ui.Context, cd *countdownSession) {
 			AlignItems(ui.Center).
 			Radius(21).
 			Border(1, p.ActiveBorder)
-		if !c.Vibrancy() {
+		if c.Vibrancy() {
+			if wash := panelSurfaceWash(getActiveTheme().GlassLevel, p.Dark); wash.A > 0 {
+				pill.Background(wash)
+			}
+		} else {
 			pill = liquidGlassCapsule(c, pill, 21, false).Border(1, p.ActiveBorder)
 		}
 		pill.Children(func() {

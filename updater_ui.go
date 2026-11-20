@@ -616,7 +616,7 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 		}
 		notesCard := liquidCard(c, ui.Box(c).Grow(1).Clip())
 		notesCard.Children(func() {
-			sc := ui.Scroll(c).Fill().Padding(11, 13).ScrollbarInsets(8, 0, 8)
+			sc := ui.Scroll(c).Fill().Padding(12, 14).ScrollbarInsets(8, 0, 8)
 			sc.Children(func() {
 				ui.Column(c).Gap(6).Children(func() {
 					ui.Text(c, "更新日志").FontSize(11).FontWeight(600).TextColor(p.TextMuted)
@@ -636,8 +636,6 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 					}
 				})
 			})
-			paintTopScrollEdge(c, 12)
-			paintBottomScrollEdge(c, 12)
 		})
 
 		if !u.canSelfUpdate {

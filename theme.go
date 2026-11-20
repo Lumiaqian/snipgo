@@ -141,25 +141,52 @@ func effectiveDarkMode(st appThemeState) bool {
 	}
 }
 
-func vibrancyTintForMode(level string, dark bool) string {
+func glassTintSpecForMode(level string, dark bool) (ui.Color, string) {
 	switch level {
 	case "clear":
-		return ""
+		if dark {
+			return ui.Color{}, ""
+		}
+		return ui.RGBA(248, 250, 255, 0.28), "rgba(248, 250, 255, 0.28)"
 	case "frosted":
 		if dark {
-			return "rgba(18, 20, 28, 0.46)"
+			return ui.RGBA(18, 20, 28, 0.48), "rgba(18, 20, 28, 0.48)"
 		}
-		return "rgba(248, 250, 255, 0.44)"
+		return ui.RGBA(250, 252, 255, 0.68), "rgba(250, 252, 255, 0.68)"
 	default:
 		if dark {
-			return "rgba(18, 20, 28, 0.16)"
+			return ui.RGBA(18, 20, 28, 0.18), "rgba(18, 20, 28, 0.18)"
 		}
-		return ""
+		return ui.RGBA(248, 250, 255, 0.48), "rgba(248, 250, 255, 0.48)"
 	}
+}
+
+func glassTintColor(level string, dark bool) ui.Color {
+	col, _ := glassTintSpecForMode(level, dark)
+	return col
+}
+
+func vibrancyTintForMode(level string, dark bool) string {
+	_, css := glassTintSpecForMode(level, dark)
+	return css
 }
 
 func vibrancyTintFor(st appThemeState) string {
 	return vibrancyTintForMode(st.GlassLevel, effectiveDarkMode(st))
+}
+
+func panelSurfaceWash(level string, dark bool) ui.Color {
+	if dark {
+		return ui.Color{}
+	}
+	switch level {
+	case "clear":
+		return ui.RGBA(255, 255, 255, 0.20)
+	case "frosted":
+		return ui.RGBA(252, 253, 255, 0.48)
+	default:
+		return ui.RGBA(250, 252, 255, 0.34)
+	}
 }
 
 // applyWindowTheme 为原生浮窗同步 macOS 26/27 玻璃浓度、玻璃着色与浅/深外观。
@@ -301,37 +328,37 @@ func uiPalette(c *ui.Context) palette {
 		}
 	}
 
-	cardBg := ui.RGBA(255, 255, 255, 0.58)
-	cardBgHover := ui.RGBA(255, 255, 255, 0.78)
-	cardBorder := ui.RGBA(0, 0, 0, 0.08)
+	cardBg := ui.RGBA(255, 255, 255, 0.64)
+	cardBgHover := ui.RGBA(255, 255, 255, 0.82)
+	cardBorder := ui.RGBA(0, 0, 0, 0.065)
 	inputBg := ui.RGBA(0, 0, 0, 0.055)
-	stageBg := ui.RGBA(236, 240, 247, 0.58)
+	stageBg := ui.RGBA(236, 240, 247, 0.62)
 	switch st.GlassLevel {
 	case "clear":
-		cardBg = ui.RGBA(255, 255, 255, 0.36)
-		cardBgHover = ui.RGBA(255, 255, 255, 0.58)
-		cardBorder = ui.RGBA(0, 0, 0, 0.075)
-		inputBg = ui.RGBA(255, 255, 255, 0.42)
-		stageBg = ui.RGBA(236, 240, 247, 0.38)
+		cardBg = ui.RGBA(255, 255, 255, 0.50)
+		cardBgHover = ui.RGBA(255, 255, 255, 0.70)
+		cardBorder = ui.RGBA(0, 0, 0, 0.065)
+		inputBg = ui.RGBA(0, 0, 0, 0.055)
+		stageBg = ui.RGBA(236, 240, 247, 0.44)
 	case "frosted":
-		cardBg = ui.RGBA(255, 255, 255, 0.78)
-		cardBgHover = ui.RGBA(255, 255, 255, 0.92)
-		cardBorder = ui.RGBA(0, 0, 0, 0.10)
-		inputBg = ui.RGBA(0, 0, 0, 0.065)
-		stageBg = ui.RGBA(236, 240, 247, 0.78)
+		cardBg = ui.RGBA(255, 255, 255, 0.80)
+		cardBgHover = ui.RGBA(255, 255, 255, 0.94)
+		cardBorder = ui.RGBA(0, 0, 0, 0.08)
+		inputBg = ui.RGBA(0, 0, 0, 0.06)
+		stageBg = ui.RGBA(236, 240, 247, 0.82)
 	}
 	return palette{
 		Dark:           false,
-		Text:           ui.RGBA(20, 22, 28, 0.92),
-		TextSecondary:  ui.RGBA(42, 46, 56, 0.72),
-		TextMuted:      ui.RGBA(60, 64, 76, 0.56),
+		Text:           ui.RGBA(18, 20, 26, 0.94),
+		TextSecondary:  ui.RGBA(34, 38, 48, 0.76),
+		TextMuted:      ui.RGBA(54, 60, 72, 0.60),
 		Accent:         accent,
 		AccentText:     white,
-		PanelRim:       ui.RGBA(255, 255, 255, 0.45),
+		PanelRim:       ui.RGBA(255, 255, 255, 0.65),
 		CardBg:         cardBg,
 		CardBgHover:    cardBgHover,
 		CardBorder:     cardBorder,
-		CardTopRim:     ui.RGBA(255, 255, 255, 0.65),
+		CardTopRim:     ui.RGBA(255, 255, 255, 0.78),
 		ActiveBg:       accent.Alpha(0.16),
 		ActiveBorder:   accent.Alpha(0.68),
 		ActiveText:     accent.Mix(black, 0.18),
@@ -339,7 +366,7 @@ func uiPalette(c *ui.Context) palette {
 		InputBorder:    ui.RGBA(0, 0, 0, 0.11),
 		Divider:        ui.RGBA(0, 0, 0, 0.09),
 		SubtleBtnBg:    ui.RGBA(0, 0, 0, 0.055),
-		SubtleBtnHover: ui.RGBA(0, 0, 0, 0.105),
+		SubtleBtnHover: ui.RGBA(0, 0, 0, 0.095),
 		SubtleBorder:   ui.RGBA(0, 0, 0, 0.09),
 		BadgeSuccessBg: ui.RGBA(34, 197, 94, 0.15),
 		BadgeSuccessBd: ui.RGBA(22, 163, 74, 0.30),
@@ -358,23 +385,23 @@ func liquidGlassPanel(c *ui.Context, el ui.Element) ui.Element {
 	st := getActiveTheme()
 	el.Fill().Radius(panelCornerRadius).TextColor(p.Text)
 	if c.Vibrancy() {
+		if wash := panelSurfaceWash(st.GlassLevel, p.Dark); wash.A > 0 {
+			el.Background(wash)
+		}
 		return el.Border(1, p.PanelRim)
 	}
+	style, clarity := glass.Regular, float32(0.30)
 	switch st.GlassLevel {
 	case "clear":
-		return el.Material(glass.Glass{Style: glass.Clear, Clarity: 0.78}).
-			Border(1, p.PanelRim).InsetShadow(0, 1, 0, 0, p.CardTopRim)
+		style, clarity = glass.Clear, 0.78
 	case "frosted":
-		tint := ui.RGBA(255, 255, 255, 0.44)
-		if p.Dark {
-			tint = ui.RGBA(20, 22, 30, 0.50)
-		}
-		return el.Material(glass.Glass{Style: glass.Regular, Clarity: 0, Tint: tint}).
-			Border(1, p.PanelRim).InsetShadow(0, 1, 0, 0, p.CardTopRim)
-	default:
-		return el.Material(glass.Glass{Style: glass.Regular, Clarity: 0.30}).
-			Border(1, p.PanelRim).InsetShadow(0, 1, 0, 0, p.CardTopRim)
+		clarity = 0
 	}
+	return el.Material(glass.Glass{
+		Style:   style,
+		Clarity: clarity,
+		Tint:    glassTintColor(st.GlassLevel, p.Dark),
+	}).Border(1, p.PanelRim).InsetShadow(0, 1, 0, 0, p.CardTopRim)
 }
 
 type panelEnterState struct {
@@ -400,12 +427,14 @@ func liquidPanelEnter(el ui.Element, state *panelEnterState) ui.Element {
 
 // liquidGlassCapsule 为浮动胶囊、工具栏、取色徽章与贴图浮层应用 macOS 26/27 液态玻璃胶囊。
 func liquidGlassCapsule(c *ui.Context, el ui.Element, radius float32, native bool) ui.Element {
+	p := uiPalette(c)
+	tint := glassTintColor(getActiveTheme().GlassLevel, p.Dark)
 	el.Radius(radius).Material(glass.Glass{
 		Style:  activeGlassStyle(),
+		Tint:   tint,
 		Native: native,
 	})
 	if !native {
-		p := uiPalette(c)
 		shadowCol := ui.RGBA(0, 0, 0, 0.14)
 		if p.Dark {
 			shadowCol = ui.RGBA(0, 0, 0, 0.34)
@@ -491,48 +520,33 @@ func liquidPrimaryChrome(c *ui.Context, el ui.Element, radius float32) ui.Elemen
 		InsetShadow(0, 1, 0, 0, ui.RGBA(255, 255, 255, 0.24))
 }
 
-// liquidSecondaryChrome 为次级胶囊按钮应用真实 Liquid Glass（浮窗下启用原生 NSGlassEffectView）与弹簧高光。
+// liquidSecondaryChrome 为次级胶囊按钮应用统一半透明质感胶囊与平滑渐变动画，避免在卡片内部挖空窗口底层。
 func liquidSecondaryChrome(c *ui.Context, el ui.Element, hovered bool, radius float32) ui.Element {
 	p := uiPalette(c)
-	if c.Vibrancy() {
-		tint := ui.RGBA(255, 255, 255, 0.28)
-		if p.Dark {
-			tint = ui.RGBA(255, 255, 255, 0.06)
-		}
-		if hovered {
-			if p.Dark {
-				tint = ui.RGBA(255, 255, 255, 0.14)
-			} else {
-				tint = ui.RGBA(255, 255, 255, 0.48)
-			}
-		}
-		animTint := el.AnimateColor("sec-tint", tint, colorMorph)
-		return el.Radius(radius).
-			Material(glass.Glass{
-				Style:  activeGlassStyle(),
-				Tint:   animTint,
-				Native: true,
-			})
-	}
-	tint := ui.RGBA(255, 255, 255, 0.24)
+	bg := ui.RGBA(255, 255, 255, 0.74)
+	bd := ui.RGBA(0, 0, 0, 0.095)
+	topRim := ui.RGBA(255, 255, 255, 0.85)
+	shadowCol := ui.RGBA(0, 0, 0, 0.06)
 	if p.Dark {
-		tint = ui.RGBA(255, 255, 255, 0.08)
+		bg = ui.RGBA(255, 255, 255, 0.09)
+		bd = ui.RGBA(255, 255, 255, 0.14)
+		topRim = ui.RGBA(255, 255, 255, 0.14)
+		shadowCol = ui.RGBA(0, 0, 0, 0.18)
 	}
 	if hovered {
 		if p.Dark {
-			tint = ui.RGBA(255, 255, 255, 0.16)
+			bg = ui.RGBA(255, 255, 255, 0.16)
+			bd = ui.RGBA(255, 255, 255, 0.22)
 		} else {
-			tint = ui.RGBA(255, 255, 255, 0.42)
+			bg = ui.RGBA(255, 255, 255, 0.94)
+			bd = ui.RGBA(0, 0, 0, 0.14)
 		}
 	}
 	return el.Radius(radius).
-		Material(glass.Glass{
-			Style:       activeGlassStyle(),
-			Tint:        tint,
-			Interactive: true,
-		}).
-		Border(1, p.SubtleBorder).
-		InsetShadow(0, 1, 0, 0, p.CardTopRim)
+		Background(el.AnimateColor("sec-bg", bg, colorMorph)).
+		Border(1, el.AnimateColor("sec-bd", bd, colorMorph)).
+		InsetShadow(0, 1, 0, 0, topRim).
+		Shadow(0, 1, 2.5, 0, shadowCol)
 }
 
 type segMatchKey struct{ id string }
@@ -719,35 +733,6 @@ func liquidCard(c *ui.Context, el ui.Element) ui.Element {
 		Background(p.CardBg).
 		Border(1, p.CardBorder).
 		InsetShadow(0, 1, 0, 0, p.CardTopRim)
-}
-
-func scrollEdgeBlurRadius() float32 {
-	switch getActiveTheme().GlassLevel {
-	case "clear":
-		return 7
-	case "frosted":
-		return 14
-	default:
-		return 10
-	}
-}
-
-// paintTopScrollEdge 在浮动标题栏下方铺设 macOS 26/27 渐进式滚动边缘模糊。
-func paintTopScrollEdge(c *ui.Context, h float32) {
-	ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(h).PassThrough().
-		Material(glass.Blur{
-			Radius: scrollEdgeBlurRadius(),
-			Mask:   &ui.LinearGradient{From: ui.RGB(0, 0, 0), To: ui.Transparent, Angle: 180, Start: 0.42, End: 1},
-		})
-}
-
-// paintBottomScrollEdge 在浮动底部操作栏上方铺设渐进式滚动边缘模糊。
-func paintBottomScrollEdge(c *ui.Context, h float32) {
-	ui.Box(c).Absolute().Bottom(0).Left(0).Right(0).Height(h).PassThrough().
-		Material(glass.Blur{
-			Radius: scrollEdgeBlurRadius(),
-			Mask:   &ui.LinearGradient{From: ui.RGB(0, 0, 0), To: ui.Transparent, Angle: 0, Start: 0.42, End: 1},
-		})
 }
 
 // panelHairline 绘制 1px 自适应细分隔线。

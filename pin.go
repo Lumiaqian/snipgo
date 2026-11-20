@@ -133,6 +133,7 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 		Content:         ui.View(func(c *ui.Context) { a.pinView(c, p) }),
 	})
 	preparePinWindow(p.win)
+	applyWindowAppearance(p.win, a.cfg.ThemeAppearance)
 	p.win.SetBounds(mygo.Rectangle{X: at.X, Y: at.Y, Width: curW, Height: curH})
 	if opacity < 100 {
 		p.win.SetOpacity(float64(opacity) / 100)

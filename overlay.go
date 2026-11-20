@@ -79,6 +79,7 @@ func (a *app) ShowSelection(frames []crop.Screen) {
 		// 设为 NSWindowSharingNone，由 WindowServer 硬件级排除在所有截图之外，杜绝蒙层残留入镜。
 		o.win.SetContentProtection(true)
 		prepareOverlayWindow(o.win)
+		applyWindowAppearance(o.win, a.cfg.ThemeAppearance)
 		// X 和 Y 同时为 0 会把窗口放到屏幕中央，所以先放在 40,40 再挪到显示器原点。
 		o.win.SetBounds(mygo.Rectangle{X: b.Min.X, Y: b.Min.Y, Width: b.Dx(), Height: b.Dy()})
 		a.overlays = append(a.overlays, o)
