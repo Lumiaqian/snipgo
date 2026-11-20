@@ -10,5 +10,9 @@
       "LSUIElement": true,
       "LSApplicationCategoryType": "public.app-category.utilities"
     }
+  },
+  "updates": {
+    "publicKey": "M7t1xf5IPxaZ7gn0HWJuM6IU8DeodGur1be305H+yvM=",
+    "github": "Lumiaqian/snipgo"
   }
 }

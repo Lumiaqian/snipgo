@@ -23,7 +23,6 @@ import (
 	"snipgo/internal/session"
 	"snipgo/internal/store"
 	"snipgo/internal/textrender"
-	"snipgo/internal/updater"
 	"snipgo/internal/vision"
 )
 
@@ -587,17 +586,13 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 
 	// 图 14：自动更新器面板（浅色发现新版本 + 深色下载校验中与已是最新）
 	uIcon, _ := ui.DecodeBitmap(appIconPNG)
-	mockRel := &updater.Release{
-		Version:   "0.2.0",
-		TagName:   "v0.2.0",
-		Name:      "SnipGo 0.2.0",
-		AssetName: "SnipGo-0.2.0-arm64.app.zip",
-		AssetURL:  "https://github.com/Lumiaqian/snipgo/releases/download/v0.2.0/SnipGo-0.2.0-arm64.app.zip",
-		AssetSize: 4920000,
+	mockRel := &updateCandidate{
+		Version: "0.2.0",
+		Size:    4920000,
 		Notes: "### 核心亮点\n" +
 			"- 全新 macOS 26/27 Liquid Glass 自适应浅色与深色液态玻璃外观，支持清透/标准/浓磨砂与主题色自定义\n" +
 			"- 套模板工作台精选 10 套实用样式，涵盖终端代码、35mm 胶片、评审工单与幻灯分栏\n" +
-			"- 全浮窗采用 macOS 左上角红灯关闭（⌘W / Esc）与 ⌘Q 原生快捷习惯，内置自动更新",
+			"- 全浮窗采用 macOS 左上角红灯关闭（⌘W / Esc）与 ⌘Q 原生快捷习惯，内置签名自动更新",
 	}
 	uAvail := &updateManager{
 		iconBmp:       uIcon,

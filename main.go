@@ -25,7 +25,6 @@ import (
 	"snipgo/internal/crop"
 	"snipgo/internal/session"
 	"snipgo/internal/store"
-	"snipgo/internal/updater"
 )
 
 const (
@@ -555,15 +554,15 @@ func (a *app) refreshMenu() {
 		)
 	}
 	items = append(items, mygo.Separator())
-	if a.upd != nil && a.upd.staged != nil {
+	if a.upd != nil && a.upd.stagedVersion != "" {
 		items = append(items, &mygo.MenuItem{
-			Label: fmt.Sprintf("重启并更新至 %s...", updater.FormatVersion(a.upd.staged.Version)),
+			Label: fmt.Sprintf("重启并更新至 %s...", formatVersion(a.upd.stagedVersion)),
 			Badge: "就绪",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.openUpdateWindow() },
 		})
 	} else if rel := a.availableUpdate(); rel != nil {
 		items = append(items, &mygo.MenuItem{
-			Label: fmt.Sprintf("发现新版本 %s...", updater.FormatVersion(rel.Version)),
+			Label: fmt.Sprintf("发现新版本 %s...", formatVersion(rel.Version)),
 			Badge: "新",
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.openUpdateWindow() },
 		})

@@ -13,7 +13,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/config"
-	"snipgo/internal/updater"
 )
 
 const (
@@ -371,12 +370,12 @@ func (a *app) paintSettingsView(c *ui.Context, sw *settingsWindow) {
 					sec3.Children(func() {
 						verRow := ui.Row(c).AlignItems(ui.Center).Gap(8)
 						verRow.Children(func() {
-							ui.Text(c, "当前版本："+updater.FormatVersion(currentAppVersion())).
+							ui.Text(c, "当前版本："+formatVersion(currentAppVersion())).
 								FontSize(12).FontWeight(500).FontFeatures("tnum").NoWrap().TextColor(p.Text)
-							if a.upd != nil && a.upd.staged != nil {
-								statusBadgePill(c, "可重启更新 "+updater.FormatVersion(a.upd.staged.Version), true)
+							if a.upd != nil && a.upd.stagedVersion != "" {
+								statusBadgePill(c, "可重启更新 "+formatVersion(a.upd.stagedVersion), true)
 							} else if rel := a.availableUpdate(); rel != nil {
-								statusBadgePill(c, "有新版本 "+updater.FormatVersion(rel.Version), false)
+								statusBadgePill(c, "有新版本 "+formatVersion(rel.Version), false)
 							} else if a.upd != nil && a.upd.state == updUpToDate {
 								statusBadgePill(c, "已是最新", true)
 							} else if sw.draft.AutoCheckUpdates {
@@ -398,7 +397,7 @@ func (a *app) paintSettingsView(c *ui.Context, sw *settingsWindow) {
 						if sw.draft.SkippedVersion != "" {
 							skipRow := ui.Row(c).AlignItems(ui.Center).Gap(8)
 							skipRow.Children(func() {
-								ui.Text(c, "已跳过版本："+updater.FormatVersion(sw.draft.SkippedVersion)).
+								ui.Text(c, "已跳过版本："+formatVersion(sw.draft.SkippedVersion)).
 									FontSize(11.5).FontFeatures("tnum").TextColor(p.TextSecondary)
 								ui.Spacer(c)
 								if miniPillBtn(c, nil, "清除跳过", false) {

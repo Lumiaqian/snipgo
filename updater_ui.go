@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/config"
-	"snipgo/internal/updater"
 )
 
 //go:embed resources/icon.png
@@ -22,6 +20,7 @@ var appIconPNG []byte
 
 const (
 	defaultAppVersion = "0.1.1"
+	updateGitHubRepo  = "Lumiaqian/snipgo"
 	updateWinW        = 500
 	updateWinH        = 440
 	autoCheckDelay    = 12 * time.Second
@@ -54,14 +53,66 @@ const (
 	updError
 )
 
-type updateManager struct {
-	client *updater.Client
-	win    *mygo.Window
+type updateCandidate struct {
+	Version    string
+	Notes      string
+	Date       time.Time
+	Prerelease bool
+	Size       int64
 
-	iconBmp *ui.Bitmap
-	state   updateState
-	release *updater.Release
-	staged  *updater.StagedUpdate
+	raw *mygo.Update
+}
+
+type updateBackend interface {
+	Enabled() bool
+	SetPrereleases(on bool)
+	Check(ctx context.Context) (*updateCandidate, error)
+	Install(ctx context.Context, cand *updateCandidate, progress func(downloaded, total int64)) error
+	Relaunch()
+}
+
+type mygoUpdateBackend struct{}
+
+func (mygoUpdateBackend) Enabled() bool {
+	return mygo.Updater.Enabled()
+}
+
+func (mygoUpdateBackend) SetPrereleases(on bool) {
+	mygo.Updater.SetPrereleases(on)
+}
+
+func (mygoUpdateBackend) Check(ctx context.Context) (*updateCandidate, error) {
+	up, err := mygo.Updater.Check(ctx)
+	if err != nil || up == nil {
+		return nil, err
+	}
+	return &updateCandidate{
+		Version:    up.Version,
+		Notes:      strings.TrimSpace(up.Notes),
+		Date:       up.Date,
+		Prerelease: strings.Contains(up.Version, "-"),
+		raw:        up,
+	}, nil
+}
+
+func (mygoUpdateBackend) Install(ctx context.Context, cand *updateCandidate, progress func(downloaded, total int64)) error {
+	if cand == nil || cand.raw == nil {
+		return errors.New("缺少签名更新元数据")
+	}
+	return cand.raw.Install(ctx, progress)
+}
+
+func (mygoUpdateBackend) Relaunch() {
+	mygo.App.Relaunch()
+}
+
+type updateManager struct {
+	backend       updateBackend
+	win           *mygo.Window
+	iconBmp       *ui.Bitmap
+	state         updateState
+	release       *updateCandidate
+	stagedVersion string
 
 	downloaded  int64
 	total       int64
@@ -69,37 +120,39 @@ type updateManager struct {
 	lastChecked time.Time
 	notifiedVer string
 
-	bundlePath     string
-	canSelfUpdate  bool
-	selfUpdateHint string
+	canSelfUpdate bool
 
 	opSeq    uint64
 	opCancel context.CancelFunc
 	bgCancel context.CancelFunc
 	enter    panelEnterState
+	onMain   func(func())
+	onOpen   func()
+}
+
+func (u *updateManager) runMain(fn func()) {
+	if u != nil && u.onMain != nil {
+		u.onMain(fn)
+		return
+	}
+	mygo.RunOnMain(fn)
+}
+
+func (u *updateManager) activeBackend() updateBackend {
+	if u != nil && u.backend != nil {
+		return u.backend
+	}
+	return mygoUpdateBackend{}
 }
 
 func (a *app) initUpdater() {
 	u := &updateManager{
-		client: updater.NewClient(),
+		backend: mygoUpdateBackend{},
 	}
 	if bmp, err := ui.DecodeBitmap(appIconPNG); err == nil {
 		u.iconBmp = bmp
 	}
-	if exe, err := os.Executable(); err == nil {
-		if bundle, bErr := updater.DetectAppBundle(exe); bErr == nil {
-			u.bundlePath = bundle
-			if wErr := updater.CheckWritableBundle(bundle); wErr == nil {
-				u.canSelfUpdate = true
-			} else {
-				u.selfUpdateHint = wErr.Error()
-			}
-		} else {
-			u.selfUpdateHint = bErr.Error()
-		}
-	} else {
-		u.selfUpdateHint = "无法定位应用运行路径"
-	}
+	u.canSelfUpdate = u.backend.Enabled()
 	a.upd = u
 	a.restartUpdateScheduler()
 }
@@ -109,11 +162,12 @@ func (a *app) restartUpdateScheduler() {
 	if u == nil {
 		return
 	}
+	u.activeBackend().SetPrereleases(a.cfg.IncludePrereleases)
 	if u.bgCancel != nil {
 		u.bgCancel()
 		u.bgCancel = nil
 	}
-	if !a.cfg.AutoCheckUpdates {
+	if !a.cfg.AutoCheckUpdates || !u.activeBackend().Enabled() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -126,7 +180,7 @@ func (a *app) restartUpdateScheduler() {
 			return
 		case <-timer.C:
 		}
-		mygo.RunOnMain(func() {
+		u.runMain(func() {
 			if a.quitting || a.upd != u {
 				return
 			}
@@ -140,7 +194,7 @@ func (a *app) restartUpdateScheduler() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				mygo.RunOnMain(func() {
+				u.runMain(func() {
 					if a.quitting || a.upd != u {
 						return
 					}
@@ -167,7 +221,7 @@ func (a *app) shutdownUpdater() {
 	a.closeUpdateWindow()
 }
 
-func (a *app) availableUpdate() *updater.Release {
+func (a *app) availableUpdate() *updateCandidate {
 	u := a.upd
 	if u == nil || u.release == nil {
 		return nil
@@ -199,6 +253,10 @@ func (a *app) checkForUpdates(manual bool) {
 	if u == nil {
 		return
 	}
+	backend := u.activeBackend()
+	u.canSelfUpdate = backend.Enabled()
+	backend.SetPrereleases(a.cfg.IncludePrereleases)
+
 	if u.isBusyDownloading() || u.state == updReady {
 		if manual {
 			a.openUpdateWindow()
@@ -222,13 +280,9 @@ func (a *app) checkForUpdates(manual bool) {
 		u.invalidateUI()
 	}
 
-	client := u.client
-	curVer := currentAppVersion()
-	includePre := a.cfg.IncludePrereleases
-
 	go func() {
-		rel, err := client.Check(ctx, curVer, includePre)
-		mygo.RunOnMain(func() {
+		cand, err := backend.Check(ctx)
+		u.runMain(func() {
 			if a.quitting || a.upd != u || u.opSeq != seq {
 				return
 			}
@@ -241,14 +295,14 @@ func (a *app) checkForUpdates(manual bool) {
 					u.state = updIdle
 					return
 				}
-				u.errMsg = err.Error()
+				u.errMsg = friendlyUpdateError(err)
 				u.state = updError
 				u.invalidateUI()
 				a.refreshMenu()
 				a.invalidateSettingsWin()
 				return
 			}
-			if rel == nil {
+			if cand == nil {
 				u.release = nil
 				u.state = updUpToDate
 				u.invalidateUI()
@@ -257,7 +311,7 @@ func (a *app) checkForUpdates(manual bool) {
 				return
 			}
 
-			u.release = rel
+			u.release = cand
 			u.state = updAvailable
 			u.errMsg = ""
 			a.refreshMenu()
@@ -267,8 +321,8 @@ func (a *app) checkForUpdates(manual bool) {
 				a.openUpdateWindow()
 				return
 			}
-			if rel.Version != a.cfg.SkippedVersion && rel.Version != u.notifiedVer {
-				u.notifiedVer = rel.Version
+			if cand.Version != a.cfg.SkippedVersion && cand.Version != u.notifiedVer {
+				u.notifiedVer = cand.Version
 				a.openUpdateWindow()
 			}
 		})
@@ -280,8 +334,10 @@ func (a *app) startUpdateDownload() {
 	if u == nil || u.release == nil || u.isBusyDownloading() {
 		return
 	}
-	if !u.canSelfUpdate || strings.TrimSpace(u.release.AssetURL) == "" {
-		a.openReleaseDownload(u.release)
+	backend := u.activeBackend()
+	u.canSelfUpdate = backend.Enabled()
+	if !u.canSelfUpdate {
+		a.openReleasePage(u.release)
 		return
 	}
 	if u.opCancel != nil {
@@ -295,38 +351,30 @@ func (a *app) startUpdateDownload() {
 	u.opCancel = cancel
 	u.state = updDownloading
 	u.downloaded = 0
-	u.total = u.release.AssetSize
+	u.total = u.release.Size
 	u.errMsg = ""
 	u.invalidateUI()
 
-	relCopy := *u.release
-	client := u.client
-	bundlePath := u.bundlePath
+	candCopy := *u.release
 
 	go func() {
-		staged, err := client.DownloadAndStage(ctx, &relCopy, bundlePath, func(phase updater.StagePhase, dl, total int64) {
-			mygo.RunOnMain(func() {
+		err := backend.Install(ctx, &candCopy, func(dl, total int64) {
+			u.runMain(func() {
 				if a.quitting || a.upd != u || u.opSeq != seq {
 					return
 				}
-				switch phase {
-				case updater.PhaseDownloading:
-					u.state = updDownloading
-				case updater.PhaseVerifying:
+				if total > 0 && dl >= total {
 					u.state = updVerifying
-				case updater.PhaseExtracting, updater.PhaseStaging:
-					u.state = updExtracting
+				} else {
+					u.state = updDownloading
 				}
 				u.downloaded = dl
 				u.total = total
 				u.invalidateUI()
 			})
 		})
-		mygo.RunOnMain(func() {
+		u.runMain(func() {
 			if a.quitting || a.upd != u || u.opSeq != seq {
-				if staged != nil {
-					staged.Cancel()
-				}
 				return
 			}
 			u.opCancel = nil
@@ -335,9 +383,9 @@ func (a *app) startUpdateDownload() {
 					u.state = updAvailable
 					u.errMsg = ""
 				} else {
-					log.Printf("updater download/stage failed: %v", err)
+					log.Printf("updater download/install failed: %v", err)
 					u.state = updError
-					u.errMsg = err.Error()
+					u.errMsg = friendlyUpdateError(err)
 				}
 				u.invalidateUI()
 				a.refreshMenu()
@@ -345,10 +393,7 @@ func (a *app) startUpdateDownload() {
 				return
 			}
 
-			if old := u.staged; old != nil {
-				old.Cancel()
-			}
-			u.staged = staged
+			u.stagedVersion = candCopy.Version
 			u.state = updReady
 			u.errMsg = ""
 			u.invalidateUI()
@@ -380,26 +425,16 @@ func (a *app) cancelUpdateOp() {
 
 func (a *app) relaunchWithUpdate() {
 	u := a.upd
-	if u == nil || u.staged == nil {
+	if u == nil || u.stagedVersion == "" {
 		return
 	}
-	if err := u.staged.MarkRelaunch(); err != nil {
-		u.errMsg = err.Error()
-		u.state = updError
-		u.invalidateUI()
-		return
-	}
-	mygo.App.Quit()
+	u.activeBackend().Relaunch()
 }
 
-func (a *app) openReleaseDownload(rel *updater.Release) {
-	target := fmt.Sprintf("https://github.com/%s/releases/latest", updater.DefaultRepo)
-	if rel != nil {
-		if strings.TrimSpace(rel.DMGURL) != "" {
-			target = rel.DMGURL
-		} else if strings.TrimSpace(rel.HTMLURL) != "" {
-			target = rel.HTMLURL
-		}
+func (a *app) openReleasePage(rel *updateCandidate) {
+	target := fmt.Sprintf("https://github.com/%s/releases/latest", updateGitHubRepo)
+	if rel != nil && strings.TrimSpace(rel.Version) != "" {
+		target = fmt.Sprintf("https://github.com/%s/releases/tag/%s", updateGitHubRepo, formatVersion(rel.Version))
 	}
 	go func() { _ = mygo.Shell.OpenExternal(target) }()
 }
@@ -407,6 +442,10 @@ func (a *app) openReleaseDownload(rel *updater.Release) {
 func (a *app) openUpdateWindow() {
 	u := a.upd
 	if u == nil {
+		return
+	}
+	if u.onOpen != nil {
+		u.onOpen()
 		return
 	}
 	if u.win != nil && !u.win.IsDestroyed() {
@@ -549,12 +588,12 @@ func (a *app) paintUpdateHero(c *ui.Context, p palette, u *updateManager) {
 }
 
 func (a *app) updateHeroText(u *updateManager) (string, string) {
-	cur := updater.FormatVersion(currentAppVersion())
+	cur := formatVersion(currentAppVersion())
 	target := ""
 	if u.release != nil {
-		target = updater.FormatVersion(u.release.Version)
-	} else if u.staged != nil {
-		target = updater.FormatVersion(u.staged.Version)
+		target = formatVersion(u.release.Version)
+	} else if u.stagedVersion != "" {
+		target = formatVersion(u.stagedVersion)
 	}
 
 	switch u.state {
@@ -562,18 +601,18 @@ func (a *app) updateHeroText(u *updateManager) (string, string) {
 		return "正在检查 SnipGo 更新…", fmt.Sprintf("当前运行版本：%s", cur)
 	case updAvailable:
 		sizeStr := ""
-		if u.release != nil && u.release.AssetSize > 0 {
-			sizeStr = " · 约 " + updater.FormatBytes(u.release.AssetSize)
+		if u.release != nil && u.release.Size > 0 {
+			sizeStr = " · 约 " + formatBytes(u.release.Size)
 		}
 		return fmt.Sprintf("SnipGo %s 现已可用", target), fmt.Sprintf("当前 %s → 最新 %s%s", cur, target, sizeStr)
 	case updDownloading:
-		return fmt.Sprintf("正在下载 SnipGo %s…", target), fmt.Sprintf("当前 %s → %s · 全程 SHA-256 校验", cur, target)
+		return fmt.Sprintf("正在下载 SnipGo %s…", target), fmt.Sprintf("当前 %s → %s · Ed25519 签名与增量更新校验", cur, target)
 	case updVerifying:
-		return "正在验证更新包完整性…", "核对 SHA-256 哈希与 App Bundle 身份签名"
+		return "正在校验签名并应用更新…", "核对 Ed25519 数字签名与安装包完整性"
 	case updExtracting:
 		return "正在解包并准备原子替换…", "准备就绪后可一键平滑重启"
 	case updReady:
-		return fmt.Sprintf("SnipGo %s 已下载并验证", target), "重启后立即切换新版，保留全部快捷键与截图历史"
+		return fmt.Sprintf("SnipGo %s 已下载并验签", target), "重启后立即切换新版，保留全部快捷键与截图历史"
 	case updUpToDate:
 		return "SnipGo 已是最新版本", fmt.Sprintf("当前版本 %s（macOS 原生纯 Go 构建）", cur)
 	case updError:
@@ -617,14 +656,11 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 		})
 
 		if !u.canSelfUpdate {
-			hint := u.selfUpdateHint
-			if hint == "" {
-				hint = "当前安装位置不可直接原地替换，点击右侧按钮可在浏览器下载 DMG 安装包"
-			}
 			ui.Row(c).Padding(7, 11).Gap(6).AlignItems(ui.Center).Radius(10).
 				Background(p.BadgeInfoBg).Border(1, p.BadgeInfoBd).
 				Children(func() {
-					ui.Text(c, hint).FontSize(11).TextColor(p.BadgeInfoFg)
+					ui.Text(c, "当前安装位置不可直接原地替换（或未签名启用自动更新），点击右侧按钮可在浏览器下载安装").
+						FontSize(11).TextColor(p.BadgeInfoFg)
 				})
 		}
 
@@ -632,26 +668,26 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 		progCard := liquidCard(c, ui.Column(c).Grow(1).Padding(18, 18).Gap(12).Justify(ui.Center))
 		progCard.Children(func() {
 			var frac float32
-			stageLabel := "正在连接下载服务器…"
+			stageLabel := "正在连接更新下载通道…"
 			rightLabel := ""
 			switch u.state {
 			case updDownloading:
 				if u.total > 0 {
 					frac = max(0.03, min(1.0, float32(u.downloaded)/float32(u.total)))
 					pct := int(frac * 100)
-					stageLabel = fmt.Sprintf("已下载 %s / %s", updater.FormatBytes(u.downloaded), updater.FormatBytes(u.total))
+					stageLabel = fmt.Sprintf("已下载 %s / %s", formatBytes(u.downloaded), formatBytes(u.total))
 					rightLabel = fmt.Sprintf("%d%%", pct)
 				} else {
 					frac = 0.35
-					stageLabel = fmt.Sprintf("已下载 %s…", updater.FormatBytes(u.downloaded))
+					stageLabel = fmt.Sprintf("已下载 %s…", formatBytes(u.downloaded))
 				}
 			case updVerifying:
-				frac = 0.90
-				stageLabel = "正在校验 SHA-256 哈希摘要…"
-				rightLabel = "90%"
+				frac = 0.92
+				stageLabel = "正在验证 Ed25519 签名并准备替换 .app…"
+				rightLabel = "92%"
 			case updExtracting:
 				frac = 0.97
-				stageLabel = "正在解包并校验 App Bundle…"
+				stageLabel = "正在解包并完成替换准备…"
 				rightLabel = "97%"
 			}
 
@@ -682,7 +718,7 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 				)
 			})
 
-			ui.Text(c, "下载完成后才会在退出时原子替换 .app，不会中断当前贴图或录屏工作。").
+			ui.Text(c, "更新包通过 Ed25519 签名校验后才会在退出时原子替换 .app，不会中断当前贴图或录屏工作。").
 				FontSize(11.5).TextColor(p.TextMuted)
 		})
 
@@ -693,7 +729,7 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 				Background(p.BadgeSuccessBg).Border(1, p.BadgeSuccessBd).
 				Children(func() {
 					ui.Icon(c, iconCheck).FontSize(13.5).TextColor(p.BadgeSuccessFg)
-					ui.Text(c, "SHA-256 与应用身份核验已通过").FontSize(12).FontWeight(600).TextColor(p.BadgeSuccessFg)
+					ui.Text(c, "Ed25519 签名与安装包校验已通过").FontSize(12).FontWeight(600).TextColor(p.BadgeSuccessFg)
 				})
 			ui.Text(c, "新版 SnipGo 已准备就绪，点击下方「立即重启应用」即可完成替换并重新打开。").
 				FontSize(12.5).LineHeight(1.5).TextColor(p.Text)
@@ -707,7 +743,7 @@ func (a *app) paintUpdateBody(c *ui.Context, p palette, u *updateManager) {
 			switch u.state {
 			case updChecking:
 				ui.Icon(c, iconUpdate).FontSize(26).TextColor(p.Accent)
-				ui.Text(c, "正在向 GitHub Releases 查询最新版本…").FontSize(12.5).TextColor(p.Text)
+				ui.Text(c, "正在拉取签名更新清单…").FontSize(12.5).TextColor(p.Text)
 			case updUpToDate:
 				ui.Icon(c, iconCheck).FontSize(26).TextColor(p.BadgeSuccessFg)
 				ui.Text(c, "当前安装的 SnipGo 已是最新正式版，无需更新。").FontSize(12.5).TextColor(p.Text)
@@ -752,20 +788,20 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 			})
 			ui.Spacer(c)
 			if actionPillBtn(c, iconExternal, "发布页", "在浏览器中查看发布详情", false, true) {
-				a.openReleaseDownload(u.release)
+				a.openReleasePage(u.release)
 			}
-			if u.canSelfUpdate && u.release != nil && u.release.AssetURL != "" {
-				if actionPillBtn(c, iconUpdate, "立即更新", "下载、校验并准备重启升级", true, false) {
+			if u.canSelfUpdate && u.release != nil {
+				if actionPillBtn(c, iconUpdate, "立即更新", "下载、验签并准备重启升级", true, false) {
 					a.startUpdateDownload()
 				}
 			} else {
-				if actionPillBtn(c, iconExternal, "前往下载", "在浏览器下载最新版 DMG", true, false) {
-					a.openReleaseDownload(u.release)
+				if actionPillBtn(c, iconExternal, "前往下载", "在浏览器打开 GitHub 发布页", true, false) {
+					a.openReleasePage(u.release)
 				}
 			}
 
 		case updDownloading, updVerifying, updExtracting:
-			ui.Text(c, "更新包下载并核验完成后才会生效").FontSize(11).TextColor(p.TextMuted)
+			ui.Text(c, "更新包通过 Ed25519 验签完成后才会生效").FontSize(11).TextColor(p.TextMuted)
 			ui.Spacer(c)
 			if u.state == updDownloading {
 				if actionPillBtn(c, iconClose, "取消下载", "中止本次下载", false, true) {
@@ -784,7 +820,7 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 
 		case updUpToDate:
 			if miniPillBtn(c, iconExternal, "GitHub 发布页", false) {
-				a.openReleaseDownload(nil)
+				a.openReleasePage(nil)
 			}
 			ui.Spacer(c)
 			if actionPillBtn(c, iconCheck, "好", "关闭窗口", true, false) {
@@ -793,7 +829,7 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 
 		case updError:
 			if miniPillBtn(c, iconExternal, "手动下载", false) {
-				a.openReleaseDownload(u.release)
+				a.openReleasePage(u.release)
 			}
 			ui.Spacer(c)
 			if actionPillBtn(c, iconUpdate, "重新检查", "重试检查更新", true, false) {
@@ -808,6 +844,61 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 			}
 		}
 	})
+}
+
+func formatVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if strings.HasPrefix(v, "v") || strings.HasPrefix(v, "V") {
+		return "v" + v[1:]
+	}
+	return "v" + v
+}
+
+func formatBytes(n int64) string {
+	if n < 0 {
+		return "0 B"
+	}
+	const (
+		kb = 1024
+		mb = 1024 * kb
+	)
+	switch {
+	case n < kb:
+		return fmt.Sprintf("%d B", n)
+	case n < mb:
+		return fmt.Sprintf("%.1f KB", float64(n)/float64(kb))
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(mb))
+	}
+}
+
+func friendlyUpdateError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, mygo.ErrUpdatesDisabled) {
+		return "当前构建未启用应用内签名更新（如开发模式或无写入权限目录），请前往 GitHub Releases 手动下载安装。"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "检查或下载更新超时，请检查网络连接或系统代理设置后重试。"
+	}
+	msg := err.Error()
+	low := strings.ToLower(msg)
+	switch {
+	case strings.Contains(low, "404") || strings.Contains(low, "not found"):
+		return "最新 Release 尚未附带签名更新清单（update-*.json），可点击「手动下载」前往发布页安装。"
+	case strings.Contains(low, "403"):
+		return "预览版检索请求受限（HTTP 403）；关闭「接收测试预览版」可直接走稳定版静态通道，或稍后重试。"
+	case strings.Contains(low, "not signed") || strings.Contains(low, "signature"):
+		return "更新包 Ed25519 数字签名校验未通过，已中止更新以确保安全。"
+	case strings.Contains(low, "timeout") || strings.Contains(low, "timed out"):
+		return "网络连接超时，请检查代理或网络状况后重试。"
+	default:
+		return msg
+	}
 }
 
 type noteKind int
