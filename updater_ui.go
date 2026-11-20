@@ -19,7 +19,7 @@ import (
 var appIconPNG []byte
 
 const (
-	defaultAppVersion = "0.1.1"
+	defaultAppVersion = "0.1.2"
 	updateGitHubRepo  = "Lumiaqian/snipgo"
 	updateWinW        = 500
 	updateWinH        = 440
