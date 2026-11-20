@@ -102,7 +102,27 @@ jobs:
       - name: Build macOS bundles and DMGs (arm64, amd64, universal)
         env:
           VERSION: ${{ steps.meta.outputs.version }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          if [ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ] && [ -f CHANGELOG.md ]; then
+            python3 - "$VERSION" <<'PY'
+          import re, sys
+          ver = sys.argv[1].lstrip("v")
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          found = False
+          for line in text.splitlines():
+              if line.startswith("## "):
+                  head = line[3:].strip().split()[0].strip("[]").lstrip("v")
+                  if head == ver:
+                      found = True
+                      break
+          if not found:
+              with open("CHANGELOG.md", "w", encoding="utf-8") as f:
+                  f.write(text.rstrip() + f"\n\n## {ver}\n\n- 版本 v{ver} 自动构建发布\n")
+          PY
+          fi
+
           go tool mygo build -platform "darwin/arm64,darwin/amd64,darwin/universal"
 
           mkdir -p dist
@@ -114,7 +134,17 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "build/darwin-amd64/SnipGo.app" "dist/SnipGo-${VERSION}-amd64.app.zip"
           ditto -c -k --sequesterRsrc --keepParent "build/darwin-universal/SnipGo.app" "dist/SnipGo-${VERSION}-universal.app.zip"
 
-          (cd dist && shasum -a 256 SnipGo-* > SHA256SUMS.txt)
+          shopt -s nullglob
+          for f in build/darwin-*/update-darwin-*.json build/darwin-*/snipgo-*-darwin-*.tar.gz build/darwin-*/snipgo-*-to-*-darwin-*.delta; do
+            cp "$f" dist/
+          done
+          if [ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]; then
+            for arch in arm64 amd64 universal; do
+              test -f "dist/update-darwin-${arch}.json"
+            done
+          fi
+
+          (cd dist && shasum -a 256 SnipGo-* snipgo-* update-*.json > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
 
       - name: Upload build artifacts
