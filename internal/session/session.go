@@ -160,6 +160,80 @@ type Session struct {
 	cursorY        float64
 	hasCursor      bool
 	status         string
+
+	// pending 是当前后台采集对应的恢复快照；仅在采集失败时转为 aborted。
+	pending *abortedSelection
+	// aborted 是最近一次实时采集失败后保留的选区与标注，可经 RestoreAborted 找回。
+	aborted *abortedSelection
+}
+
+// abortedSelection 保存实时/单窗采集失败前的选区状态，避免失败时丢掉用户已画的标注。
+type abortedSelection struct {
+	gen            int
+	act            ConfirmAction
+	sel            image.Rectangle
+	lockedWinRect  image.Rectangle
+	lockedWinID    uint32
+	windowOnly     bool
+	beautify       bool
+	beautifyPreset beautify.Preset
+	beautifyChrome bool
+	colorFmt       beautify.ColorFormat
+	preferFront    bool
+	autoOCR        bool
+	items          []annotate.Item
+}
+
+// HasAborted 返回是否存在采集失败后可恢复的选区。
+func (s *Session) HasAborted() bool { return s.aborted != nil }
+
+// AbortedItemCount 返回可恢复选区里的标注数量。
+func (s *Session) AbortedItemCount() int {
+	if s.aborted == nil {
+		return 0
+	}
+	return len(s.aborted.items)
+}
+
+// DiscardAborted 放弃可恢复的选区。
+func (s *Session) DiscardAborted() { s.aborted = nil }
+
+// RestoreAborted 重新进入实时选区并带回失败前的选区、标注与选项；无可恢复内容或无法恢复时返回 false。
+func (s *Session) RestoreAborted() bool {
+	ab := s.aborted
+	if ab == nil || s.phase == PhaseCapturing || s.Live == nil {
+		return false
+	}
+	snap, err := s.Live()
+	if err != nil || len(snap.Frames) == 0 {
+		return false
+	}
+	sel := ab.sel.Canon().Intersect(screensUnion(snap.Frames))
+	if sel.Empty() {
+		return false
+	}
+	if s.phase == PhaseSelecting || s.phase == PhaseAdjusting {
+		s.clearSelection()
+	}
+	s.gen++
+	s.aborted = nil
+	s.live = true
+	s.autoOCR = ab.autoOCR
+	s.preferFront = ab.preferFront
+	s.enterSelecting(snap)
+	s.sel = sel
+	if ab.lockedWinID != 0 && sel == ab.lockedWinRect {
+		s.lockedWinRect = ab.lockedWinRect
+		s.lockedWinID = ab.lockedWinID
+	}
+	s.windowOnly = ab.windowOnly
+	s.beautify = ab.beautify
+	s.beautifyPreset = ab.beautifyPreset
+	s.beautifyChrome = ab.beautifyChrome
+	s.colorFmt = ab.colorFmt
+	s.Annotations().SetItems(ab.items)
+	s.phase = PhaseAdjusting
+	return true
 }
 
 // Annotations 返回当前选区的矢量标注画布（惰性初始化）。
@@ -1029,9 +1103,27 @@ func (s *Session) confirm(act ConfirmAction) {
 		return
 	}
 	// 实时模式或独立单窗模式：先立刻关掉透明选区蒙层，再后台采集像素。
+	// 采集失败时要能找回选区与标注，所以先在清空前存好快照。
+	// 选区取 confirm 解析出的 r（悬停窗口直接确认时 s.sel 为空），窗口 ID 一并带上。
+	stash := &abortedSelection{
+		act:            act,
+		sel:            r,
+		lockedWinRect:  r,
+		lockedWinID:    winID,
+		windowOnly:     s.windowOnly,
+		beautify:       s.beautify,
+		beautifyPreset: s.beautifyPreset,
+		beautifyChrome: s.beautifyChrome,
+		colorFmt:       s.colorFmt,
+		preferFront:    s.preferFront,
+		autoOCR:        s.autoOCR,
+		items:          s.Annotations().Items(),
+	}
 	s.clearSelection()
 	s.gen++
 	gen := s.gen
+	stash.gen = gen
+	s.pending = stash
 	s.phase = PhaseCapturing
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1096,14 +1188,21 @@ func (s *Session) DeliverRect(gen int, act ConfirmAction, r image.Rectangle, img
 		return
 	}
 	s.phase = PhaseIdle
-	if err != nil {
-		s.fail(err.Error())
+	pending := s.pending
+	s.pending = nil
+	if err != nil || img == nil || img.Bounds().Empty() {
+		// 采集失败：保留选区与标注供用户恢复，再向 UI 报错。
+		if pending != nil && pending.gen == gen {
+			s.aborted = pending
+		}
+		if err != nil {
+			s.fail(err.Error())
+		} else {
+			s.fail("没有截到图像")
+		}
 		return
 	}
-	if img == nil || img.Bounds().Empty() {
-		s.fail("没有截到图像")
-		return
-	}
+	s.aborted = nil
 	if act == ActionOCR {
 		s.status = ""
 		s.UI.SetStatus("")
