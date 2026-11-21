@@ -159,17 +159,6 @@ func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled 
 	return btn.Clicked()
 }
 
-func iconSquareBtn(c *ui.Context, ic *ui.SVG, tip string, active, disabled bool) bool {
-	lbl := tip
-	for i, r := range tip {
-		if r == ' ' || r == '(' {
-			lbl = tip[:i]
-			break
-		}
-	}
-	return iconToolBtn(c, ic, lbl, tip, active, disabled)
-}
-
 func pillButton(c *ui.Context, ic *ui.SVG, label, tip string, h, padX, iconSize, fontSize float32, primary, subtleBg bool) bool {
 	p := uiPalette(c)
 	rad := h * 0.5

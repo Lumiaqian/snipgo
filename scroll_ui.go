@@ -225,15 +225,23 @@ func (a *app) finishScrollCapture(mode string) {
 				_ = mygo.Clipboard.WriteImage(pngBytes)
 				a.sessionStatus(fmt.Sprintf("长截图已复制（%d×%d px）", res.Bounds().Dx(), res.Bounds().Dy()))
 			case "pin":
-				scale := max(1.0, float64(res.Bounds().Dx())/float64(max(1, sel.Dx())))
-				dipW := max(80, int(float64(res.Bounds().Dx())/scale))
-				dipH := max(80, min(680, int(float64(res.Bounds().Dy())/scale)))
-				a.ShowPin(res, pngBytes, sel.Min, dipW, dipH)
+				dipW, dipH, zoom := longPinGeometry(res.Bounds().Dx(), res.Bounds().Dy(), sel.Dx())
+				a.showPinWithState(res, pngBytes, sel.Min, dipW, dipH, zoom, 100, false)
 			case "save":
 				a.SavePNG(pngBytes)
 			}
 		})
 	}()
+}
+
+// longPinGeometry 返回长截图贴图的自然 DIP 尺寸与初始缩放：
+// 保持原始宽高比（编辑坐标与图像一致），用 zoom 让高度不超过 680。
+func longPinGeometry(pxW, pxH, selDIPW int) (dipW, dipH int, zoom float64) {
+	scale := max(1.0, float64(pxW)/float64(max(1, selDIPW)))
+	dipW = max(80, int(float64(pxW)/scale))
+	dipH = max(80, int(float64(pxH)/scale))
+	zoom = min(1.0, 680.0/float64(dipH))
+	return
 }
 
 func (a *app) stopScrollCapture() {

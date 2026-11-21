@@ -2,10 +2,12 @@ package store
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +57,70 @@ func TestHistoryStoreRingEvictionAndReload(t *testing.T) {
 	img, raw, err := Load(list[0])
 	if err != nil || len(raw) == 0 || img.Bounds().Dx() != 50 {
 		t.Fatalf("Load failed: img=%v len=%d err=%v", img, len(raw), err)
+	}
+}
+
+func TestHistoryStoreReopenNoIDCollision(t *testing.T) {
+	tmp := t.TempDir()
+	s1, err := Open(tmp, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1, err := s1.Add([]byte("first"), 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟重启：seq 归零，同一秒内再次写入
+	s2, err := Open(tmp, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, err := s2.Add([]byte("second"), 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e1.ID == e2.ID || e1.FilePath == e2.FilePath {
+		t.Fatalf("冲突: %q vs %q", e1.ID, e2.ID)
+	}
+	if got, _ := os.ReadFile(e1.FilePath); string(got) != "first" {
+		t.Fatalf("第一张被覆盖: %q", got)
+	}
+	if got, _ := os.ReadFile(e2.FilePath); string(got) != "second" {
+		t.Fatalf("第二张内容错误: %q", got)
+	}
+	if n := s2.Count(); n != 2 {
+		t.Fatalf("Count = %d, want 2", n)
+	}
+	if !s2.Delete(e2.ID) {
+		t.Fatal("Delete 失败")
+	}
+	if got, err := os.ReadFile(e1.FilePath); err != nil || string(got) != "first" {
+		t.Fatalf("删除第二张后第一张应保留: %v %q", err, got)
+	}
+	if !strings.HasPrefix(e1.FileName, "SnipGo-") || !strings.HasSuffix(e1.FileName, ".png") {
+		t.Fatalf("文件名格式: %s", e1.FileName)
+	}
+}
+
+func TestHistoryStoreLoadIndexDropsDuplicateIDs(t *testing.T) {
+	tmp := t.TempDir()
+	s1, err := Open(tmp, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := s1.Add([]byte("x"), 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal([]Entry{e, e})
+	if err := os.WriteFile(s1.indexPath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(tmp, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := s2.Count(); n != 1 {
+		t.Fatalf("Count = %d, want 1", n)
 	}
 }

@@ -379,8 +379,7 @@ func GrabWindow(ctx context.Context, winID uint32, scale float64) (*image.NRGBA,
 	}
 	ch := make(chan objcResult, 1)
 	done := make(chan struct{})
-	var block objc.Block
-	block = objc.NewBlock(func(_ objc.Block, cg unsafe.Pointer, nsErr objc.ID) {
+	block := objc.NewBlock(func(_ objc.Block, cg unsafe.Pointer, nsErr objc.ID) {
 		defer close(done)
 		defer releaseCfg()
 		ch <- shotResult(cg, nsErr)
@@ -396,8 +395,7 @@ func GrabWindow(ctx context.Context, winID uint32, scale float64) (*image.NRGBA,
 func shareableContent(ctx context.Context) (objc.ID, error) {
 	ch := make(chan objcResult, 1)
 	done := make(chan struct{})
-	var block objc.Block
-	block = objc.NewBlock(func(_ objc.Block, content objc.ID, nsErr objc.ID) {
+	block := objc.NewBlock(func(_ objc.Block, content objc.ID, nsErr objc.ID) {
 		defer close(done)
 		if nsErr != 0 {
 			if objc.Send[int](nsErr, selCode) == -3801 {
@@ -475,8 +473,7 @@ func captureDisplay(ctx context.Context, display, excluded objc.ID, srcRect *cgR
 
 	ch := make(chan objcResult, 1)
 	done := make(chan struct{})
-	var block objc.Block
-	block = objc.NewBlock(func(_ objc.Block, cg unsafe.Pointer, nsErr objc.ID) {
+	block := objc.NewBlock(func(_ objc.Block, cg unsafe.Pointer, nsErr objc.ID) {
 		defer close(done)
 		defer releaseCfg()
 		ch <- shotResult(cg, nsErr)

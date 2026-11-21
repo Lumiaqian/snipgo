@@ -740,11 +740,6 @@ func panelHairline(c *ui.Context) {
 	ui.Box(c).Height(1).Background(uiPalette(c).Divider)
 }
 
-// panelVHairline 绘制纵向 1px 自适应细分隔线。
-func panelVHairline(c *ui.Context) {
-	ui.Box(c).Width(1).Background(uiPalette(c).Divider)
-}
-
 // macTrafficCloseBtn 绘制 macOS 原生风格左上角红色关闭圆钮（常显清晰 × 符号，带弹簧缩放与高光）。
 func macTrafficCloseBtn(c *ui.Context, label, tip string) bool {
 	btn := ui.Box(c).
