@@ -11,6 +11,7 @@
 [![Zero CGO](https://img.shields.io/badge/Pure%20Go-CGO__ENABLED%3D0-10B981?style=flat-square)](#项目架构)
 [![CI](https://img.shields.io/github/actions/workflow/status/Lumiaqian/snipgo/ci.yml?branch=main&style=flat-square&label=CI)](.github/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Lumiaqian/snipgo?style=flat-square&label=Release)](https://github.com/Lumiaqian/snipgo/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
 0ms 透明取景 · 10 种矢量标注 · 套模板工作台 · 离线 AI 抠图与表格识图 · 滚动长截图 · 拉帘对比贴图
 
@@ -176,3 +177,9 @@ go tool mygo build -skip-dmg
 ### GitHub Actions 流水线
 - **持续集成（`.github/workflows/ci.yml`）**：推送 `main`、发起 PR 或手动触发时自动运行完整测试、`mygo vet`、跨平台检查并打包 `arm64` / `amd64` / `universal` 构建产物。
 - **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg`（`AppleSilicon-arm64` / `Intel-amd64` / `Universal`），并在配置 `MYGO_UPDATER_PRIVATE_KEY` 机密时一并生成带 Ed25519 签名的 `update-darwin-*.json`、`.tar.gz`、`.delta` 增量更新与 `SHA256SUMS.txt` 发布 Release。未配置证书机密时自动使用 ad-hoc 签名；配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（及公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`）即可全自动完成正式签名与 Apple 公证。
+
+---
+
+## 📄 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。
