@@ -128,7 +128,12 @@ func (a *app) ready() {
 	if pDir, err := mygo.App.Path(mygo.PathPictures); err == nil {
 		a.picturesDir = pDir
 	}
-	a.cfg = config.Load(a.userDataDir, a.picturesDir)
+	cfg, cfgErr := config.LoadChecked(a.userDataDir, a.picturesDir)
+	a.cfg = cfg
+	if cfgErr != nil {
+		log.Printf("load settings: %v", cfgErr)
+		a.extraStatus = "设置文件损坏，已备份并恢复默认"
+	}
 	a.cfg.OpenAtLogin = mygo.App.OpenAtLogin()
 	a.applyThemeLive(a.cfg)
 	mygo.Theme.OnUpdated(func() {

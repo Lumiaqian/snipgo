@@ -29,6 +29,7 @@ type settingsWindow struct {
 	tab           int
 	saved         string
 	badge         badgeState
+	saveFailed    bool // 最近一次写入 settings.json 失败
 	enter         panelEnterState
 	recordingID   string
 	recordingMods ui.Modifiers
@@ -160,7 +161,14 @@ func (a *app) applyAndSaveSettings(next config.Settings) {
 	a.cfg = next
 	a.applyThemeLive(a.cfg)
 	if a.userDataDir != "" {
-		_ = config.Save(a.userDataDir, a.cfg)
+		saveErr := config.Save(a.userDataDir, a.cfg)
+		if saveErr != nil {
+			log.Printf("save settings: %v", saveErr)
+		}
+		// 记录保存结果，setSavedBadge 据此把随后的“✓ 已保存”改为失败提示。
+		if a.setWin != nil {
+			a.setWin.saveFailed = saveErr != nil
+		}
 	}
 	a.registerAllShortcuts()
 	a.refreshMenu()
@@ -169,7 +177,16 @@ func (a *app) applyAndSaveSettings(next config.Settings) {
 	}
 }
 
+// savedBadgeText 在最近一次保存失败时，把“✓ …”成功文案换成失败提示，避免误导用户。
+func savedBadgeText(msg string, saveFailed bool) string {
+	if saveFailed && strings.HasPrefix(msg, "✓") {
+		return "⚠ 设置保存失败"
+	}
+	return msg
+}
+
 func (sw *settingsWindow) setSavedBadge(msg string) {
+	msg = savedBadgeText(msg, sw.saveFailed)
 	var fallback *string
 	if sw.win == nil {
 		fallback = &sw.saved

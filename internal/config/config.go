@@ -3,9 +3,12 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Settings 是用户可配置的全部偏好项。
@@ -108,18 +111,42 @@ func (s *Settings) Normalize(defaultPicturesDir string) {
 }
 
 // Load 从 baseDir/settings.json 读取配置；文件不存在或损坏时返回默认配置。
+// 需要感知损坏/读取错误时使用 LoadChecked。
 func Load(baseDir, defaultPicturesDir string) Settings {
+	cfg, _ := LoadChecked(baseDir, defaultPicturesDir)
+	return cfg
+}
+
+// LoadChecked 与 Load 相同，但会返回问题说明：
+//   - 文件不存在：返回默认配置与 nil；
+//   - 文件无法解析：先把原文件改名为 settings.json.bad-<时间戳> 以免下次保存时被覆盖，返回默认配置与非 nil error；
+//   - 其他读取失败：返回默认配置与非 nil error（不动原文件）。
+func LoadChecked(baseDir, defaultPicturesDir string) (Settings, error) {
 	cfg := Default(defaultPicturesDir)
 	if baseDir == "" {
-		return cfg
+		return cfg, nil
 	}
-	data, err := os.ReadFile(filepath.Join(baseDir, "settings.json"))
+	path := filepath.Join(baseDir, "settings.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return cfg
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
+		return cfg, fmt.Errorf("读取设置失败: %w", err)
 	}
-	_ = json.Unmarshal(data, &cfg)
-	cfg.Normalize(defaultPicturesDir)
-	return cfg
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return cfg, nil
+	}
+	loaded := cfg
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		bad := fmt.Sprintf("%s.bad-%s", path, time.Now().Format("20060102-150405"))
+		if rerr := os.Rename(path, bad); rerr != nil {
+			return cfg, fmt.Errorf("设置文件损坏且备份失败: %v (%w)", rerr, err)
+		}
+		return cfg, fmt.Errorf("设置文件损坏，已备份到 %s: %w", filepath.Base(bad), err)
+	}
+	loaded.Normalize(defaultPicturesDir)
+	return loaded, nil
 }
 
 // Save 原子写入配置到 baseDir/settings.json。

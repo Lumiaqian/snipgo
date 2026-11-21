@@ -798,7 +798,9 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 					if u.release != nil {
 						a.cfg.SkippedVersion = u.release.Version
 						if a.userDataDir != "" {
-							_ = config.Save(a.userDataDir, a.cfg)
+							if err := config.Save(a.userDataDir, a.cfg); err != nil {
+								log.Printf("save settings: %v", err)
+							}
 						}
 						u.release = nil
 						u.state = updIdle
