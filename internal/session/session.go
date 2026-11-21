@@ -608,8 +608,10 @@ func (s *Session) enterSelecting(snap Snapshot) {
 	union := screensUnion(snap.Frames)
 	for _, wi := range snap.WindowInfos {
 		b := wi.Bounds.Canon()
-		if !union.Empty() {
-			b = b.Intersect(union)
+		// 仅登记完全位于显示器并集内的窗口：部分在屏外的窗口整窗采集会与裁剪后的选区错位，
+		// 此时退化为普通区域截图（CanWindowOnly 为 false）。
+		if !union.Empty() && b.Intersect(union) != b {
+			continue
 		}
 		if !b.Empty() && wi.ID != 0 {
 			if _, exists := s.winIDByRect[b]; !exists {
@@ -641,10 +643,11 @@ func (s *Session) enterSelecting(snap Snapshot) {
 	s.UI.SetStatus("")
 
 	front := snap.FrontWindow.Canon()
+	frontInside := union.Empty() || front.Intersect(union) == front
 	if !union.Empty() && !front.Empty() {
 		front = front.Intersect(union)
 	}
-	if !front.Empty() && snap.FrontWinID != 0 {
+	if !front.Empty() && snap.FrontWinID != 0 && frontInside {
 		if _, exists := s.winIDByRect[front]; !exists {
 			s.winIDByRect[front] = snap.FrontWinID
 		}
