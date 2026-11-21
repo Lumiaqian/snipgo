@@ -113,6 +113,9 @@ type Session struct {
 	Live func() (Snapshot, error)
 	// CaptureRect 在实时透明蒙层确认后只采集选区矩形对应的屏幕像素。
 	CaptureRect func(ctx context.Context, sel image.Rectangle) (*image.NRGBA, error)
+	// PreviewFrame 返回蒙层打码/擦除/放大镜预览所用的像素快照（仅当其矩形恰为 sel 时返回）。
+	// 确认时若标注依赖该快照，直接用它渲染最终图，保证「所见即所得」，不再重新采集（内容可能已变化）。
+	PreviewFrame func(sel image.Rectangle) (*image.NRGBA, bool)
 	// CaptureWindow 使用 desktopIndependentWindow 单独采集指定窗口本体（无背景壁纸与其他窗口干扰）。
 	CaptureWindow func(ctx context.Context, winID uint32, scale float64) (*image.NRGBA, error)
 	// Capture 在冻结模式下预先采集所有显示器的完整像素。
@@ -246,6 +249,9 @@ func (s *Session) Annotations() *annotate.Canvas {
 
 // Phase 返回当前阶段。
 func (s *Session) Phase() Phase { return s.phase }
+
+// Gen 返回会话代数；每次开始/取消/确认都会递增，异步结果用它判断是否过期。
+func (s *Session) Gen() int { return s.gen }
 
 // IsLive 报告当前是否为实时透明蒙层模式（未预截全屏）。
 func (s *Session) IsLive() bool { return s.live }
@@ -1119,6 +1125,15 @@ func (s *Session) confirm(act ConfirmAction) {
 		autoOCR:        s.autoOCR,
 		items:          s.Annotations().Items(),
 	}
+	// 标注依赖预览快照（打码/擦除/放大镜）时，用同一份像素渲染，避免重新采集后内容已变导致漏打码。
+	var preview *image.NRGBA
+	if !useWinOnly && s.PreviewFrame != nil && itemsNeedPreview(items) {
+		if p, ok := s.PreviewFrame(r); ok && p != nil && !p.Bounds().Empty() {
+			if w, h := crop.PixelSize(s.frames, r); w > 0 && h > 0 && p.Bounds().Dx() == w && p.Bounds().Dy() == h {
+				preview = cloneNRGBA(p)
+			}
+		}
+	}
 	s.clearSelection()
 	s.gen++
 	gen := s.gen
@@ -1136,6 +1151,8 @@ func (s *Session) confirm(act ConfirmAction) {
 				// 窗口刚刚关闭或重绘时自动回退矩形采集。
 				img, err = s.CaptureRect(ctx, r)
 			}
+		} else if preview != nil {
+			img = preview
 		} else {
 			img, err = s.CaptureRect(ctx, r)
 		}
@@ -1148,6 +1165,27 @@ func (s *Session) confirm(act ConfirmAction) {
 		}
 		s.OnMain(func() { s.DeliverRect(gen, act, outR, img, err) })
 	}()
+}
+
+// itemsNeedPreview 判断标注是否依赖底图像素（打码、擦除、放大镜）。
+func itemsNeedPreview(items []annotate.Item) bool {
+	for _, it := range items {
+		switch it.Tool {
+		case annotate.ToolMosaic, annotate.ToolErase, annotate.ToolLoupe:
+			return true
+		}
+	}
+	return false
+}
+
+// cloneNRGBA 深拷贝图像，保证渲染不污染预览快照。
+func cloneNRGBA(src *image.NRGBA) *image.NRGBA {
+	b := src.Bounds()
+	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		copy(dst.Pix[y*dst.Stride:y*dst.Stride+b.Dx()*4], src.Pix[(y+b.Min.Y-src.Rect.Min.Y)*src.Stride+(b.Min.X-src.Rect.Min.X)*4:])
+	}
+	return dst
 }
 
 func postProcessImage(img *image.NRGBA, r image.Rectangle, scale float64, items []annotate.Item, useBeautify bool, preset beautify.Preset, useChrome bool) (*image.NRGBA, image.Rectangle) {

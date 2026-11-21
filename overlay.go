@@ -1665,29 +1665,50 @@ func (a *app) autoRedactSelection() {
 	if !ok || !locked || sel.Empty() {
 		return
 	}
+	gen := a.session.Gen()
 	if frozenImg, frozenSel, ok := a.session.CropFrozenSelection(); ok {
 		a.redacting = true
-		go a.runVisionAutoRedact(frozenImg, frozenSel)
+		go a.runVisionAutoRedact(frozenImg, frozenSel, gen)
 		return
 	}
 	a.redacting = true
 	a.invalidateAll()
+	// 已有与选区一致的预览快照：直接复用，识别、预览与最终输出用同一份像素。
+	if a.previewSnapImg != nil && a.previewSnapRect == sel.Canon() {
+		go a.runVisionAutoRedact(a.previewSnapImg, sel, gen)
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 		defer cancel()
 		img, err := a.captureRect(ctx, sel)
-		if err != nil || img == nil || img.Bounds().Empty() {
-			mygo.RunOnMain(func() {
+		mygo.RunOnMain(func() {
+			if err != nil || img == nil || img.Bounds().Empty() || !a.redactionStillValid(gen, sel) {
 				a.redacting = false
 				a.invalidateAll()
-			})
-			return
-		}
-		a.runVisionAutoRedact(img, sel)
+				return
+			}
+			// 把这一帧装为预览快照：打码预览与最终输出（确认时直接用它）都基于识别所用像素。
+			a.previewSnapGen++ // 作废仍在途的旧快照采集，避免其覆盖本帧
+			a.previewSnapPending = image.Rectangle{}
+			a.previewSnapRect = sel.Canon()
+			a.previewSnapImg = img
+			a.previewSnapBmp = ui.NewBitmap(img)
+			go a.runVisionAutoRedact(img, sel, gen)
+		})
 	}()
 }
 
-func (a *app) runVisionAutoRedact(img *image.NRGBA, sel image.Rectangle) {
+// redactionStillValid 判断自动脱敏的会话仍是发起时的那一轮，且选区未变。
+func (a *app) redactionStillValid(gen int, sel image.Rectangle) bool {
+	if a.session == nil || a.session.Gen() != gen || a.session.Phase() != session.PhaseAdjusting {
+		return false
+	}
+	cur, locked, ok := a.session.ActiveRect()
+	return ok && locked && cur.Canon() == sel.Canon()
+}
+
+func (a *app) runVisionAutoRedact(img *image.NRGBA, sel image.Rectangle, gen int) {
 	res, err := vision.Recognize(img)
 	var boxes []annotate.RectF
 	if err == nil {
@@ -1700,14 +1721,17 @@ func (a *app) runVisionAutoRedact(img *image.NRGBA, sel image.Rectangle) {
 			})
 		}
 	}
-	mygo.RunOnMain(func() {
-		a.redacting = false
-		if a.session != nil && a.session.Phase() == session.PhaseAdjusting && len(boxes) > 0 {
-			n := a.session.Annotations().AddRedactions(boxes, true)
-			a.sessionStatus(fmt.Sprintf("已自动脱敏 %d 处敏感信息", n))
-		}
-		a.invalidateAll()
-	})
+	mygo.RunOnMain(func() { a.applyRedactionResult(gen, boxes) })
+}
+
+// applyRedactionResult 在主线程应用自动脱敏结果；会话已换代或不在调整阶段时丢弃，但始终复位 redacting。
+func (a *app) applyRedactionResult(gen int, boxes []annotate.RectF) {
+	a.redacting = false
+	if a.session != nil && a.session.Gen() == gen && a.session.Phase() == session.PhaseAdjusting && len(boxes) > 0 {
+		n := a.session.Annotations().AddRedactions(boxes, true)
+		a.sessionStatus(fmt.Sprintf("已自动脱敏 %d 处敏感信息", n))
+	}
+	a.invalidateAll()
 }
 
 func (a *app) ownsPoint(o *overlay, pt image.Point) bool {
