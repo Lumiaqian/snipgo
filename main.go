@@ -342,7 +342,9 @@ func initLogFile() {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "SnipGo.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logPath := filepath.Join(dir, "SnipGo.log")
+	rotateLogIfLarge(logPath, maxLogBytes)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return
 	}
@@ -362,7 +364,13 @@ func (a *app) deferUI(fn func()) {
 
 func (a *app) trackPerm(err error) {
 	if err != nil {
-		log.Printf("capture error: %v", err)
+		// 长截图每 160ms 重试一次，相同错误限流，避免日志刷屏。
+		if ok, suppressed := captureErrLog.Allow(err.Error()); ok {
+			if suppressed > 0 {
+				log.Printf("capture error: (上一条相同错误已重复 %d 次)", suppressed)
+			}
+			log.Printf("capture error: %v", err)
+		}
 		if errors.Is(err, capture.ErrPermissionDenied) {
 			go a.promptPermission()
 		}
