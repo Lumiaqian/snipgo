@@ -34,6 +34,10 @@ const (
 	collapsedPillW  = 176
 	collapsedPillH  = 32
 	maxClosedPinCap = 10
+	// 已关闭贴图只保留 PNG 字节，总量超过上限时从最旧的开始淘汰。
+	maxClosedPinBytes = 200 << 20
+	// 贴图位图显示后释放 CPU 像素前的等待，确保首帧已绘制。
+	pinReleasePixelsDelay = 400 * time.Millisecond
 )
 
 type pinWin struct {
@@ -72,8 +76,8 @@ type pinWin struct {
 	hasHover       bool
 }
 
+// closedPinRecord 只保存 PNG 与几何信息；恢复时再解码，避免长期占用整张 NRGBA。
 type closedPinRecord struct {
-	img     *image.NRGBA
 	png     []byte
 	at      image.Point
 	origW   int
@@ -148,7 +152,6 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 		// 编辑中直接关闭时，可恢复记录也要带上未完成的标注
 		pngBytes := p.exportPNG()
 		a.pushClosedPin(closedPinRecord{
-			img:     p.img,
 			png:     pngBytes,
 			at:      image.Pt(b.X, b.Y),
 			origW:   p.origW,
@@ -169,8 +172,29 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 	})
 	a.pins = append(a.pins, p)
 	p.win.ShowInactive()
+	releaseBitmapPixelsLater(p.win, baseBmp)
 	p.refreshShadowSoon()
 	a.refreshMenu()
+}
+
+// releaseBitmapPixelsLater 在位图首帧显示后释放其 CPU 像素副本（主线程执行）。
+// 贴图仍持有 img/baseImg，mygo 需要时会从源图重新生成，所以显示与编辑不受影响。
+func releaseBitmapPixelsLater(win *mygo.Window, bmps ...*ui.Bitmap) {
+	if win == nil || !mygo.App.IsReady() {
+		return
+	}
+	time.AfterFunc(pinReleasePixelsDelay, func() {
+		mygo.RunOnMain(func() {
+			if win.IsDestroyed() {
+				return
+			}
+			for _, b := range bmps {
+				if b != nil {
+					b.ReleasePixels()
+				}
+			}
+		})
+	})
 }
 
 func (p *pinWin) refreshShadowSoon() {
@@ -896,23 +920,48 @@ func (a *app) openPinTemplate(p *pinWin) {
 }
 
 func (a *app) pushClosedPin(rec closedPinRecord) {
-	if rec.img == nil {
+	if len(rec.png) == 0 {
 		return
 	}
-	if len(a.closedPins) >= maxClosedPinCap {
+	a.closedPins = append(a.closedPins, rec)
+	total := 0
+	for _, r := range a.closedPins {
+		total += len(r.png)
+	}
+	// 先按条数、再按总字节数淘汰最旧记录（至少保留刚关闭的这一张）。
+	for len(a.closedPins) > 1 && (len(a.closedPins) > maxClosedPinCap || total > maxClosedPinBytes) {
+		total -= len(a.closedPins[0].png)
+		a.closedPins[0] = closedPinRecord{}
 		a.closedPins = a.closedPins[1:]
 	}
-	a.closedPins = append(a.closedPins, rec)
 }
 
-// RestoreLastPin 恢复最近一次关闭的贴图窗口（支持连续恢复多张）。
+// decodeClosedPin 把记录里的 PNG 解码回可显示的 NRGBA。
+func decodeClosedPin(rec closedPinRecord) (*image.NRGBA, error) {
+	img, err := decodeImageLimited(rec.png)
+	if err != nil {
+		return nil, err
+	}
+	return toNRGBA(img), nil
+}
+
+// RestoreLastPin 恢复最近一次关闭的贴图窗口（支持连续恢复多张）。解码在后台完成，窗口在主线程创建。
 func (a *app) RestoreLastPin() {
 	if len(a.closedPins) == 0 {
 		return
 	}
 	last := a.closedPins[len(a.closedPins)-1]
+	a.closedPins[len(a.closedPins)-1] = closedPinRecord{}
 	a.closedPins = a.closedPins[:len(a.closedPins)-1]
-	a.showPinWithState(last.img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout)
+	go func() {
+		img, err := decodeClosedPin(last)
+		if err != nil {
+			return
+		}
+		mygo.RunOnMain(func() {
+			a.showPinWithState(img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout)
+		})
+	}()
 }
 
 func (p *pinWin) applyZoom(targetZoom, anchorX, anchorY float64) {
