@@ -53,3 +53,25 @@ func TestPalettePinStaysOnNegativeOriginDisplay(t *testing.T) {
 		t.Fatalf("边缘光标下 at=%v 越出显示器 %v", ui.at, b)
 	}
 }
+
+// applyOutput 回调 OnOutput 时必须带上选区所在显示器的缩放，历史贴图才能还原真实 DIP 尺寸。
+func TestApplyOutputReportsDisplayScale(t *testing.T) {
+	s := &Session{
+		UI: &fakeUI{},
+		frames: []crop.Screen{
+			{Bounds: image.Rect(0, 0, 100, 100), Scale: 1},
+			{Bounds: image.Rect(100, 0, 200, 100), Scale: 3},
+		},
+	}
+	var got float64
+	s.OnOutput = func(_ []byte, _, _ int, scale float64) { got = scale }
+	img := image.NewNRGBA(image.Rect(0, 0, 10, 10))
+	s.applyOutput(ActionSave, image.Rect(10, 10, 20, 20), img, []byte("p"))
+	if got != 1 {
+		t.Fatalf("1x 显示器 scale = %v, want 1", got)
+	}
+	s.applyOutput(ActionSave, image.Rect(110, 10, 120, 20), img, []byte("p"))
+	if got != 3 {
+		t.Fatalf("3x 显示器 scale = %v, want 3", got)
+	}
+}

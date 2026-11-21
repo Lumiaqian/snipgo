@@ -132,8 +132,8 @@ type Session struct {
 	Capture func(context.Context) (Snapshot, error)
 	Clip    Clipboard
 	UI      UI
-	// OnOutput 在每次成功生成截图 PNG（复制 / 贴图 / 保存）时回调，供本地历史记录归档。
-	OnOutput func(png []byte, pxW, pxH int)
+	// OnOutput 在每次成功生成截图 PNG（复制 / 贴图 / 保存）时回调，供本地历史记录归档；scale 为输出的像素/DIP 比例（0 表示未知）。
+	OnOutput func(png []byte, pxW, pxH int, scale float64)
 	// OnCutout 在触发选区主体抠图（K）并采集完像素后回调，交由 Vision 离线去背景并生成异形贴纸。
 	OnCutout func(img *image.NRGBA, r image.Rectangle)
 	// OnTemplate 在触发套模板（B）并采集/合成完选区标注后回调，打开所见即所得「套模板工作台」。
@@ -431,7 +431,7 @@ func (s *Session) PinPickedPalette() bool {
 		_ = s.Clip.WritePNG(buf.Bytes())
 	}
 	if s.OnOutput != nil {
-		s.OnOutput(buf.Bytes(), card.Bounds().Dx(), card.Bounds().Dy())
+		s.OnOutput(buf.Bytes(), card.Bounds().Dx(), card.Bounds().Dy(), scale)
 	}
 	s.UI.ShowPin(card, buf.Bytes(), at, dipW, dipH)
 	return true
@@ -1405,7 +1405,7 @@ func (s *Session) CropFrozenSelection() (*image.NRGBA, image.Rectangle, bool) {
 
 func (s *Session) applyOutput(act ConfirmAction, r image.Rectangle, img *image.NRGBA, pngBytes []byte) {
 	if len(pngBytes) > 0 && img != nil && s.OnOutput != nil && act != ActionOCR {
-		s.OnOutput(pngBytes, img.Bounds().Dx(), img.Bounds().Dy())
+		s.OnOutput(pngBytes, img.Bounds().Dx(), img.Bounds().Dy(), s.scaleForRect(r))
 	}
 	switch act {
 	case ActionCopy:

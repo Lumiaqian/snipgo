@@ -1181,7 +1181,7 @@ func (a *app) cutoutSelection(img *image.NRGBA, r image.Rectangle) {
 		at := image.Pt(r.Min.X+(r.Dx()-dipW)/2, r.Min.Y+(r.Dy()-dipH)/2)
 		mygo.RunOnMain(func() {
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
+			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy(), scale)
 			a.sessionStatus("主体抠图已复制并贴为透明贴纸")
 			a.showPinWithState(cut, data, at, dipW, dipH, 1.0, 100, true)
 		})
@@ -1241,7 +1241,7 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 			p.win.Invalidate()
 			p.refreshShadowSoon()
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
+			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy(), scale)
 			a.sessionStatus("贴图已抠出透明主体并复制")
 		})
 	}()
@@ -1471,7 +1471,7 @@ func (a *app) copyCompareComposite(p *pinWin) {
 		w, h := out.Bounds().Dx(), out.Bounds().Dy()
 		runOnMain(func() {
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, w, h)
+			a.recordHistory(data, w, h, 0)
 			a.sessionStatus("已复制贴图对比结果")
 		})
 	})
@@ -1559,11 +1559,10 @@ func (a *app) mergeAllPins(horizontal bool) {
 				return
 			}
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy())
+			a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy(), 0)
 			dipW := max(120, min(1100, merged.Bounds().Dx()/2))
 			dipH := max(80, min(800, merged.Bounds().Dy()/2))
-			cur := mygo.Screen.CursorScreenPoint()
-			a.ShowPin(merged, data, image.Pt(max(20, cur.X-dipW/2), max(40, cur.Y-dipH/2)), dipW, dipH)
+			a.ShowPin(merged, data, pinPlacementNearCursorOnScreen(dipW, dipH), dipW, dipH)
 			a.sessionStatus(fmt.Sprintf("已拼接 %d 张贴图并复制到剪贴板", len(imgs)))
 		})
 	})

@@ -49,14 +49,15 @@ func (hw *historyWindow) setStatusBadge(msg string) {
 	hw.badge.Set(msg, hw.win, fallback)
 }
 
-func (a *app) recordHistory(pngBytes []byte, pxW, pxH int) {
+// scale 为像素/DIP 比例，0 表示未知（贴图时回退按 2x 估算）。
+func (a *app) recordHistory(pngBytes []byte, pxW, pxH int, scale float64) {
 	if a.history == nil || len(pngBytes) == 0 || !a.historyEnabled() {
 		return
 	}
 	hist := a.history
 	// 写 PNG 与索引放到后台，避免阻塞主线程；store 自带互斥保证并发安全。
 	go func() {
-		if _, err := hist.Add(pngBytes, pxW, pxH); err != nil {
+		if _, err := hist.Add(pngBytes, pxW, pxH, scale); err != nil {
 			return
 		}
 		runOnMain(func() {
@@ -194,10 +195,10 @@ func (hw *historyWindow) historyCopy(e store.Entry) {
 
 // historyPin 后台解码后转为悬浮贴图；落点在点击时（主线程）确定。
 func (a *app) historyPin(hw *historyWindow, e store.Entry) {
-	dipW := max(80, e.Width/2)
-	dipH := max(60, e.Height/2)
-	cur := mygo.Screen.CursorScreenPoint()
-	at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
+	ew, eh := e.DipSize()
+	dipW := max(80, ew)
+	dipH := max(60, eh)
+	at := pinPlacementNearCursorOnScreen(dipW, dipH)
 	a.historyDecodeAsync(hw, e, func(img *image.NRGBA, raw []byte) {
 		a.ShowPin(img, raw, at, dipW, dipH)
 		hw.setStatusBadge("已转为悬浮贴图")

@@ -240,7 +240,7 @@ func (a *app) finishScrollCapture(mode string) {
 			return
 		}
 		pngBytes := buf.Bytes()
-		a.recordHistory(pngBytes, res.Bounds().Dx(), res.Bounds().Dy())
+		a.recordHistory(pngBytes, res.Bounds().Dx(), res.Bounds().Dy(), 0)
 		mygo.RunOnMain(func() {
 			switch mode {
 			case "copy":

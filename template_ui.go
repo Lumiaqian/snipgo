@@ -200,7 +200,7 @@ func (a *app) copyTemplateResult(tw *templateWindow) {
 	a.hasTplOpts = true
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
 		_ = mygo.Clipboard.WriteImage(pngBytes)
-		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
+		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
 		tw.setStatusBadge(fmt.Sprintf("✓ 已复制 · %d×%d px", out.Bounds().Dx(), out.Bounds().Dy()))
 		a.sessionStatus("模板成图已复制到剪贴板")
 		if tw.win != nil && !tw.win.IsDestroyed() {
@@ -213,7 +213,7 @@ func (a *app) saveTemplateResult(tw *templateWindow) {
 	a.lastTplOpts = tw.opts
 	a.hasTplOpts = true
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
-		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
+		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
 		a.SavePNG(pngBytes)
 		tw.setStatusBadge("✓ 已触发保存")
 		if tw.win != nil && !tw.win.IsDestroyed() {
@@ -226,12 +226,11 @@ func (a *app) pinTemplateResult(tw *templateWindow) {
 	a.lastTplOpts = tw.opts
 	a.hasTplOpts = true
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
-		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
+		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
 		sc := max(1.0, tw.srcScale)
 		dipW := max(100, int(math.Round(float64(out.Bounds().Dx())/sc)))
 		dipH := max(80, int(math.Round(float64(out.Bounds().Dy())/sc)))
-		cur := mygo.Screen.CursorScreenPoint()
-		at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
+		at := pinPlacementNearCursorOnScreen(dipW, dipH)
 		a.ShowPin(out, pngBytes, at, dipW, dipH)
 		tw.setStatusBadge("✓ 已钉为悬浮贴图")
 		if tw.win != nil && !tw.win.IsDestroyed() {
