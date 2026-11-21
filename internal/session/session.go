@@ -132,6 +132,10 @@ type Session struct {
 	OnMain func(func())
 	// Launch 替换默认的后台整屏冻结采集（测试钩子）。
 	Launch func(gen int)
+	// Encode 把最终图像编码为 PNG（默认 png.DefaultCompression）；始终在后台 goroutine 调用，测试可替换以断言线程。
+	Encode func(*image.NRGBA) ([]byte, error)
+	// Background 在后台执行冻结模式的后处理与编码（默认 go fn()，测试可替换为同步执行）。
+	Background func(func())
 
 	gen            int
 	phase          Phase
@@ -1094,14 +1098,31 @@ func (s *Session) confirm(act ConfirmAction) {
 			s.applyOutput(act, r, img, nil)
 			return
 		}
-		img, outR := postProcessImage(img, r, scale, items, useBeautify, preset, useChrome)
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, img); err != nil {
-			s.fail(err.Error())
-			return
-		}
+		// 裁剪依赖冻结帧，必须同步完成；渲染标注/美化与 PNG 编码耗时可达数百毫秒，放到后台。
 		s.clearSelection()
-		s.applyOutput(act, outR, img, buf.Bytes())
+		s.gen++
+		gen := s.gen
+		s.pending = nil
+		s.phase = PhaseCapturing
+		bg := s.Background
+		if bg == nil {
+			if s.OnMain == nil {
+				// 未配置主线程调度（纯逻辑测试）时保持同步执行。
+				bg = func(fn func()) { fn() }
+			} else {
+				bg = func(fn func()) { go fn() }
+			}
+		}
+		bg(func() {
+			out, outR := postProcessImage(img, r, scale, items, useBeautify, preset, useChrome)
+			b, err := s.encodePNG(out)
+			deliver := func() { s.DeliverEncoded(gen, act, outR, out, b, err) }
+			if s.OnMain == nil {
+				deliver()
+				return
+			}
+			s.OnMain(deliver)
+		})
 		return
 	}
 	if s.CaptureRect == nil && !useWinOnly {
@@ -1163,7 +1184,12 @@ func (s *Session) confirm(act ConfirmAction) {
 		if err == nil && img != nil && !img.Bounds().Empty() && act != ActionOCR && act != ActionCutout {
 			img, outR = postProcessImage(img, r, scale, items, useBeautify, preset, useChrome)
 		}
-		s.OnMain(func() { s.DeliverRect(gen, act, outR, img, err) })
+		// PNG 编码放在后台，避免在主线程上阻塞数百毫秒。
+		var encoded []byte
+		if err == nil && img != nil && !img.Bounds().Empty() && needsPNG(act) {
+			encoded, err = s.encodePNG(img)
+		}
+		s.OnMain(func() { s.DeliverEncoded(gen, act, outR, img, encoded, err) })
 	}()
 }
 
@@ -1220,8 +1246,38 @@ func (s *Session) scaleForRect(r image.Rectangle) float64 {
 	return best
 }
 
-// DeliverRect 在主线程完成实时局部采集后的编码与复制/贴图/保存/识字。
+// needsPNG 判断动作是否需要 PNG 字节（识字/抠图/套模板直接使用像素）。
+func needsPNG(act ConfirmAction) bool {
+	return act != ActionOCR && act != ActionCutout && act != ActionTemplate
+}
+
+// encodePNG 按会话的 Encode 钩子编码，默认 png.DefaultCompression。
+func (s *Session) encodePNG(img *image.NRGBA) ([]byte, error) {
+	if s.Encode != nil {
+		return s.Encode(img)
+	}
+	var buf bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.DefaultCompression}
+	if err := enc.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DeliverRect 兼容入口：调用方线程内编码后交付。生产路径已在后台编码并直接调用 DeliverEncoded。
 func (s *Session) DeliverRect(gen int, act ConfirmAction, r image.Rectangle, img *image.NRGBA, err error) {
+	if gen != s.gen || s.phase != PhaseCapturing {
+		return
+	}
+	var encoded []byte
+	if err == nil && img != nil && !img.Bounds().Empty() && needsPNG(act) {
+		encoded, err = s.encodePNG(img)
+	}
+	s.DeliverEncoded(gen, act, r, img, encoded, err)
+}
+
+// DeliverEncoded 在主线程交付已编码的截图结果：复制/贴图/保存/识字。
+func (s *Session) DeliverEncoded(gen int, act ConfirmAction, r image.Rectangle, img *image.NRGBA, pngBytes []byte, err error) {
 	if gen != s.gen || s.phase != PhaseCapturing {
 		return
 	}
@@ -1263,12 +1319,7 @@ func (s *Session) DeliverRect(gen int, act ConfirmAction, r image.Rectangle, img
 		}
 		return
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		s.fail(err.Error())
-		return
-	}
-	s.applyOutput(act, r, img, buf.Bytes())
+	s.applyOutput(act, r, img, pngBytes)
 }
 
 // CropFrozenSelection 在冻结模式下裁剪当前选区原图（不关闭选区，供选区内一键自动脱敏使用）。
