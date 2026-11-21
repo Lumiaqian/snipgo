@@ -50,7 +50,7 @@ func (hw *historyWindow) setStatusBadge(msg string) {
 }
 
 func (a *app) recordHistory(pngBytes []byte, pxW, pxH int) {
-	if a.history == nil || len(pngBytes) == 0 {
+	if a.history == nil || len(pngBytes) == 0 || !a.historyEnabled() {
 		return
 	}
 	hist := a.history

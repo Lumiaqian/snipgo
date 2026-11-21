@@ -13,3 +13,14 @@ func TestSavedBadgeTextReflectsSaveFailure(t *testing.T) {
 		t.Fatalf("非成功文案不应被改写, got %q", got)
 	}
 }
+
+func TestHistoryEnabledFollowsConfig(t *testing.T) {
+	a := &app{}
+	if !a.historyEnabled() {
+		t.Fatal("默认应保存历史")
+	}
+	a.cfg.DisableHistory = true
+	if a.historyEnabled() {
+		t.Fatal("DisableHistory=true 时应关闭历史")
+	}
+}

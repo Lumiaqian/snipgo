@@ -177,6 +177,9 @@ func (a *app) applyAndSaveSettings(next config.Settings) {
 	}
 }
 
+// historyEnabled 报告是否保存最近截图历史（默认开启，设置里可关闭）。
+func (a *app) historyEnabled() bool { return !a.cfg.DisableHistory }
+
 // savedBadgeText 在最近一次保存失败时，把“✓ …”成功文案换成失败提示，避免误导用户。
 func savedBadgeText(msg string, saveFailed bool) string {
 	if saveFailed && strings.HasPrefix(msg, "✓") {
@@ -424,6 +427,12 @@ func (a *app) paintSettingsGeneralTab(c *ui.Context, p palette, sw *settingsWind
 					sw.setSavedBadge("✓ 已保存")
 				}
 				if liquidSwitch(c, "openatlogin", &sw.draft.OpenAtLogin, "登录 macOS 时自动启动 SnipGo") {
+					a.applyAndSaveSettings(sw.draft)
+					sw.setSavedBadge("✓ 已保存")
+				}
+				saveHistory := !sw.draft.DisableHistory
+				if liquidSwitch(c, "savehistory", &saveHistory, "保存最近截图历史（关闭后不再记录新的截图）") {
+					sw.draft.DisableHistory = !saveHistory
 					a.applyAndSaveSettings(sw.draft)
 					sw.setSavedBadge("✓ 已保存")
 				}

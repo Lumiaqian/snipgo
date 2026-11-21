@@ -110,3 +110,29 @@ func TestSaveSurfacesError(t *testing.T) {
 		t.Fatal("baseDir 是文件时 Save 应返回错误")
 	}
 }
+
+func TestDisableHistoryDefaultAndRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if Default(dir).DisableHistory {
+		t.Fatal("默认应保存历史（DisableHistory=false）")
+	}
+	cfg := Default(dir)
+	cfg.DisableHistory = true
+	cfg.Normalize(dir)
+	if !cfg.DisableHistory {
+		t.Fatal("Normalize 不应改动 DisableHistory")
+	}
+	if err := Save(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !Load(dir, dir).DisableHistory {
+		t.Fatal("DisableHistory 应可往返")
+	}
+	// 旧配置文件没有该字段时保持历史开启。
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"quick_save": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if Load(dir, dir).DisableHistory {
+		t.Fatal("旧配置应默认开启历史")
+	}
+}

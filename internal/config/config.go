@@ -31,6 +31,8 @@ type Settings struct {
 	ThemeAppearance    string `json:"theme_appearance,omitempty"`
 	GlassLevel         string `json:"glass_level,omitempty"`
 	AccentColor        string `json:"accent_color,omitempty"`
+	// DisableHistory 为 true 时不再保存最近截图历史；默认 false（保存历史）。
+	DisableHistory bool `json:"disable_history,omitempty"`
 }
 
 // Default 返回带合理默认值的配置。

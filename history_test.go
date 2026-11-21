@@ -127,3 +127,24 @@ func TestRecordHistoryWritesOffMainThread(t *testing.T) {
 		t.Fatalf("Count = %d, want 1", st.Count())
 	}
 }
+
+// 关闭「保存最近截图历史」后不再落盘；默认开启时照常记录。
+func TestRecordHistoryRespectsDisableHistory(t *testing.T) {
+	st, _ := store.Open(t.TempDir(), 5)
+	mainQ := make(chan func(), 2)
+	prevRun := runOnMain
+	t.Cleanup(func() { runOnMain = prevRun })
+	runOnMain = func(fn func()) { mainQ <- fn }
+
+	a := &app{history: st}
+	a.cfg.DisableHistory = true
+	a.recordHistory(testHistoryPNG(20, 20), 20, 20)
+	select {
+	case <-mainQ:
+		t.Fatal("关闭历史后不应调度刷新")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if st.Count() != 0 {
+		t.Fatalf("关闭历史后 Count = %d, want 0", st.Count())
+	}
+}
