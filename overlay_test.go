@@ -875,3 +875,49 @@ func (u testSessionUI) ShowPin(*image.NRGBA, []byte, image.Point, int, int) {
 }
 func (testSessionUI) SavePNG([]byte)              {}
 func (testSessionUI) RecognizeImage(*image.NRGBA) {}
+
+func TestApplyRedactionResultDropsStaleGeneration(t *testing.T) {
+	a := &app{}
+	a.session = &session.Session{
+		Live: func() (session.Snapshot, error) {
+			return session.Snapshot{Frames: []crop.Screen{{Bounds: image.Rect(0, 0, 100, 80), Scale: 2}}}, nil
+		},
+		OnMain: func(fn func()) { fn() },
+		UI:     testSessionUI{},
+	}
+	a.session.StartLive()
+	a.session.InitCursor(20, 20)
+	a.session.BeginDrag(0, 10, 10)
+	a.session.MoveDrag(0, 60, 50)
+	a.session.EndDrag()
+	if a.session.Phase() != session.PhaseAdjusting {
+		t.Fatalf("phase %v", a.session.Phase())
+	}
+	oldGen := a.session.Gen()
+	boxes := []annotate.RectF{{X: 12, Y: 12, W: 20, H: 10}}
+
+	// 会话换代后到达的旧结果必须丢弃，且 redacting 复位。
+	a.session.Cancel()
+	a.session.StartLive()
+	a.session.InitCursor(20, 20)
+	a.session.BeginDrag(0, 10, 10)
+	a.session.MoveDrag(0, 60, 50)
+	a.session.EndDrag()
+	a.redacting = true
+	a.applyRedactionResult(oldGen, boxes)
+	if a.redacting {
+		t.Fatal("redacting should be cleared even when dropped")
+	}
+	if n := len(a.session.Annotations().Items()); n != 0 {
+		t.Fatalf("stale result added %d items", n)
+	}
+
+	a.redacting = true
+	a.applyRedactionResult(a.session.Gen(), boxes)
+	if a.redacting {
+		t.Fatal("redacting should be cleared")
+	}
+	if n := len(a.session.Annotations().Items()); n != 1 {
+		t.Fatalf("matching result items = %d, want 1", n)
+	}
+}

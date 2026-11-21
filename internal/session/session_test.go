@@ -693,3 +693,110 @@ func TestLiveCaptureTimeoutStashesAndDiscard(t *testing.T) {
 		t.Fatal("discard should drop the stash")
 	}
 }
+
+// previewTestSession 构造一个已锁定窗口选区(10,12,50,42)、scale=2 的实时会话。
+func previewTestSession(t *testing.T, captures *int, withPreview bool) (*Session, *fakeClip, chan struct{}) {
+	t.Helper()
+	clip := &fakeClip{}
+	done := make(chan struct{})
+	s := &Session{
+		Live: func() (Snapshot, error) {
+			return Snapshot{
+				Frames:  []crop.Screen{{Bounds: image.Rect(0, 0, 100, 80), Scale: 2}},
+				Windows: []image.Rectangle{image.Rect(10, 12, 50, 42)},
+			}, nil
+		},
+		CaptureRect: func(_ context.Context, sel image.Rectangle) (*image.NRGBA, error) {
+			*captures++
+			img := image.NewNRGBA(image.Rect(0, 0, sel.Dx()*2, sel.Dy()*2))
+			for i := 0; i < len(img.Pix); i += 4 {
+				img.Pix[i+2], img.Pix[i+3] = 255, 255
+			}
+			return img, nil
+		},
+		Clip: clip,
+		UI:   &fakeUI{},
+		OnMain: func(fn func()) {
+			fn()
+			close(done)
+		},
+	}
+	if withPreview {
+		s.PreviewFrame = func(sel image.Rectangle) (*image.NRGBA, bool) {
+			img := image.NewNRGBA(image.Rect(0, 0, sel.Dx()*2, sel.Dy()*2))
+			for i := 0; i < len(img.Pix); i += 4 {
+				img.Pix[i], img.Pix[i+3] = 255, 255
+			}
+			return img, true
+		}
+	}
+	s.Hotkey()
+	s.Hover(20, 20)
+	s.BeginDrag(0, 20, 20)
+	s.EndDrag()
+	if s.Phase() != PhaseAdjusting {
+		t.Fatalf("phase %v", s.Phase())
+	}
+	return s, clip, done
+}
+
+func centerPixel(t *testing.T, data []byte) color.NRGBA {
+	t.Helper()
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	return color.NRGBAModel.Convert(img.At(b.Dx()/2, b.Dy()/2)).(color.NRGBA)
+}
+
+func TestLiveConfirmUsesPreviewFrameForRedaction(t *testing.T) {
+	captures := 0
+	s, clip, done := previewTestSession(t, &captures, true)
+	s.Annotations().Items() // 确保画布已创建
+	s.Annotations().AddRedactions([]annotate.RectF{{X: 10, Y: 12, W: 40, H: 30}}, true)
+	s.Copy()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("confirm did not finish")
+	}
+	if captures != 0 {
+		t.Fatalf("CaptureRect called %d times, want 0", captures)
+	}
+	// 擦除会取周围像素，但源图是纯红，结果必然偏红而不是蓝。
+	if c := centerPixel(t, clip.data); c.R < 200 || c.B > 60 {
+		t.Fatalf("center pixel %+v, want red-ish from preview frame", c)
+	}
+}
+
+func TestLiveConfirmWithoutRedactionStillCaptures(t *testing.T) {
+	captures := 0
+	s, clip, done := previewTestSession(t, &captures, true)
+	s.Copy()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("confirm did not finish")
+	}
+	if captures != 1 {
+		t.Fatalf("CaptureRect called %d times, want 1", captures)
+	}
+	if c := centerPixel(t, clip.data); c.B < 200 || c.R > 60 {
+		t.Fatalf("center pixel %+v, want blue from CaptureRect", c)
+	}
+}
+
+func TestLiveConfirmIgnoresMismatchedPreviewFrame(t *testing.T) {
+	captures := 0
+	s, _, done := previewTestSession(t, &captures, true)
+	s.PreviewFrame = func(image.Rectangle) (*image.NRGBA, bool) {
+		return image.NewNRGBA(image.Rect(0, 0, 3, 3)), true
+	}
+	s.Annotations().AddRedactions([]annotate.RectF{{X: 10, Y: 12, W: 40, H: 30}}, false)
+	s.Copy()
+	<-done
+	if captures != 1 {
+		t.Fatalf("CaptureRect called %d times, want 1 for size mismatch", captures)
+	}
+}

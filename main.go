@@ -144,6 +144,7 @@ func (a *app) ready() {
 		Allowed:       a.allowCapture,
 		Live:          a.liveSnapshot,
 		CaptureRect:   a.captureRect,
+		PreviewFrame:  a.previewFrame,
 		CaptureWindow: a.captureWindow,
 		Capture:       a.captureFrozen,
 		Clip:          sysClip{},
@@ -753,4 +754,12 @@ func trayIcon() []byte {
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
+}
+
+// previewFrame 返回与选区一致的预览像素快照，供确认时按「所见即所得」渲染打码/擦除/放大镜。
+func (a *app) previewFrame(sel image.Rectangle) (*image.NRGBA, bool) {
+	if a.previewSnapImg == nil || a.previewSnapRect.Empty() || a.previewSnapRect != sel.Canon() {
+		return nil, false
+	}
+	return a.previewSnapImg, true
 }
