@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"image"
+	"sync"
+	"sync/atomic"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
@@ -16,10 +18,24 @@ const (
 	historyWinH = 448
 )
 
+// historyThumbMaxSide 历史缩略图长边上限（卡片缩略区高 116pt，2x 屏约 232px，留有余量）。
+const historyThumbMaxSide = 320
+
+// 以下变量供测试替换：缩略图加载器与整图加载器。
+var (
+	historyThumbLoader = store.Thumbnail
+	historyFullLoader  = store.Load
+)
+
 type historyWindow struct {
 	win         *mygo.Window
 	entries     []store.Entry
-	thumbs      map[string]*ui.Bitmap
+	thumbs      map[string]*ui.Bitmap // 仅主线程访问
+	dead        atomic.Bool           // 窗口已关闭/被替换，后台 worker 应尽快退出
+	thumbMu     sync.Mutex            // 保护以下 worker 状态
+	thumbQueue  []store.Entry
+	thumbSeen   map[string]bool // 已入队（含失败）的记录，避免重复加载
+	thumbWorker bool
 	statusBadge string
 	badge       badgeState
 	enter       panelEnterState
@@ -37,13 +53,19 @@ func (a *app) recordHistory(pngBytes []byte, pxW, pxH int) {
 	if a.history == nil || len(pngBytes) == 0 {
 		return
 	}
-	_, _ = a.history.Add(pngBytes, pxW, pxH)
-	mygo.RunOnMain(func() {
-		a.refreshMenu()
-		if a.histWin != nil {
-			a.reloadHistoryWindow()
+	hist := a.history
+	// 写 PNG 与索引放到后台，避免阻塞主线程；store 自带互斥保证并发安全。
+	go func() {
+		if _, err := hist.Add(pngBytes, pxW, pxH); err != nil {
+			return
 		}
-	})
+		runOnMain(func() {
+			a.refreshMenu()
+			if a.histWin != nil {
+				a.reloadHistoryWindow()
+			}
+		})
+	}()
 }
 
 func (a *app) toggleHistoryWindow() {
@@ -57,6 +79,7 @@ func (a *app) toggleHistoryWindow() {
 func (a *app) closeHistoryWindow() {
 	if a.histWin != nil {
 		old := a.histWin
+		old.dead.Store(true)
 		a.histWin = nil
 		if old.win != nil && !old.win.IsDestroyed() {
 			old.win.Close()
@@ -64,31 +87,121 @@ func (a *app) closeHistoryWindow() {
 	}
 }
 
+// reloadHistoryWindow 刷新条目列表（主线程）。缩略图在后台单 worker 中按序加载，不在此处解码。
 func (a *app) reloadHistoryWindow() {
-	if a.histWin == nil || a.history == nil {
+	hw := a.histWin
+	if hw == nil || a.history == nil {
 		return
 	}
-	a.histWin.entries = a.history.List()
-	if a.histWin.thumbs == nil {
-		a.histWin.thumbs = map[string]*ui.Bitmap{}
+	hw.entries = a.history.List()
+	if hw.thumbs == nil {
+		hw.thumbs = map[string]*ui.Bitmap{}
 	}
 	active := map[string]bool{}
-	for _, e := range a.histWin.entries {
+	var missing []store.Entry
+	for _, e := range hw.entries {
 		active[e.ID] = true
-		if _, ok := a.histWin.thumbs[e.ID]; !ok {
-			if img, _, err := store.Load(e); err == nil && img != nil {
-				a.histWin.thumbs[e.ID] = ui.NewBitmap(img)
-			}
+		if _, ok := hw.thumbs[e.ID]; !ok {
+			missing = append(missing, e)
 		}
 	}
-	for id := range a.histWin.thumbs {
+	for id := range hw.thumbs {
 		if !active[id] {
-			delete(a.histWin.thumbs, id)
+			delete(hw.thumbs, id)
 		}
 	}
-	if a.histWin.win != nil && !a.histWin.win.IsDestroyed() {
-		a.histWin.win.Invalidate()
+	a.enqueueHistoryThumbs(hw, missing)
+	if hw.win != nil && !hw.win.IsDestroyed() {
+		hw.win.Invalidate()
 	}
+}
+
+// enqueueHistoryThumbs 把缺失缩略图的记录加入队列，并确保只有一个后台 worker 在处理。
+func (a *app) enqueueHistoryThumbs(hw *historyWindow, entries []store.Entry) {
+	hw.thumbMu.Lock()
+	if hw.thumbSeen == nil {
+		hw.thumbSeen = map[string]bool{}
+	}
+	for _, e := range entries {
+		if !hw.thumbSeen[e.ID] {
+			hw.thumbSeen[e.ID] = true
+			hw.thumbQueue = append(hw.thumbQueue, e)
+		}
+	}
+	start := !hw.thumbWorker && len(hw.thumbQueue) > 0
+	if start {
+		hw.thumbWorker = true
+	}
+	hw.thumbMu.Unlock()
+	if start {
+		go a.runHistoryThumbWorker(hw)
+	}
+}
+
+func (a *app) runHistoryThumbWorker(hw *historyWindow) {
+	for {
+		hw.thumbMu.Lock()
+		if hw.dead.Load() || len(hw.thumbQueue) == 0 {
+			hw.thumbWorker = false
+			hw.thumbQueue = nil
+			hw.thumbMu.Unlock()
+			return
+		}
+		e := hw.thumbQueue[0]
+		hw.thumbQueue = hw.thumbQueue[1:]
+		hw.thumbMu.Unlock()
+
+		thumb, err := historyThumbLoader(e, historyThumbMaxSide)
+		if err != nil || thumb == nil {
+			continue
+		}
+		runOnMain(func() {
+			// 窗口已关闭/重建，或记录已被删除时丢弃结果。
+			if a.histWin != hw {
+				return
+			}
+			for _, cur := range hw.entries {
+				if cur.ID == e.ID {
+					hw.thumbs[e.ID] = ui.NewBitmap(thumb)
+					if hw.win != nil && !hw.win.IsDestroyed() {
+						hw.win.Invalidate()
+					}
+					return
+				}
+			}
+		})
+	}
+}
+
+// historyDecodeAsync 在后台完整解码某条历史记录，再回到主线程交给 use（用于贴图/套模板/OCR）。
+func (a *app) historyDecodeAsync(hw *historyWindow, e store.Entry, use func(img *image.NRGBA, raw []byte)) {
+	go func() {
+		img, raw, err := historyFullLoader(e)
+		if err != nil || img == nil {
+			return
+		}
+		runOnMain(func() { use(img, raw) })
+	}()
+}
+
+// historyCopy 只读 PNG 字节复制到剪贴板，不解码。
+func (hw *historyWindow) historyCopy(e store.Entry) {
+	if raw, err := store.ReadPNG(e); err == nil {
+		_ = mygo.Clipboard.WriteImage(raw)
+		hw.setStatusBadge("已复制到剪贴板")
+	}
+}
+
+// historyPin 后台解码后转为悬浮贴图；落点在点击时（主线程）确定。
+func (a *app) historyPin(hw *historyWindow, e store.Entry) {
+	dipW := max(80, e.Width/2)
+	dipH := max(60, e.Height/2)
+	cur := mygo.Screen.CursorScreenPoint()
+	at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
+	a.historyDecodeAsync(hw, e, func(img *image.NRGBA, raw []byte) {
+		a.ShowPin(img, raw, at, dipW, dipH)
+		hw.setStatusBadge("已转为悬浮贴图")
+	})
 }
 
 func (a *app) openHistoryWindow() {
@@ -122,6 +235,7 @@ func (a *app) openHistoryWindow() {
 		}),
 	})
 	hw.win.OnClosed(func() {
+		hw.dead.Store(true)
 		if a.histWin == hw {
 			a.histWin = nil
 		}
@@ -271,19 +385,9 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 			}
 		})
 		if thumbBox.DoubleClicked() {
-			if img, raw, err := store.Load(e); err == nil {
-				dipW := max(80, e.Width/2)
-				dipH := max(60, e.Height/2)
-				cur := mygo.Screen.CursorScreenPoint()
-				at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
-				go mygo.RunOnMain(func() { a.ShowPin(img, raw, at, dipW, dipH) })
-				hw.setStatusBadge("已转为悬浮贴图")
-			}
+			a.historyPin(hw, e)
 		} else if thumbBox.Clicked() {
-			if _, raw, err := store.Load(e); err == nil {
-				_ = mygo.Clipboard.WriteImage(raw)
-				hw.setStatusBadge("已复制到剪贴板")
-			}
+			hw.historyCopy(e)
 		}
 
 		// 尺寸与时间戳
@@ -295,30 +399,20 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 				FontSize(10.5).FontFeatures("tnum").NoWrap().TextColor(p.TextMuted)
 			ui.Spacer(c)
 			if pinMiniIconBtn(c, iconCopy, "复制到剪贴板") {
-				if _, raw, err := store.Load(e); err == nil {
-					_ = mygo.Clipboard.WriteImage(raw)
-					hw.setStatusBadge("已复制到剪贴板")
-				}
+				hw.historyCopy(e)
 			}
 			if pinMiniIconBtn(c, iconPin, "转为悬浮贴图") {
-				if img, raw, err := store.Load(e); err == nil {
-					dipW := max(80, e.Width/2)
-					dipH := max(60, e.Height/2)
-					cur := mygo.Screen.CursorScreenPoint()
-					at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
-					go mygo.RunOnMain(func() { a.ShowPin(img, raw, at, dipW, dipH) })
-					hw.setStatusBadge("已转为悬浮贴图")
-				}
+				a.historyPin(hw, e)
 			}
 			if pinMiniIconBtn(c, iconTemplate, "套模板（便签 / 拍立得 / 浏览器…）") {
-				if img, _, err := store.Load(e); err == nil {
-					go mygo.RunOnMain(func() { a.openTemplateWindow(img, image.Rectangle{}) })
-				}
+				a.historyDecodeAsync(hw, e, func(img *image.NRGBA, _ []byte) {
+					a.openTemplateWindow(img, image.Rectangle{})
+				})
 			}
 			if pinMiniIconBtn(c, iconOCR, "识图提取文字") {
-				if img, _, err := store.Load(e); err == nil {
-					go mygo.RunOnMain(func() { a.RecognizeImage(img) })
-				}
+				a.historyDecodeAsync(hw, e, func(img *image.NRGBA, _ []byte) {
+					a.RecognizeImage(img)
+				})
 			}
 			if pinMiniIconBtn(c, iconTrash, "删除此记录") {
 				if a.history != nil {
