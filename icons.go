@@ -73,8 +73,6 @@ var (
 
 	iconCompare = svgIcon(`<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M12 2.5v19"/><path d="M8.5 9.5L6 12l2.5 2.5M15.5 9.5L18 12l-2.5 2.5"/>`)
 
-	iconTable = svgIcon(`<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10M15 9.5v10"/>`)
-
 	iconPalette = svgIcon(`<circle cx="12" cy="12" r="8.5"/><circle cx="8.8" cy="10.2" r="1.1" fill="currentColor"/><circle cx="12.6" cy="8.4" r="1.1" fill="currentColor"/><circle cx="15.5" cy="11.8" r="1.1" fill="currentColor"/><circle cx="11.5" cy="15.4" r="1.1" fill="currentColor"/>`)
 
 	iconTemplate = svgIcon(`<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M3.5 9.5h17"/><path d="M9.5 9.5v10.5"/>`)
