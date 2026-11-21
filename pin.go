@@ -918,7 +918,8 @@ func (p *pinWin) applyZoom(targetZoom, anchorX, anchorY float64) {
 	if p.win == nil || p.win.IsDestroyed() || p.collapsed {
 		return
 	}
-	nextZoom := max(0.2, min(5.0, targetZoom))
+	// 长图贴图初始缩放可能低于 0.2，下限取当前值以免滚轮时跳变
+	nextZoom := max(min(0.2, p.zoom), min(5.0, targetZoom))
 	newW := max(24, int(math.Round(float64(p.origW)*nextZoom)))
 	newH := max(24, int(math.Round(float64(p.origH)*nextZoom)))
 	if newW == p.curW && newH == p.curH {
