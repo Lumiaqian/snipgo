@@ -12,7 +12,7 @@ func TestPermissionPromptCoversFirstGrantAndSignatureChange(t *testing.T) {
 	if strings.Contains(text, "开发版") {
 		t.Fatalf("提示不应只面向开发版: %q", text)
 	}
-	for _, want := range []string{"从未授权", "录屏与系统录音", "重置旧记录并重新授权"} {
+	for _, want := range []string{"从未授权", "录屏与系统录音", "重置旧记录并重新授权", "0.1.7", "固定签名"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("提示缺少 %q: %q", want, text)
 		}

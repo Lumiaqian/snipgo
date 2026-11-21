@@ -63,7 +63,7 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 - **贴图交互与拖拽**：贴图支持原地进入矢量标注（`E`）、滚轮缩放、`Shift`/`Alt+滚轮` 调透明度、右键 8px 边缘磁吸与横纵向拼接、点击穿透（`P`）、折叠为迷你胶囊（`M`），以及按住悬停栏左一按钮直接将 `.png` 拖入微信、Slack、GitHub 或 Finder。
 - **最近截图历史（`Cmd+Shift+H`）& 免弹窗快存**：自动环形归档最近 20 张截图（双列网格预览、直接拖出 PNG、复制/贴图/套模板/识图/删除）；偏好设置（`Cmd+,`）支持点击键帽直接按键录入并校验冲突的全部全局快捷键、`Cmd+S` 免弹窗一键快存与保存同时复制到剪贴板。
 - **macOS 26 Tahoe Liquid Glass 体验与物理弹簧动效**：原生 `NSGlassEffectView` 融合着色与 `glass.NewGroup` 合并玻璃按钮组、滑动液态玻璃分段控制器、物理拉伸旋钮开关、渐进式滚动边缘模糊与弹簧入场动画；偏好设置支持实时切换 **外观模式（跟随系统 / 浅色 / 深色）**、**液态玻璃浓度（清透 / 标准 / 浓磨砂）** 与 **8 种系统/自定义主题强调色**；全浮窗统一左上角带清晰 `×` 的 macOS 红灯关闭按钮（`Cmd+W` / `Esc` 关闭，菜单栏常驻，`Cmd+Q` 退出应用）。
-- **内置签名自动更新**：底层接入 MyGo 官方 `mygo.Updater`（直接从 GitHub Releases 静态下载通道读取 `update-darwin-*.json`，不受 GitHub REST API 限流 403 影响），配合 Liquid Glass 更新窗支持后台每 24 小时静默检测、Beta 预览版通道、跳过指定版本与更新日志展示；下载归档与 `bsdiff` 增量补丁经 **Ed25519 公钥数字签名校验**，退出时原子替换 `.app` 包并平滑重启（保留全部配置与历史记录；未使用 Developer ID 签名的 ad-hoc 构建在更新后签名哈希会变化，macOS 会要求重新授予屏幕录制权限）。
+- **内置签名自动更新**：底层接入 MyGo 官方 `mygo.Updater`（直接从 GitHub Releases 静态下载通道读取 `update-darwin-*.json`，不受 GitHub REST API 限流 403 影响），配合 Liquid Glass 更新窗支持后台每 24 小时静默检测、Beta 预览版通道、跳过指定版本与更新日志展示；下载归档与 `bsdiff` 增量补丁经 **Ed25519 公钥数字签名校验**，退出时原子替换 `.app` 包并平滑重启（保留全部配置与历史记录；从 0.1.7 起发布包使用固定的 SnipGo 自签名证书签名，此后的版本更新会保留屏幕录制授权）。
 
 ---
 
@@ -123,7 +123,8 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
      xattr -dr com.apple.quarantine /Applications/SnipGo.app
      ```
    - 首次截屏请在 **系统设置 → 隐私与安全性 → 录屏与系统录音** 中允许 **SnipGo**，授权后重开应用生效。
-   - ad-hoc 签名构建（未配置 Developer ID 证书的发布包）的屏幕录制授权绑定在具体的二进制哈希上：每次更新或重新编译后，macOS 都可能视其为新应用。若截图提示需要权限，请在上述设置中重新打开 SnipGo 的开关（必要时先删除旧记录），再重启应用。
+   - **关于签名与授权**：从 0.1.7 起，发布包统一使用固定的 SnipGo 自签名证书签名，macOS 按「应用标识 + 证书」识别 SnipGo，之后的版本更新会保留屏幕录制授权。0.1.6 及更早版本是 ad-hoc 签名（授权绑定在具体的二进制哈希上），所以**从旧版本升级到 0.1.7 时需要最后再授权一次**：若截图提示需要权限，在上述设置中删除旧的 SnipGo 记录并重新打开开关（或在 SnipGo 弹出的提示里点「重置旧记录并重新授权」），再重启应用。
+   - 自签名证书未经 Apple 公证，首次安装时 macOS 仍会提示「无法验证开发者」，按上面的方法移除隔离属性或在「隐私与安全性」中点「仍要打开」即可。
 
 ---
 
@@ -177,7 +178,7 @@ go tool mygo build -skip-dmg
 
 ### GitHub Actions 流水线
 - **持续集成（`.github/workflows/ci.yml`）**：推送 `main`、发起 PR 或手动触发时自动运行完整测试、`mygo vet`、跨平台检查并打包 `arm64` / `amd64` / `universal` 构建产物。
-- **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg`（`AppleSilicon-arm64` / `Intel-amd64` / `Universal`），并在配置 `MYGO_UPDATER_PRIVATE_KEY` 机密时一并生成带 Ed25519 签名的 `update-darwin-*.json`、`.tar.gz`、`.delta` 增量更新与 `SHA256SUMS.txt` 发布 Release。未配置证书机密时自动使用 ad-hoc 签名；配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY`（及公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD`）即可全自动完成正式签名与 Apple 公证。
+- **自动发版（`.github/workflows/release.yml`）**：推送 `v*` 标签（如 `git tag v0.2.0 && git push origin v0.2.0`）自动构建三架构 `.dmg`（`AppleSilicon-arm64` / `Intel-amd64` / `Universal`），并在配置 `MYGO_UPDATER_PRIVATE_KEY` 机密时一并生成带 Ed25519 签名的 `update-darwin-*.json`、`.tar.gz`、`.delta` 增量更新与 `SHA256SUMS.txt` 发布 Release。配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`MACOS_SIGNING_IDENTITY` 后使用该证书签名（当前为固定的自签名代码签名证书，构建后会校验 designated requirement 绑定证书而非 cdhash）；未配置时退回 ad-hoc 签名。只有同时配置 Developer ID 证书与公证所需的 `APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD` 时才会执行 Apple 公证，否则自动跳过。
 
 ---
 

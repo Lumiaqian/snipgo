@@ -78,7 +78,7 @@ jobs:
         run: |
           if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_SIGNING_IDENTITY" ]; then
             echo "notarized=false" >> "$GITHUB_OUTPUT"
-            echo "No Developer ID certificate configured; building ad-hoc signed packages."
+            echo "No signing certificate configured; building ad-hoc signed packages."
             exit 0
           fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
@@ -149,6 +149,27 @@ jobs:
 
           (cd dist && shasum -a 256 SnipGo-* snipgo-* update-*.json > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
+
+      - name: Verify code signature (designated requirement)
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          # 配置了签名证书时，发布包必须绑定证书（identifier + certificate），不能退回 cdhash，
+          # 否则用户每次更新都要重新授予屏幕录制权限。
+          for app in build/darwin-*/*.app; do
+            codesign --verify --deep --strict "$app"
+            dr="$(codesign -d -r- "$app" 2>&1 | grep 'designated =>' || true)"
+            echo "$app: $dr"
+            if [ -n "$MACOS_SIGNING_IDENTITY" ]; then
+              case "$dr" in
+                *cdhash*|"") echo "::error::$app is not signed with the release certificate"; exit 1 ;;
+              esac
+              case "$dr" in
+                *'identifier "app.snipgo"'*'certificate'*) ;;
+                *) echo "::error::$app has an unexpected designated requirement"; exit 1 ;;
+              esac
+            fi
+          done
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
