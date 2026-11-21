@@ -414,7 +414,7 @@ func (s *Session) PinPickedPalette() bool {
 	dipH := max(64, int(math.Round(float64(card.Bounds().Dy())/scale)))
 	at := image.Pt(120, 120)
 	if s.hasCursor {
-		at = image.Pt(max(20, int(s.cursorX)-dipW/2), max(40, int(s.cursorY)-dipH/2))
+		at = s.palettePlacement(dipW, dipH)
 	}
 	s.clearSelection()
 	if s.Clip != nil {
@@ -1238,13 +1238,36 @@ func postProcessImage(img *image.NRGBA, r image.Rectangle, scale float64, items 
 	return img, r
 }
 
-func (s *Session) scaleForRect(r image.Rectangle) float64 {
-	best := 2.0
+// palettePlacement 以光标为中心放置配色卡，并限制在光标所在显示器的 DIP 范围内
+// （左/上保留 20/40 的边距）；负坐标显示器同样适用。
+func (s *Session) palettePlacement(dipW, dipH int) image.Point {
+	cx, cy := int(math.Floor(s.cursorX)), int(math.Floor(s.cursorY))
+	at := image.Pt(cx-dipW/2, cy-dipH/2)
+	var b image.Rectangle
 	for _, f := range s.frames {
-		if !r.Intersect(f.Bounds.Canon()).Empty() && f.Scale > 0 {
-			best = f.Scale
+		if fb := f.Bounds.Canon(); image.Pt(cx, cy).In(fb) {
+			b = fb
 			break
 		}
+	}
+	if b.Empty() {
+		return at
+	}
+	minX, minY := b.Min.X+20, b.Min.Y+40
+	maxX, maxY := max(minX, b.Max.X-dipW), max(minY, b.Max.Y-dipH)
+	return image.Pt(min(max(at.X, minX), maxX), min(max(at.Y, minY), maxY))
+}
+
+// scaleForRect 返回与 r 相交的显示器中的最大缩放，与 crop.Crop/Stitch 的输出像素密度保持一致。
+func (s *Session) scaleForRect(r image.Rectangle) float64 {
+	best := 0.0
+	for _, f := range s.frames {
+		if !r.Intersect(f.Bounds.Canon()).Empty() && f.Scale > best {
+			best = f.Scale
+		}
+	}
+	if best <= 0 {
+		return 2.0
 	}
 	return best
 }
