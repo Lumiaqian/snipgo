@@ -55,9 +55,11 @@ func Open(baseDir string, maxEntries int) (*HistoryStore, error) {
 		maxEntries = DefaultMaxEntries
 	}
 	dir := filepath.Join(baseDir, "history")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 历史目录含截图内容，仅当前用户可访问；已存在的旧目录尽力收紧权限。
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	_ = os.Chmod(dir, 0o700)
 	s := &HistoryStore{
 		dir: dir,
 		max: maxEntries,
@@ -254,7 +256,7 @@ func Load(e Entry) (*image.NRGBA, []byte, error) {
 
 // writeNewFile 以 O_EXCL 创建并写入文件，已存在时返回 fs.ErrExist。
 func writeNewFile(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

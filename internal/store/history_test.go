@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -124,6 +125,34 @@ func TestHistoryStoreLoadIndexDropsDuplicateIDs(t *testing.T) {
 		t.Fatalf("Count = %d, want 1", n)
 	}
 }
+
+// Open 会把已存在的 0o755 历史目录收紧为 0o700，Add 写入的 PNG 为 0o600。
+func TestOpenTightensDirAndAddWrites0600(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "history")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(base, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
+		t.Fatalf("dir mode = %v, want 0700", st.Mode().Perm())
+	}
+	e, err := s.Add([]byte("x"), 1, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(e.FilePath); st.Mode().Perm() != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", st.Mode().Perm())
+	}
+}
+
+// Scale 随条目持久化；旧索引没有 scale 字段时回退按 2x。
 func TestEntryScaleRoundTripAndFallback(t *testing.T) {
 	base := t.TempDir()
 	s, _ := Open(base, 3)
