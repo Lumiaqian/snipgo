@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"unicode/utf16"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -54,31 +55,32 @@ var (
 	msgBoundingBox              func(objc.ID, objc.SEL) cgRect
 	msgSetFloat32               func(objc.ID, objc.SEL, float32)
 
-	selAlloc            = objc.RegisterName("alloc")
-	selInit             = objc.RegisterName("init")
-	selDrain            = objc.RegisterName("drain")
-	selAutorelease      = objc.RegisterName("autorelease")
-	selInitBytes        = objc.RegisterName("initWithBytes:length:encoding:")
-	selDictionary       = objc.RegisterName("dictionary")
-	selArrayWithObjs    = objc.RegisterName("arrayWithObjects:count:")
-	selInitCGImage      = objc.RegisterName("initWithCGImage:options:")
-	selPerformReqs      = objc.RegisterName("performRequests:error:")
-	selSetRecLevel      = objc.RegisterName("setRecognitionLevel:")
-	selSetLangCorr      = objc.RegisterName("setUsesLanguageCorrection:")
-	selSetRecLangs      = objc.RegisterName("setRecognitionLanguages:")
-	selSetMinTextHeight = objc.RegisterName("setMinimumTextHeight:")
-	selSetUsesCPUOnly   = objc.RegisterName("setUsesCPUOnly:")
-	selSetSymbologies   = objc.RegisterName("setSymbologies:")
-	selResults          = objc.RegisterName("results")
-	selCount            = objc.RegisterName("count")
-	selObjectAtIndex    = objc.RegisterName("objectAtIndex:")
-	selTopCandidates    = objc.RegisterName("topCandidates:")
-	selString           = objc.RegisterName("string")
-	selBoundingBox      = objc.RegisterName("boundingBox")
-	selPayloadStringVal = objc.RegisterName("payloadStringValue")
-	selLocalizedDesc    = objc.RegisterName("localizedDescription")
-	selAllInstances     = objc.RegisterName("allInstances")
-	selGenScaledMask    = objc.RegisterName("generateScaledMaskForImageForInstances:fromRequestHandler:error:")
+	selAlloc               = objc.RegisterName("alloc")
+	selInit                = objc.RegisterName("init")
+	selDrain               = objc.RegisterName("drain")
+	selAutorelease         = objc.RegisterName("autorelease")
+	selInitBytes           = objc.RegisterName("initWithBytes:length:encoding:")
+	selDictionary          = objc.RegisterName("dictionary")
+	selArrayWithObjs       = objc.RegisterName("arrayWithObjects:count:")
+	selInitCGImage         = objc.RegisterName("initWithCGImage:options:")
+	selPerformReqs         = objc.RegisterName("performRequests:error:")
+	selSetRecLevel         = objc.RegisterName("setRecognitionLevel:")
+	selSetLangCorr         = objc.RegisterName("setUsesLanguageCorrection:")
+	selSetRecLangs         = objc.RegisterName("setRecognitionLanguages:")
+	selSetMinTextHeight    = objc.RegisterName("setMinimumTextHeight:")
+	selSetUsesCPUOnly      = objc.RegisterName("setUsesCPUOnly:")
+	selSetSymbologies      = objc.RegisterName("setSymbologies:")
+	selResults             = objc.RegisterName("results")
+	selCount               = objc.RegisterName("count")
+	selObjectAtIndex       = objc.RegisterName("objectAtIndex:")
+	selTopCandidates       = objc.RegisterName("topCandidates:")
+	selString              = objc.RegisterName("string")
+	selBoundingBox         = objc.RegisterName("boundingBox")
+	selBoundingBoxForRange = objc.RegisterName("boundingBoxForRange:error:")
+	selPayloadStringVal    = objc.RegisterName("payloadStringValue")
+	selLocalizedDesc       = objc.RegisterName("localizedDescription")
+	selAllInstances        = objc.RegisterName("allInstances")
+	selGenScaledMask       = objc.RegisterName("generateScaledMaskForImageForInstances:fromRequestHandler:error:")
 )
 
 func loadVision() error {
@@ -208,13 +210,25 @@ func Recognize(img *image.NRGBA) (Result, error) {
 				oy := (topY*prepH - float64(pad)) / float64(workH)
 				ow := (box.W * prepW) / float64(workW)
 				oh := (box.H * prepH) / float64(workH)
-				outBoxes = append(outBoxes, TextBox{
+				tb := TextBox{
 					Text: txt,
 					X:    max(0, min(1, ox)),
 					Top:  max(0, min(1, oy)),
 					W:    max(0, min(1, ow)),
 					H:    max(0, min(1, oh)),
+				}
+				// 敏感子串用引擎的逐字符几何精确定位；任一片段失败则整体不填，由上层整行脱敏。
+				tb.Sensitive = preciseSensitiveBoxes(top, txt, func(b cgRect) TextBox {
+					bTop := 1.0 - (b.Y + b.H)
+					bx := (b.X*prepW - float64(pad)) / float64(workW)
+					by := (bTop*prepH - float64(pad)) / float64(workH)
+					bw := (b.W * prepW) / float64(workW)
+					bh := (b.H * prepH) / float64(workH)
+					x0, y0 := max(0, min(1, bx)), max(0, min(1, by))
+					x1, y1 := max(0, min(1, bx+bw)), max(0, min(1, by+bh))
+					return TextBox{Text: txt, X: x0, Top: y0, W: x1 - x0, H: y1 - y0}
 				})
+				outBoxes = append(outBoxes, tb)
 			}
 		}
 	}
@@ -226,6 +240,51 @@ func Recognize(img *image.NRGBA) (Result, error) {
 		Barcodes: barcodes,
 		Boxes:    outBoxes,
 	}, nil
+}
+
+// preciseSensitiveBoxes 用 VNRecognizedText.boundingBoxForRange:error: 取每个敏感片段的精确矩形。
+// NSRange 以 UTF-16 码元计数，需从字节区间换算。任一片段失败（或 panic）返回 nil，调用方应整行脱敏。
+func preciseSensitiveBoxes(top objc.ID, txt string, convert func(cgRect) TextBox) (out []TextBox) {
+	spans := SensitiveSpans(txt)
+	if len(spans) == 0 || top == 0 {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+		}
+	}()
+	for _, sp := range spans {
+		loc := utf16Len(txt[:sp[0]])
+		length := utf16Len(txt[sp[0]:sp[1]])
+		if length <= 0 {
+			continue
+		}
+		var nsErr objc.ID
+		obs := objc.Send[objc.ID](top, selBoundingBoxForRange, uintptr(loc), uintptr(length), uintptr(unsafe.Pointer(&nsErr)))
+		if obs == 0 {
+			return nil
+		}
+		b := msgBoundingBox(obs, selBoundingBox)
+		if b.W <= 0 || b.H <= 0 {
+			return nil
+		}
+		tb := convert(b)
+		if tb.W <= 0 || tb.H <= 0 {
+			return nil
+		}
+		out = append(out, tb)
+	}
+	return out
+}
+
+// utf16Len 返回字符串的 UTF-16 码元数（emoji 等辅助平面字符占 2 个）。
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
 }
 
 func isRunningUnderRosetta() bool {

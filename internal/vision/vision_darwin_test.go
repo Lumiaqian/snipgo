@@ -6,6 +6,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"math"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -148,4 +150,43 @@ func TestCutoutRealForegroundSubject(t *testing.T) {
 	}
 	t.Logf("Vision Cutout succeeded: %dx%d -> trimmed %dx%d (corner.A=%d, center.A=%d)",
 		canvas.Bounds().Dx(), canvas.Bounds().Dy(), b.Dx(), b.Dy(), corner.A, center.A)
+}
+
+func TestSensitiveBoxesCoverNumberAfterNarrowPrefix(t *testing.T) {
+	// 窄字符前缀会让「按字符比例估算」的框整体右移而漏掉号码开头。
+	txtImg := textrender.Render("iiiiiiiiiiiiiiii 13812345678", textrender.Options{
+		FontSize: 40,
+		Weight:   0.3,
+		Color:    color.NRGBA{R: 16, G: 16, B: 20, A: 255},
+	})
+	if txtImg == nil {
+		t.Fatal("textrender failed")
+	}
+	tb := txtImg.Bounds()
+	canvas := image.NewNRGBA(image.Rect(0, 0, tb.Dx()+120, tb.Dy()+120))
+	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(canvas, tb.Add(image.Pt(60, 60)), txtImg, tb.Min, draw.Over)
+
+	res, err := Recognize(canvas)
+	if err != nil {
+		t.Fatalf("Recognize failed: %v", err)
+	}
+	boxes := SensitiveBoxes(res)
+	if len(boxes) == 0 {
+		t.Skipf("Vision 未识别出手机号，跳过：%q", res.Text)
+	}
+	t.Logf("recognized %q, %d redaction boxes", res.Text, len(boxes))
+
+	W, H := float64(canvas.Bounds().Dx()), float64(canvas.Bounds().Dy())
+	for _, b := range boxes {
+		r := image.Rect(int(b.X*W), int(b.Top*H), int(math.Ceil((b.X+b.W)*W)), int(math.Ceil((b.Top+b.H)*H)))
+		draw.Draw(canvas, r, image.NewUniform(color.White), image.Point{}, draw.Src)
+	}
+	after, err := Recognize(canvas)
+	if err != nil {
+		t.Fatalf("second Recognize failed: %v", err)
+	}
+	if regexp.MustCompile(`\d{4}`).MatchString(after.Text) {
+		t.Fatalf("redaction left digits visible: %q", after.Text)
+	}
 }

@@ -18,6 +18,10 @@ type TextBox struct {
 	Top  float64
 	W    float64
 	H    float64
+	// Sensitive 是该行内敏感子串由识别引擎给出的精确归一化矩形（坐标系同上）。
+	// 仅当该行所有敏感片段都拿到了几何时才填充；为空表示没有精确几何，
+	// SensitiveBoxes 会退化为整行脱敏。
+	Sensitive []TextBox
 }
 
 // Result 是一次图像视觉分析输出。
@@ -43,63 +47,73 @@ var (
 	kvSecretPattern = regexp.MustCompile(`(?i)(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|bearer)\s*[:=]\s*(\S+)`)
 )
 
+// SensitiveSpans 返回文本中需要脱敏的字节区间 [lo,hi)（已排序并合并重叠或紧邻的区间）。
+func SensitiveSpans(text string) [][2]int {
+	var spans [][2]int
+	for _, re := range sensitivePatterns {
+		for _, idx := range re.FindAllStringIndex(text, -1) {
+			if idx[1] > idx[0] {
+				spans = append(spans, [2]int{idx[0], idx[1]})
+			}
+		}
+	}
+	for _, sub := range kvSecretPattern.FindAllStringSubmatchIndex(text, -1) {
+		if len(sub) >= 4 && sub[2] >= 0 && sub[3] > sub[2] {
+			spans = append(spans, [2]int{sub[2], sub[3]})
+		}
+	}
+	if len(spans) == 0 {
+		return nil
+	}
+	slices.SortFunc(spans, func(a, b [2]int) int { return cmp.Compare(a[0], b[0]) })
+	merged := [][2]int{spans[0]}
+	for _, sp := range spans[1:] {
+		last := &merged[len(merged)-1]
+		if sp[0] <= last[1]+1 {
+			if sp[1] > last[1] {
+				last[1] = sp[1]
+			}
+		} else {
+			merged = append(merged, sp)
+		}
+	}
+	return merged
+}
+
 // SensitiveBoxes 自动扫描识别结果中的敏感凭证/隐私字段（API Key、Token、邮箱、手机号、身份证、IP），
-// 按字符跨度在单行内精确定位需脱敏的子矩形 [0,1]。
+// 返回需脱敏的归一化矩形 [0,1]。
+// 优先使用识别引擎给出的精确子串矩形（TextBox.Sensitive，四周留少量余量）；
+// 没有精确几何时不再按字符数比例估算（窄字符会让框整体偏移而漏掉内容），而是隐私优先地整行脱敏。
 func SensitiveBoxes(res Result) []TextBox {
 	var out []TextBox
 	for _, bx := range res.Boxes {
 		if bx.Text == "" || bx.W <= 0 || bx.H <= 0 {
 			continue
 		}
-		totalRunes := max(1, utf8.RuneCountInString(bx.Text))
-		type span struct{ lo, hi int }
-		var spans []span
-		addByteSpan := func(b0, b1 int) {
-			r0 := utf8.RuneCountInString(bx.Text[:b0])
-			r1 := utf8.RuneCountInString(bx.Text[:b1])
-			if r1 > r0 {
-				spans = append(spans, span{r0, r1})
-			}
-		}
-		for _, re := range sensitivePatterns {
-			for _, idx := range re.FindAllStringIndex(bx.Text, -1) {
-				addByteSpan(idx[0], idx[1])
-			}
-		}
-		for _, sub := range kvSecretPattern.FindAllStringSubmatchIndex(bx.Text, -1) {
-			if len(sub) >= 4 && sub[2] >= 0 {
-				addByteSpan(sub[2], sub[3])
-			}
-		}
-		if len(spans) == 0 {
+		if len(SensitiveSpans(bx.Text)) == 0 {
 			continue
 		}
-		// 合并同一行内重叠或紧邻的脱敏区间。
-		slices.SortFunc(spans, func(a, b span) int { return cmp.Compare(a.lo, b.lo) })
-		merged := []span{spans[0]}
-		for _, sp := range spans[1:] {
-			last := &merged[len(merged)-1]
-			if sp.lo <= last.hi+1 {
-				if sp.hi > last.hi {
-					last.hi = sp.hi
+		if len(bx.Sensitive) > 0 {
+			for _, sb := range bx.Sensitive {
+				if sb.W <= 0 || sb.H <= 0 {
+					continue
 				}
-			} else {
-				merged = append(merged, sp)
+				out = append(out, padBox(bx.Text, sb, bx.W*0.02, bx.H*0.08))
 			}
+			continue
 		}
-		for _, sp := range merged {
-			f0 := max(0, float64(sp.lo)/float64(totalRunes)-0.015)
-			f1 := min(1, float64(sp.hi)/float64(totalRunes)+0.015)
-			out = append(out, TextBox{
-				Text: bx.Text,
-				X:    max(0, bx.X+bx.W*f0),
-				Top:  max(0, bx.Top-bx.H*0.08),
-				W:    min(1, bx.W*(f1-f0)),
-				H:    min(1, bx.H*1.16),
-			})
-		}
+		out = append(out, padBox(bx.Text, bx, bx.W*0.01, bx.H*0.08))
 	}
 	return out
+}
+
+// padBox 向四周外扩 (dx,dy) 并夹紧到 [0,1]。
+func padBox(text string, b TextBox, dx, dy float64) TextBox {
+	x0 := max(0, b.X-dx)
+	y0 := max(0, b.Top-dy)
+	x1 := min(1, b.X+b.W+dx)
+	y1 := min(1, b.Top+b.H+dy)
+	return TextBox{Text: text, X: x0, Top: y0, W: x1 - x0, H: y1 - y0}
 }
 
 // ExtractLinks 从二维码结果与识别文本中提取去重保序的网页链接或二维码内容。
