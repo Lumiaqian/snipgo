@@ -371,6 +371,19 @@ func (a *app) trackPerm(err error) {
 	})
 }
 
+// permissionPromptOptions 是屏幕录制权限提示：同时照顾「从未授权」和「签名变化后旧授权失效」两种情况。
+func permissionPromptOptions() mygo.MessageOptions {
+	return mygo.MessageOptions{
+		Title:   "需要屏幕录制权限",
+		Message: "SnipGo 当前没有可用的屏幕录制授权，无法截图与贴图。",
+		Detail: "如果从未授权：在系统设置「隐私与安全性 → 录屏与系统录音」中打开 SnipGo 开关，再点「已开启，重启 SnipGo」。\n" +
+			"如果之前授权过（例如更新或重新安装后仍出现本提示）：旧授权可能绑定在旧版本的签名上，直接开关无效，请点「重置旧记录并重新授权」。",
+		Buttons:       []string{"重置旧记录并重新授权", "已开启，重启 SnipGo", "取消"},
+		DefaultButton: 0,
+		CancelButton:  2,
+	}
+}
+
 func (a *app) promptPermission() {
 	if !a.alertShowing.CompareAndSwap(false, true) {
 		return
@@ -382,14 +395,7 @@ func (a *app) promptPermission() {
 		a.refreshMenu()
 	})
 	mygo.App.Focus()
-	res, err := mygo.Dialog.Message(mygo.MessageOptions{
-		Title:         "需要更新屏幕录制授权",
-		Message:       "开发版 SnipGo 重新编译后签名哈希已变化，macOS 里旧的授权记录不再匹配当前版本。",
-		Detail:        "直接开关旧记录不会更新签名哈希。请点击「重置旧记录并重新授权」，在弹出的系统窗口或「录屏与系统录音」中打开 SnipGo 开关，再点「重启 SnipGo」即可正常截图与贴图。",
-		Buttons:       []string{"重置旧记录并重新授权", "已开启，重启 SnipGo", "取消"},
-		DefaultButton: 0,
-		CancelButton:  2,
-	})
+	res, err := mygo.Dialog.Message(permissionPromptOptions())
 	if err != nil {
 		return
 	}

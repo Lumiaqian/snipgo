@@ -63,7 +63,7 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 - **贴图交互与拖拽**：贴图支持原地进入矢量标注（`E`）、滚轮缩放、`Shift`/`Alt+滚轮` 调透明度、右键 8px 边缘磁吸与横纵向拼接、点击穿透（`P`）、折叠为迷你胶囊（`M`），以及按住悬停栏左一按钮直接将 `.png` 拖入微信、Slack、GitHub 或 Finder。
 - **最近截图历史（`Cmd+Shift+H`）& 免弹窗快存**：自动环形归档最近 20 张截图（双列网格预览、直接拖出 PNG、复制/贴图/套模板/识图/删除）；偏好设置（`Cmd+,`）支持点击键帽直接按键录入并校验冲突的全部全局快捷键、`Cmd+S` 免弹窗一键快存与保存同时复制到剪贴板。
 - **macOS 26 Tahoe Liquid Glass 体验与物理弹簧动效**：原生 `NSGlassEffectView` 融合着色与 `glass.NewGroup` 合并玻璃按钮组、滑动液态玻璃分段控制器、物理拉伸旋钮开关、渐进式滚动边缘模糊与弹簧入场动画；偏好设置支持实时切换 **外观模式（跟随系统 / 浅色 / 深色）**、**液态玻璃浓度（清透 / 标准 / 浓磨砂）** 与 **8 种系统/自定义主题强调色**；全浮窗统一左上角带清晰 `×` 的 macOS 红灯关闭按钮（`Cmd+W` / `Esc` 关闭，菜单栏常驻，`Cmd+Q` 退出应用）。
-- **内置签名自动更新**：底层接入 MyGo 官方 `mygo.Updater`（直接从 GitHub Releases 静态下载通道读取 `update-darwin-*.json`，不受 GitHub REST API 限流 403 影响），配合 Liquid Glass 更新窗支持后台每 24 小时静默检测、Beta 预览版通道、跳过指定版本与更新日志展示；下载归档与 `bsdiff` 增量补丁经 **Ed25519 公钥数字签名校验**，退出时原子替换 `.app` 包并平滑重启（保留全部配置、历史记录与权限状态）。
+- **内置签名自动更新**：底层接入 MyGo 官方 `mygo.Updater`（直接从 GitHub Releases 静态下载通道读取 `update-darwin-*.json`，不受 GitHub REST API 限流 403 影响），配合 Liquid Glass 更新窗支持后台每 24 小时静默检测、Beta 预览版通道、跳过指定版本与更新日志展示；下载归档与 `bsdiff` 增量补丁经 **Ed25519 公钥数字签名校验**，退出时原子替换 `.app` 包并平滑重启（保留全部配置与历史记录；未使用 Developer ID 签名的 ad-hoc 构建在更新后签名哈希会变化，macOS 会要求重新授予屏幕录制权限）。
 
 ---
 
@@ -123,6 +123,7 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
      xattr -dr com.apple.quarantine /Applications/SnipGo.app
      ```
    - 首次截屏请在 **系统设置 → 隐私与安全性 → 录屏与系统录音** 中允许 **SnipGo**，授权后重开应用生效。
+   - ad-hoc 签名构建（未配置 Developer ID 证书的发布包）的屏幕录制授权绑定在具体的二进制哈希上：每次更新或重新编译后，macOS 都可能视其为新应用。若截图提示需要权限，请在上述设置中重新打开 SnipGo 的开关（必要时先删除旧记录），再重启应用。
 
 ---
 
