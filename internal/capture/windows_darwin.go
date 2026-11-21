@@ -6,6 +6,7 @@ import (
 	"image"
 	"math"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -104,6 +105,13 @@ func VisibleWindows(cursor image.Point, displays []Display, excludeTitle string)
 
 // VisibleWindowInfos 返回带 CGWindowID 的可见窗口信息列表（供独立单窗无背景抠图使用）。
 func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle string) (front WindowInfo, windows []WindowInfo) {
+	// 可能在后台 goroutine 调用：NSRunningApplication/NSWorkspace 返回 autoreleased 对象，
+	// 必须固定线程并自建 autorelease pool，否则对象在线程上一直不被释放。
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	pool := objc.ID(objc.GetClass("NSAutoreleasePool")).Send(selAlloc).Send(selInit)
+	defer pool.Send(selDrain)
+
 	if !initWindowSymbols() {
 		return WindowInfo{}, nil
 	}

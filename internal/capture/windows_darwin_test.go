@@ -4,6 +4,7 @@ package capture
 
 import (
 	"image"
+	"sync"
 	"testing"
 )
 
@@ -40,4 +41,28 @@ func TestVisibleWindowsReturnsValidRects(t *testing.T) {
 	if len(wins) > 0 && front.Empty() {
 		t.Fatalf("expected non-empty front window when %d windows exist", len(wins))
 	}
+}
+
+// 后台 goroutine 并发调用 VisibleWindowInfos（captureFrozen 的实际用法）不应崩溃，
+// 且两次读取的窗口 ID 集合应一致。autorelease 泄漏本身无法在单测里观测。
+func TestVisibleWindowInfosConcurrent(t *testing.T) {
+	displays := []Display{{ID: 1, Bounds: image.Rect(0, 0, 1728, 1117), Scale: 2}}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				front, wins := VisibleWindowInfos(image.Pt(500, 500), displays, "SnipGo 选区")
+				for _, w := range wins {
+					if w.Bounds.Empty() {
+						t.Errorf("empty bounds %+v", w)
+						return
+					}
+				}
+				_ = front
+			}
+		}()
+	}
+	wg.Wait()
 }
