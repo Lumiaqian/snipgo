@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -34,6 +35,10 @@ const (
 	collapsedPillW  = 176
 	collapsedPillH  = 32
 	maxClosedPinCap = 10
+	// 已关闭贴图只保留 PNG 字节，总量超过上限时从最旧的开始淘汰。
+	maxClosedPinBytes = 200 << 20
+	// 贴图位图显示后释放 CPU 像素前的等待，确保首帧已绘制。
+	pinReleasePixelsDelay = 400 * time.Millisecond
 )
 
 type pinWin struct {
@@ -63,6 +68,8 @@ type pinWin struct {
 	comparePeerBmp *ui.Bitmap
 	compareDiffRes pinops.DiffResult
 	compareDiffBmp *ui.Bitmap
+	comparePending bool // 像素 Diff 正在后台计算
+	compareGen     int  // 每次进入/退出对比递增，用于丢弃过期的后台结果
 	compareSplit   float64
 	compareDrag    bool
 	annotDrag      bool
@@ -72,8 +79,8 @@ type pinWin struct {
 	hasHover       bool
 }
 
+// closedPinRecord 只保存 PNG 与几何信息；恢复时再解码，避免长期占用整张 NRGBA。
 type closedPinRecord struct {
-	img     *image.NRGBA
 	png     []byte
 	at      image.Point
 	origW   int
@@ -148,7 +155,6 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 		// 编辑中直接关闭时，可恢复记录也要带上未完成的标注
 		pngBytes := p.exportPNG()
 		a.pushClosedPin(closedPinRecord{
-			img:     p.img,
 			png:     pngBytes,
 			at:      image.Pt(b.X, b.Y),
 			origW:   p.origW,
@@ -169,8 +175,29 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 	})
 	a.pins = append(a.pins, p)
 	p.win.ShowInactive()
+	releaseBitmapPixelsLater(p.win, baseBmp)
 	p.refreshShadowSoon()
 	a.refreshMenu()
+}
+
+// releaseBitmapPixelsLater 在位图首帧显示后释放其 CPU 像素副本（主线程执行）。
+// 贴图仍持有 img/baseImg，mygo 需要时会从源图重新生成，所以显示与编辑不受影响。
+func releaseBitmapPixelsLater(win *mygo.Window, bmps ...*ui.Bitmap) {
+	if win == nil || !mygo.App.IsReady() {
+		return
+	}
+	time.AfterFunc(pinReleasePixelsDelay, func() {
+		mygo.RunOnMain(func() {
+			if win.IsDestroyed() {
+				return
+			}
+			for _, b := range bmps {
+				if b != nil {
+					b.ReleasePixels()
+				}
+			}
+		})
+	})
 }
 
 func (p *pinWin) refreshShadowSoon() {
@@ -896,23 +923,48 @@ func (a *app) openPinTemplate(p *pinWin) {
 }
 
 func (a *app) pushClosedPin(rec closedPinRecord) {
-	if rec.img == nil {
+	if len(rec.png) == 0 {
 		return
 	}
-	if len(a.closedPins) >= maxClosedPinCap {
+	a.closedPins = append(a.closedPins, rec)
+	total := 0
+	for _, r := range a.closedPins {
+		total += len(r.png)
+	}
+	// 先按条数、再按总字节数淘汰最旧记录（至少保留刚关闭的这一张）。
+	for len(a.closedPins) > 1 && (len(a.closedPins) > maxClosedPinCap || total > maxClosedPinBytes) {
+		total -= len(a.closedPins[0].png)
+		a.closedPins[0] = closedPinRecord{}
 		a.closedPins = a.closedPins[1:]
 	}
-	a.closedPins = append(a.closedPins, rec)
 }
 
-// RestoreLastPin 恢复最近一次关闭的贴图窗口（支持连续恢复多张）。
+// decodeClosedPin 把记录里的 PNG 解码回可显示的 NRGBA。
+func decodeClosedPin(rec closedPinRecord) (*image.NRGBA, error) {
+	img, err := decodeImageLimited(rec.png)
+	if err != nil {
+		return nil, err
+	}
+	return toNRGBA(img), nil
+}
+
+// RestoreLastPin 恢复最近一次关闭的贴图窗口（支持连续恢复多张）。解码在后台完成，窗口在主线程创建。
 func (a *app) RestoreLastPin() {
 	if len(a.closedPins) == 0 {
 		return
 	}
 	last := a.closedPins[len(a.closedPins)-1]
+	a.closedPins[len(a.closedPins)-1] = closedPinRecord{}
 	a.closedPins = a.closedPins[:len(a.closedPins)-1]
-	a.showPinWithState(last.img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout)
+	go func() {
+		img, err := decodeClosedPin(last)
+		if err != nil {
+			return
+		}
+		mygo.RunOnMain(func() {
+			a.showPinWithState(img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout)
+		})
+	}()
 }
 
 func (p *pinWin) applyZoom(targetZoom, anchorX, anchorY float64) {
@@ -1217,10 +1269,10 @@ func (a *app) togglePinCompare(p *pinWin) {
 	p.compareDiff = false
 	p.comparePeer = peer.img
 	p.comparePeerBmp = ui.NewBitmap(peer.img)
-	p.compareDiffRes = pinops.RenderPixelDiff(peer.img, p.img, 12)
-	if p.compareDiffRes.Image != nil {
-		p.compareDiffBmp = ui.NewBitmap(p.compareDiffRes.Image)
-	}
+	p.compareDiffRes = pinops.DiffResult{}
+	p.compareDiffBmp = nil
+	p.compareGen++
+	p.startPixelDiff(peer.img, p.img)
 	if p.compareSplit <= 0.02 || p.compareSplit >= 0.98 {
 		p.compareSplit = 0.5
 	}
@@ -1230,7 +1282,33 @@ func (a *app) togglePinCompare(p *pinWin) {
 	}
 }
 
+// startPixelDiff 在后台计算整图像素 Diff，完成后回到主线程应用；
+// 对比已退出/重进、或配对图与当前图已变化时丢弃结果。
+func (p *pinWin) startPixelDiff(peerImg, selfImg *image.NRGBA) {
+	gen := p.compareGen
+	p.comparePending = true
+	runBackground(func() {
+		res := pinops.RenderPixelDiff(peerImg, selfImg, 12)
+		runOnMain(func() {
+			if !p.compareMode || p.compareGen != gen || p.comparePeer != peerImg || p.img != selfImg {
+				return
+			}
+			p.comparePending = false
+			p.compareDiffRes = res
+			if res.Image != nil {
+				p.compareDiffBmp = ui.NewBitmap(res.Image)
+			}
+			if p.win != nil && !p.win.IsDestroyed() {
+				p.win.Invalidate()
+			}
+		})
+	})
+}
+
 func (p *pinWin) exitCompareMode() {
+	p.compareGen++
+	p.comparePending = false
+	p.compareDiffRes = pinops.DiffResult{}
 	p.compareMode = false
 	p.compareDiff = false
 	p.compareDrag = false
@@ -1345,6 +1423,9 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 	_ = bar.Clicked()
 	bar.Children(func() {
 		diffLabel := fmt.Sprintf("热力图 · %.2f%%", p.compareDiffRes.DiffPercent)
+		if p.comparePending {
+			diffLabel = "热力图 · 计算中…"
+		}
 		cmpSel := 0
 		if p.compareDiff {
 			cmpSel = 1
@@ -1361,29 +1442,38 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 	})
 }
 
+// copyCompareComposite 复制当前对比结果；合成与 PNG 编码在后台完成，剪贴板与历史在主线程写入。
 func (a *app) copyCompareComposite(p *pinWin) {
-	if p == nil || !p.compareMode {
+	if p == nil || !p.compareMode || p.img == nil {
 		return
 	}
-	var out *image.NRGBA
-	if p.compareDiff {
-		out = p.compareDiffRes.Image
-	} else {
-		scale := max(1.0, float64(p.img.Bounds().Dx())/float64(max(1, p.origW)))
-		out = pinops.RenderSplitCompare(p.comparePeer, p.img, p.compareSplit, scale)
-	}
-	if out == nil || out.Bounds().Empty() {
+	diff := p.compareDiff
+	if diff && p.comparePending {
+		a.sessionStatus("热力图仍在计算，请稍后再复制")
 		return
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, out); err != nil {
-		return
-	}
-	data := buf.Bytes()
-	go mygo.RunOnMain(func() {
-		_ = mygo.Clipboard.WriteImage(data)
-		a.recordHistory(data, out.Bounds().Dx(), out.Bounds().Dy())
-		a.sessionStatus("已复制贴图对比结果")
+	diffImg := p.compareDiffRes.Image
+	peer, cur, split := p.comparePeer, p.img, p.compareSplit
+	scale := max(1.0, float64(cur.Bounds().Dx())/float64(max(1, p.origW)))
+	runBackground(func() {
+		out := diffImg
+		if !diff {
+			out = pinops.RenderSplitCompare(peer, cur, split, scale)
+		}
+		if out == nil || out.Bounds().Empty() {
+			return
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, out); err != nil {
+			return
+		}
+		data := buf.Bytes()
+		w, h := out.Bounds().Dx(), out.Bounds().Dy()
+		runOnMain(func() {
+			_ = mygo.Clipboard.WriteImage(data)
+			a.recordHistory(data, w, h)
+			a.sessionStatus("已复制贴图对比结果")
+		})
 	})
 }
 
@@ -1449,23 +1539,38 @@ func (a *app) mergeAllPins(horizontal bool) {
 	for i, e := range list {
 		imgs[i] = e.pin.img
 	}
-	merged := pinops.MergeImages(imgs, horizontal, 16, color.NRGBA{R: 22, G: 24, B: 30, A: 255})
-	if merged == nil || merged.Bounds().Empty() {
-		return
+	if !mergePinsBusy.CompareAndSwap(false, true) {
+		return // 上一次拼接仍在后台进行，忽略重复触发
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, merged); err != nil {
-		return
-	}
-	data := buf.Bytes()
-	_ = mygo.Clipboard.WriteImage(data)
-	a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy())
-	dipW := max(120, min(1100, merged.Bounds().Dx()/2))
-	dipH := max(80, min(800, merged.Bounds().Dy()/2))
-	cur := mygo.Screen.CursorScreenPoint()
-	a.ShowPin(merged, data, image.Pt(max(20, cur.X-dipW/2), max(40, cur.Y-dipH/2)), dipW, dipH)
-	a.sessionStatus(fmt.Sprintf("已拼接 %d 张贴图并复制到剪贴板", len(imgs)))
+	a.sessionStatus("正在拼接贴图…")
+	// 拼接与 PNG 编码在后台完成，结果回到主线程后再写剪贴板、历史并新建贴图。
+	runBackground(func() {
+		merged := pinops.MergeImages(imgs, horizontal, 16, color.NRGBA{R: 22, G: 24, B: 30, A: 255})
+		var data []byte
+		if merged != nil && !merged.Bounds().Empty() {
+			var buf bytes.Buffer
+			if png.Encode(&buf, merged) == nil {
+				data = buf.Bytes()
+			}
+		}
+		runOnMain(func() {
+			defer mergePinsBusy.Store(false)
+			if len(data) == 0 {
+				return
+			}
+			_ = mygo.Clipboard.WriteImage(data)
+			a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy())
+			dipW := max(120, min(1100, merged.Bounds().Dx()/2))
+			dipH := max(80, min(800, merged.Bounds().Dy()/2))
+			cur := mygo.Screen.CursorScreenPoint()
+			a.ShowPin(merged, data, image.Pt(max(20, cur.X-dipW/2), max(40, cur.Y-dipH/2)), dipW, dipH)
+			a.sessionStatus(fmt.Sprintf("已拼接 %d 张贴图并复制到剪贴板", len(imgs)))
+		})
+	})
 }
+
+// mergePinsBusy 标记一键拼接是否正在后台进行。
+var mergePinsBusy atomic.Bool
 
 // PasteClipboardPin 把剪贴板里的图像、图片文件、代码/文字或 #RRGGBB 色号直接转为悬浮贴图。
 func (a *app) PasteClipboardPin() {

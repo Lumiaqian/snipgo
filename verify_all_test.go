@@ -305,7 +305,15 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 	_, _ = hStore.Add(fBytes, 960, 540)
 	hw := &historyWindow{thumbs: map[string]*ui.Bitmap{}}
 	a.histWin = hw
+	// 缩略图改为后台加载：用本 goroutine 充当主线程，取回 2 张缩略图后再渲染。
+	thumbMain := make(chan func(), 4)
+	prevRun := runOnMain
+	runOnMain = func(fn func()) { thumbMain <- fn }
 	a.reloadHistoryWindow()
+	for range 2 {
+		(<-thumbMain)()
+	}
+	runOnMain = prevRun
 	hw.statusBadge = "✓ 已复制到剪贴板"
 
 	sw := &settingsWindow{

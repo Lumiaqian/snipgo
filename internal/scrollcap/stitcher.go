@@ -10,15 +10,29 @@ import (
 // DefaultMaxHeight 限制单张长截图最大物理像素高度，防止极端无限滚动占满内存。
 const DefaultMaxHeight = 24000
 
+// strip 是滚动正文中的一段横条。pv 是按预览宽度缩小后的缓存（nil 表示需重算）。
+type strip struct {
+	img *image.NRGBA
+	pv  *image.NRGBA
+}
+
 // Stitcher 接收同一屏幕选区连续采集的多帧位图，自动剥离上下固定栏并按滚动位移纵向拼接。
+//
+// 滚动正文以横条列表存储：每帧只追加新增的那一条，不再整体复制已累积内容（O(n) 而非 O(n²)）。
+// 非并发安全，调用方需自行加锁。
 type Stitcher struct {
 	MaxHeight int
 
 	prev      *image.NRGBA
-	headBody  *image.NRGBA // 已累积的「顶部 + 滚动正文」（不含上一帧底部固定栏）
+	body      []*strip // 已累积的「顶部 + 滚动正文」（不含上一帧底部固定栏）
+	bodyW     int
+	bodyH     int
 	tail      *image.NRGBA // 最新一帧的底部固定栏（实时合成到 Result 末尾）
+	tailPv    *image.NRGBA
+	pvW       int // 预览缓存对应的目标宽度
 	frames    int
 	totalGrow int
+	capped    bool
 }
 
 // New 创建长截图拼接器。
@@ -29,33 +43,193 @@ func New() *Stitcher {
 // Frames 返回已成功采纳的有效帧数（含首帧）。
 func (s *Stitcher) Frames() int { return s.frames }
 
+// Capped 返回是否已达到 MaxHeight 且有新帧因此被拒绝。
+func (s *Stitcher) Capped() bool { return s.capped }
+
 // Size 返回当前拼接成品的物理像素宽高。
 func (s *Stitcher) Size() (w, h int) {
-	if s.headBody == nil {
+	if len(s.body) == 0 {
 		return 0, 0
 	}
-	w = s.headBody.Bounds().Dx()
-	h = s.headBody.Bounds().Dy()
+	h = s.bodyH
 	if s.tail != nil {
 		h += s.tail.Bounds().Dy()
 	}
-	return w, h
+	return s.bodyW, h
 }
 
 // Result 生成当前完整长截图副本（含首帧头部 + 全部滚动正文 + 最新底部固定栏）。
+// 会整体分配一次，仅应在完成时调用；实时预览请用 Preview。
 func (s *Stitcher) Result() *image.NRGBA {
-	if s.headBody == nil {
+	if len(s.body) == 0 {
 		return nil
 	}
 	w, h := s.Size()
 	out := image.NewNRGBA(image.Rect(0, 0, w, h))
-	hb := s.headBody.Bounds()
-	draw.Draw(out, image.Rect(0, 0, w, hb.Dy()), s.headBody, hb.Min, draw.Src)
+	y := 0
+	for _, st := range s.body {
+		y += copyRows(out, y, st.img)
+	}
 	if s.tail != nil && !s.tail.Bounds().Empty() {
-		tb := s.tail.Bounds()
-		draw.Draw(out, image.Rect(0, hb.Dy(), w, h), s.tail, tb.Min, draw.Src)
+		copyRows(out, y, s.tail)
 	}
 	return out
+}
+
+// Preview 返回宽度不超过 maxW 的缩小合成图（面积平均），用于实时预览。
+// 每条横条的缩小结果被缓存，只有新增/被修改的条带需要重算，单次开销与新增高度成正比。
+func (s *Stitcher) Preview(maxW int) *image.NRGBA {
+	if len(s.body) == 0 || maxW <= 0 {
+		return nil
+	}
+	if maxW != s.pvW {
+		s.pvW = maxW
+		s.tailPv = nil
+		for _, st := range s.body {
+			st.pv = nil
+		}
+	}
+	scaled := func(img *image.NRGBA) *image.NRGBA {
+		return scaleToWidth(img, maxW)
+	}
+	totalH := 0
+	for _, st := range s.body {
+		if st.pv == nil {
+			st.pv = scaled(st.img)
+		}
+		totalH += st.pv.Bounds().Dy()
+	}
+	if s.tail != nil {
+		if s.tailPv == nil {
+			s.tailPv = scaled(s.tail)
+		}
+		totalH += s.tailPv.Bounds().Dy()
+	}
+	out := image.NewNRGBA(image.Rect(0, 0, s.body[0].pv.Bounds().Dx(), totalH))
+	y := 0
+	for _, st := range s.body {
+		y += copyRows(out, y, st.pv)
+	}
+	if s.tail != nil {
+		copyRows(out, y, s.tailPv)
+	}
+	return out
+}
+
+// copyRows 把 src 整体复制到 dst 的第 y 行起，返回复制的行数。
+func copyRows(dst *image.NRGBA, y int, src *image.NRGBA) int {
+	sb := src.Bounds()
+	rows := sb.Dy()
+	rowLen := min(sb.Dx(), dst.Bounds().Dx()) * 4
+	for r := range rows {
+		so := src.PixOffset(sb.Min.X, sb.Min.Y+r)
+		do := dst.PixOffset(0, y+r)
+		copy(dst.Pix[do:do+rowLen], src.Pix[so:so+rowLen])
+	}
+	return rows
+}
+
+// scaleToWidth 用面积平均把 img 缩到宽度 maxW（等比）；宽度不超过 maxW 时原样返回（只读共享）。
+func scaleToWidth(img *image.NRGBA, maxW int) *image.NRGBA {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= maxW || w == 0 || h == 0 {
+		return img
+	}
+	ow := maxW
+	oh := max(1, int(math.Round(float64(h)*float64(ow)/float64(w))))
+	return boxScale(img, ow, oh)
+}
+
+// boxScale 面积平均缩放（仅缩小）。
+func boxScale(src *image.NRGBA, ow, oh int) *image.NRGBA {
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	dst := image.NewNRGBA(image.Rect(0, 0, ow, oh))
+	for oy := range oh {
+		y0 := oy * h / oh
+		y1 := max(y0+1, (oy+1)*h/oh)
+		for ox := range ow {
+			x0 := ox * w / ow
+			x1 := max(x0+1, (ox+1)*w/ow)
+			var r, g, bl, n int
+			for y := y0; y < y1; y++ {
+				row := src.Pix[src.PixOffset(b.Min.X+x0, b.Min.Y+y):]
+				for x := 0; x < (x1-x0)*4; x += 4 {
+					r += int(row[x])
+					g += int(row[x+1])
+					bl += int(row[x+2])
+					n++
+				}
+			}
+			o := dst.PixOffset(ox, oy)
+			dst.Pix[o] = uint8(r / n)
+			dst.Pix[o+1] = uint8(g / n)
+			dst.Pix[o+2] = uint8(bl / n)
+			dst.Pix[o+3] = 255
+		}
+	}
+	return dst
+}
+
+// trimBottom 从正文末尾去掉 n 行。
+func (s *Stitcher) trimBottom(n int) {
+	for n > 0 && len(s.body) > 0 {
+		last := s.body[len(s.body)-1]
+		h := last.img.Bounds().Dy()
+		if h <= n {
+			s.body = s.body[:len(s.body)-1]
+			s.bodyH -= h
+			n -= h
+			continue
+		}
+		keep := h - n
+		img := last.img
+		last.img = &image.NRGBA{Pix: img.Pix[:keep*img.Stride], Stride: img.Stride, Rect: image.Rect(0, 0, img.Bounds().Dx(), keep)}
+		last.pv = nil
+		s.bodyH -= n
+		return
+	}
+}
+
+// pushStrip 追加一条已独立持有像素的横条。
+func (s *Stitcher) pushStrip(img *image.NRGBA) {
+	s.body = append(s.body, &strip{img: img})
+	s.bodyH += img.Bounds().Dy()
+}
+
+// blendTail 在正文末尾 feather 行与 src 的接缝上方 feather 行之间做平滑过渡，消除抗锯齿抖动缝隙。
+func (s *Stitcher) blendTail(src *image.NRGBA, bandMinY, feather int) {
+	// 从末尾向前收集需要修改的行（至多 feather 行，可能跨条）。
+	rows := make([][]uint8, feather)
+	need := feather
+	for i := len(s.body) - 1; i >= 0 && need > 0; i-- {
+		st := s.body[i]
+		sh := st.img.Bounds().Dy()
+		took := false
+		for r := sh - 1; r >= 0 && need > 0; r-- {
+			need--
+			rows[need] = st.img.Pix[st.img.PixOffset(0, r):]
+			took = true
+		}
+		if took {
+			st.pv = nil
+		}
+	}
+	w := s.bodyW
+	for f := range feather {
+		alpha := float64(f+1) / float64(feather+1)
+		sy := bandMinY - feather + f
+		oRow := rows[f]
+		sRow := src.Pix[src.PixOffset(src.Bounds().Min.X, sy):]
+		for x := range w {
+			i := x * 4
+			oRow[i] = uint8(math.Round(float64(oRow[i])*(1-alpha) + float64(sRow[i])*alpha))
+			oRow[i+1] = uint8(math.Round(float64(oRow[i+1])*(1-alpha) + float64(sRow[i+1])*alpha))
+			oRow[i+2] = uint8(math.Round(float64(oRow[i+2])*(1-alpha) + float64(sRow[i+2])*alpha))
+			oRow[i+3] = 255
+		}
+	}
 }
 
 // Push 送入最新一帧选区截图。返回本帧新增拼接的像素高度与画面是否发生有效向下滚动。
@@ -74,10 +248,12 @@ func (s *Stitcher) Push(frame *image.NRGBA) (addedPx int, ok bool) {
 	}
 
 	if s.prev == nil {
-		cp := cloneNRGBA(frame, fb)
-		s.prev = cp
-		s.headBody = cloneNRGBA(cp, cp.Bounds())
-		s.tail = nil
+		s.prev = cloneNRGBA(frame, fb)
+		s.body = nil
+		s.bodyH = 0
+		s.bodyW = w
+		s.pushStrip(cloneNRGBA(frame, fb))
+		s.tail, s.tailPv = nil, nil
 		s.frames = 1
 		return h, true
 	}
@@ -87,6 +263,7 @@ func (s *Stitcher) Push(frame *image.NRGBA) (addedPx int, ok bool) {
 	}
 	_, curH := s.Size()
 	if curH >= maxH {
+		s.capped = true
 		return 0, false
 	}
 
@@ -104,45 +281,47 @@ func (s *Stitcher) Push(frame *image.NRGBA) (addedPx int, ok bool) {
 		return 0, false
 	}
 
-	// 首帧尚未剥离底部固定栏时，先将 prev 的 [botAct..h) 从 headBody 拆出作为动态尾栏。
+	// 首帧尚未剥离底部固定栏时，先将 prev 的 [botAct..h) 从正文拆出作为动态尾栏。
 	if s.tail == nil && botAct < h {
-		hb := s.headBody.Bounds()
-		trimH := hb.Dy() - (h - botAct)
-		if trimH > 0 {
-			s.headBody = cloneNRGBA(s.headBody, image.Rect(0, 0, w, trimH))
+		if trimH := s.bodyH - (h - botAct); trimH > 0 {
+			s.trimBottom(h - botAct)
 		}
 	} else if s.tail != nil {
 		// 若本帧检测到的底部固定栏高度变化，对齐到新的 botAct。
 		oldTailH := s.tail.Bounds().Dy()
 		newTailH := h - botAct
 		if newTailH > oldTailH {
-			// 需要从 headBody 末尾多拆一点，或直接按重叠位置衔接
+			// 需要从正文末尾多拆一点，或直接按重叠位置衔接
 			diff := newTailH - oldTailH
-			if s.headBody.Bounds().Dy() > diff+16 {
-				s.headBody = cloneNRGBA(s.headBody, image.Rect(0, 0, w, s.headBody.Bounds().Dy()-diff))
+			if s.bodyH > diff+16 {
+				s.trimBottom(diff)
 			}
 		} else if newTailH < oldTailH {
 			// 把之前暂存尾栏里滚入正文的部分补回
-			recoverR := image.Rect(0, 0, w, oldTailH-newTailH)
-			s.headBody = appendVertical(s.headBody, s.tail, recoverR, 0)
+			s.pushStrip(cloneNRGBA(s.tail, image.Rect(0, 0, w, oldTailH-newTailH)))
 		}
 	}
 
-	avail := maxH - (s.headBody.Bounds().Dy() + (h - botAct))
+	avail := maxH - (s.bodyH + (h - botAct))
 	if avail <= 0 {
+		s.capped = true
 		return 0, false
 	}
 	useDY := min(dy, avail)
 	newBand := image.Rect(fb.Min.X, fb.Min.Y+botAct-dy, fb.Min.X+w, fb.Min.Y+botAct-dy+useDY)
-	feather := min(4, min(useDY/2, botAct-topAct-dy))
-	s.headBody = appendVertical(s.headBody, frame, newBand, max(0, feather))
+	feather := max(0, min(4, min(useDY/2, botAct-topAct-dy)))
+	if feather > 0 && s.bodyH > feather && newBand.Min.Y >= feather {
+		s.blendTail(frame, newBand.Min.Y, feather)
+	}
+	s.pushStrip(cloneNRGBA(frame, newBand))
 
 	if botAct < h {
 		s.tail = cloneNRGBA(frame, image.Rect(fb.Min.X, fb.Min.Y+botAct, fb.Min.X+w, fb.Max.Y))
 	} else {
 		s.tail = nil
 	}
-	s.prev = cloneNRGBA(frame, fb)
+	s.tailPv = nil
+	copyRows(s.prev, 0, frame) // 复用上一帧缓冲，避免每帧整帧分配
 	s.frames++
 	s.totalGrow += useDY
 	return useDY, true
@@ -337,35 +516,6 @@ func sadBand(prev *image.NRGBA, py0 int, curr *image.NRGBA, cy0, bandH, x0, x1 i
 		return math.MaxFloat64
 	}
 	return float64(sum) / float64(cnt)
-}
-
-func appendVertical(top *image.NRGBA, src *image.NRGBA, band image.Rectangle, feather int) *image.NRGBA {
-	tb := top.Bounds()
-	w := tb.Dx()
-	oldH := tb.Dy()
-	addH := band.Dy()
-	out := image.NewNRGBA(image.Rect(0, 0, w, oldH+addH))
-	draw.Draw(out, image.Rect(0, 0, w, oldH), top, tb.Min, draw.Src)
-	draw.Draw(out, image.Rect(0, oldH, w, oldH+addH), src, band.Min, draw.Src)
-
-	// 在接缝上方 feather 行执行平滑过渡，消除微弱渲染抗锯齿抖动缝隙。
-	if feather > 0 && oldH > feather && band.Min.Y >= feather {
-		for f := range feather {
-			alpha := float64(f+1) / float64(feather+1)
-			oy := oldH - feather + f
-			sy := band.Min.Y - feather + f
-			oRow := out.Pix[out.PixOffset(0, oy):]
-			sRow := src.Pix[src.PixOffset(band.Min.X, sy):]
-			for x := range w {
-				i := x * 4
-				oRow[i] = uint8(math.Round(float64(oRow[i])*(1-alpha) + float64(sRow[i])*alpha))
-				oRow[i+1] = uint8(math.Round(float64(oRow[i+1])*(1-alpha) + float64(sRow[i+1])*alpha))
-				oRow[i+2] = uint8(math.Round(float64(oRow[i+2])*(1-alpha) + float64(sRow[i+2])*alpha))
-				oRow[i+3] = 255
-			}
-		}
-	}
-	return out
 }
 
 func cloneNRGBA(src *image.NRGBA, r image.Rectangle) *image.NRGBA {

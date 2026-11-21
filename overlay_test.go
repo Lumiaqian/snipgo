@@ -723,7 +723,7 @@ func TestClosedPinHistoryRingBuffer(t *testing.T) {
 	a := &app{}
 	for i := range 14 {
 		a.pushClosedPin(closedPinRecord{
-			img:   image.NewNRGBA(image.Rect(0, 0, 10, 10)),
+			png:   testHistoryPNG(10, 10),
 			origW: 100 + i,
 			origH: 80,
 		})

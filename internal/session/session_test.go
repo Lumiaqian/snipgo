@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -798,5 +799,111 @@ func TestLiveConfirmIgnoresMismatchedPreviewFrame(t *testing.T) {
 	<-done
 	if captures != 1 {
 		t.Fatalf("CaptureRect called %d times, want 1 for size mismatch", captures)
+	}
+}
+
+// encodeOffMainSession 构造 OnMain 会记录“当前在主线程回调内”的会话，并让 Encode 钩子记录是否运行在主线程回调里。
+func encodeOffMainSession(ui *fakeUI, clip *fakeClip, live bool) (s *Session, encodedInMain *atomic.Bool, encodes *atomic.Int32, done chan struct{}) {
+	encodedInMain = &atomic.Bool{}
+	encodes = &atomic.Int32{}
+	done = make(chan struct{}, 4)
+	var inMain atomic.Bool
+	s = &Session{
+		Allowed: func() (bool, string) { return true, "" },
+		Clip:    clip,
+		UI:      ui,
+		OnMain: func(fn func()) {
+			inMain.Store(true)
+			fn()
+			inMain.Store(false)
+			done <- struct{}{}
+		},
+		Encode: func(img *image.NRGBA) ([]byte, error) {
+			encodes.Add(1)
+			if inMain.Load() {
+				encodedInMain.Store(true)
+			}
+			var buf bytes.Buffer
+			err := png.Encode(&buf, img)
+			return buf.Bytes(), err
+		},
+	}
+	if live {
+		s.Live = func() (Snapshot, error) {
+			return Snapshot{Frames: []crop.Screen{{Bounds: image.Rect(0, 0, 100, 80), Scale: 2}}}, nil
+		}
+		s.CaptureRect = func(_ context.Context, sel image.Rectangle) (*image.NRGBA, error) {
+			return image.NewNRGBA(image.Rect(0, 0, sel.Dx()*2, sel.Dy()*2)), nil
+		}
+	} else {
+		snap := Snapshot{Frames: []crop.Screen{redScreen()}}
+		s.Launch = func(int) {}
+		s.Hotkey()
+		s.Deliver(s.gen, snap, nil)
+	}
+	return
+}
+
+func TestFrozenCopyEncodesOffMainThread(t *testing.T) {
+	ui := &fakeUI{}
+	clip := &fakeClip{}
+	s, inMain, encodes, done := encodeOffMainSession(ui, clip, false)
+	s.BeginDrag(0, 0, 0)
+	s.MoveDrag(0, 20, 20)
+	s.EndDrag()
+	s.Copy()
+	waitDone(t, done)
+	if encodes.Load() != 1 || inMain.Load() {
+		t.Fatalf("encodes %d encodedInMain %v", encodes.Load(), inMain.Load())
+	}
+	if len(clip.data) == 0 || s.Phase() != PhaseIdle {
+		t.Fatalf("clip %d phase %v", len(clip.data), s.Phase())
+	}
+}
+
+func TestFrozenPinAndSaveStillWorkAsync(t *testing.T) {
+	for _, act := range []ConfirmAction{ActionPin, ActionSave} {
+		ui := &fakeUI{}
+		s, _, _, done := encodeOffMainSession(ui, &fakeClip{}, false)
+		s.BeginDrag(0, 0, 0)
+		s.MoveDrag(0, 20, 20)
+		s.EndDrag()
+		s.confirm(act)
+		waitDone(t, done)
+		if act == ActionPin && ui.pins != 1 || act == ActionSave && len(ui.saved) != 1 || s.Phase() != PhaseIdle {
+			t.Fatalf("act %v pins %d saved %d phase %v", act, ui.pins, len(ui.saved), s.Phase())
+		}
+	}
+}
+
+func TestLiveCopyEncodesOffMainThread(t *testing.T) {
+	ui := &fakeUI{}
+	clip := &fakeClip{}
+	s, inMain, encodes, done := encodeOffMainSession(ui, clip, true)
+	s.Hotkey()
+	s.BeginDrag(0, 10, 10)
+	s.MoveDrag(0, 60, 50)
+	s.EndDrag()
+	s.Copy()
+	waitDone(t, done)
+	if encodes.Load() != 1 || inMain.Load() {
+		t.Fatalf("encodes %d encodedInMain %v", encodes.Load(), inMain.Load())
+	}
+	if len(clip.data) == 0 || s.Phase() != PhaseIdle {
+		t.Fatalf("clip %d phase %v", len(clip.data), s.Phase())
+	}
+}
+
+func TestFrozenEncodeFailureReportsAndStaleGenDropped(t *testing.T) {
+	ui := &fakeUI{}
+	s, _, _, done := encodeOffMainSession(ui, &fakeClip{}, false)
+	s.Encode = func(*image.NRGBA) ([]byte, error) { return nil, errors.New("enc") }
+	s.BeginDrag(0, 0, 0)
+	s.MoveDrag(0, 20, 20)
+	s.EndDrag()
+	s.Copy()
+	waitDone(t, done)
+	if ui.status != "enc" || s.Phase() != PhaseIdle {
+		t.Fatalf("status %q phase %v", ui.status, s.Phase())
 	}
 }

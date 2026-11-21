@@ -18,7 +18,15 @@ import (
 const (
 	scrollCtrlW = 236
 	scrollCtrlH = 340
+
+	// 预览位图宽度：面板内预览区约 208pt，按 2x 屏取 480px 足够清晰，避免把整张长图转成位图。
+	scrollPreviewMaxW = 480
+	// 预览位图更新的最小间隔，避免每帧都重建位图。
+	scrollPreviewInterval = 250 * time.Millisecond
 )
+
+// scrollCappedText 达到长度上限时在控制面板显示的提示。
+var scrollCappedText = fmt.Sprintf("已达长度上限（%d px）", scrollcap.DefaultMaxHeight)
 
 type scrollCaptureSession struct {
 	sel      image.Rectangle
@@ -32,7 +40,11 @@ type scrollCaptureSession struct {
 	pxW     int
 	pxH     int
 	frames  int
+	capped  bool // 已达最大长度，后续帧被拒绝
 	done    bool
+
+	lastPreview time.Time // 上次生成预览的时间
+	previewDue  bool      // 有尚未体现在预览中的新帧（节流期间累积）
 }
 
 func (a *app) startScrollCapture(sel image.Rectangle) {
@@ -158,26 +170,36 @@ func (a *app) runScrollCaptureLoop(ctx context.Context, sc *scrollCaptureSession
 			return
 		}
 		_, changed := sc.stitch.Push(img)
-		if !changed {
-			sc.mu.Unlock()
-			return
+		if changed {
+			sc.pxW, sc.pxH = sc.stitch.Size()
+			sc.frames = sc.stitch.Frames()
+			sc.previewDue = true
 		}
-		res := sc.stitch.Result()
-		w, h := sc.stitch.Size()
-		frames := sc.stitch.Frames()
-		sc.pxW, sc.pxH, sc.frames = w, h, frames
+		capped := sc.stitch.Capped()
+		capChanged := capped != sc.capped
+		sc.capped = capped
+		// 预览只做缩小合成（增量、与新增高度成正比）并节流；完整拼图仅在完成时生成。
+		var pv *image.NRGBA
+		if sc.previewDue && time.Since(sc.lastPreview) >= scrollPreviewInterval {
+			pv = sc.stitch.Preview(scrollPreviewMaxW)
+			sc.lastPreview = time.Now()
+			sc.previewDue = false
+		}
 		sc.mu.Unlock()
 
-		if res == nil {
+		if pv == nil && !changed && !capChanged {
 			return
 		}
 		mygo.RunOnMain(func() {
 			if a.scrollCap != sc {
 				return
 			}
-			sc.mu.Lock()
-			sc.preview = ui.NewBitmap(res)
-			sc.mu.Unlock()
+			if pv != nil {
+				bmp := ui.NewBitmap(pv)
+				sc.mu.Lock()
+				sc.preview = bmp
+				sc.mu.Unlock()
+			}
 			if sc.ctrlWin != nil && !sc.ctrlWin.IsDestroyed() {
 				sc.ctrlWin.Invalidate()
 			}
@@ -277,7 +299,7 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 
 		sc.mu.Lock()
 		bmp := sc.preview
-		pxW, pxH, frames := sc.pxW, sc.pxH, sc.frames
+		pxW, pxH, frames, capped := sc.pxW, sc.pxH, sc.frames, sc.capped
 		sc.mu.Unlock()
 
 		p := uiPalette(c)
@@ -324,6 +346,9 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 					}
 				})
 
+				if capped {
+					ui.Text(c, scrollCappedText).FontSize(11).NoWrap().TextColor(p.TextSecondary)
+				}
 				if frames > 1 {
 					ui.Row(c).AlignItems(ui.Center).Gap(3).Children(func() {
 						ui.Text(c, fmt.Sprintf("%d × %d px · 已拼接", pxW, pxH)).FontSize(11).FontFeatures("tnum").NoWrap().TextColor(p.TextSecondary)

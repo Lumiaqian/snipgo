@@ -83,11 +83,30 @@ func (s *HistoryStore) loadIndex() {
 	}
 	if len(valid) > s.max {
 		for _, old := range valid[s.max:] {
-			_ = os.Remove(old.FilePath)
+			removeEntryFiles(old)
 		}
 		valid = valid[:s.max]
 	}
 	s.entries = valid
+	s.pruneOrphanThumbs()
+}
+
+// pruneOrphanThumbs 清理 thumbs 目录中已无对应历史记录的缩略图（尽力而为）。
+func (s *HistoryStore) pruneOrphanThumbs() {
+	dir := filepath.Join(s.dir, thumbDirName)
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	keep := make(map[string]bool, len(s.entries))
+	for _, e := range s.entries {
+		keep[e.ID+".png"] = true
+	}
+	for _, f := range files {
+		if !keep[f.Name()] {
+			_ = os.Remove(filepath.Join(dir, f.Name()))
+		}
+	}
 }
 
 func (s *HistoryStore) saveIndexLocked() {
@@ -141,7 +160,7 @@ func (s *HistoryStore) Add(pngBytes []byte, w, h int) (Entry, error) {
 		if len(next) < s.max {
 			next = append(next, old)
 		} else {
-			_ = os.Remove(old.FilePath)
+			removeEntryFiles(old)
 		}
 	}
 	s.entries = next
@@ -171,7 +190,7 @@ func (s *HistoryStore) Delete(id string) bool {
 	defer s.mu.Unlock()
 	for i, e := range s.entries {
 		if e.ID == id {
-			_ = os.Remove(e.FilePath)
+			removeEntryFiles(e)
 			s.entries = append(s.entries[:i], s.entries[i+1:]...)
 			s.saveIndexLocked()
 			return true
@@ -185,10 +204,21 @@ func (s *HistoryStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.entries {
-		_ = os.Remove(e.FilePath)
+		removeEntryFiles(e)
 	}
 	s.entries = nil
 	s.saveIndexLocked()
+}
+
+// removeEntryFiles 删除记录对应的原图与缩略图缓存。
+func removeEntryFiles(e Entry) {
+	_ = os.Remove(e.FilePath)
+	_ = os.Remove(thumbPath(e))
+}
+
+// ReadPNG 只读取某条历史记录的原始 PNG 字节（不解码），用于复制到剪贴板等无需像素的场景。
+func ReadPNG(e Entry) ([]byte, error) {
+	return os.ReadFile(e.FilePath)
 }
 
 // Load 读取某条历史记录的原始 PNG 字节与解码后的 NRGBA 位图。

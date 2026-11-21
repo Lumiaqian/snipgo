@@ -34,6 +34,7 @@ type templateWindow struct {
 	fullCacheOpts beautify.TemplateOptions
 	fullCacheImg  *image.NRGBA
 	fullCachePNG  []byte
+	exporting     bool // 整图导出（渲染 + PNG 编码）正在后台进行
 	statusBadge   string
 	badge         badgeState
 	enter         panelEnterState
@@ -133,11 +134,9 @@ func (tw *templateWindow) refreshPreview() {
 	tw.renderedValid = true
 }
 
-func (tw *templateWindow) ensureFullExport() (*image.NRGBA, []byte) {
-	if tw.fullCacheImg != nil && len(tw.fullCachePNG) > 0 && tw.fullCacheOpts == tw.opts {
-		return tw.fullCacheImg, tw.fullCachePNG
-	}
-	out := beautify.RenderTemplate(tw.srcImg, tw.srcScale, tw.opts)
+// renderTemplateExport 渲染模板整图并编码 PNG（耗时，勿在主线程调用）。
+func renderTemplateExport(src *image.NRGBA, scale float64, opts beautify.TemplateOptions) (*image.NRGBA, []byte) {
+	out := beautify.RenderTemplate(src, scale, opts)
 	if out == nil || out.Bounds().Empty() {
 		return nil, nil
 	}
@@ -145,61 +144,100 @@ func (tw *templateWindow) ensureFullExport() (*image.NRGBA, []byte) {
 	if err := png.Encode(&buf, out); err != nil {
 		return nil, nil
 	}
-	tw.fullCacheImg = out
-	tw.fullCachePNG = buf.Bytes()
-	tw.fullCacheOpts = tw.opts
-	return tw.fullCacheImg, tw.fullCachePNG
+	return out, buf.Bytes()
+}
+
+// ensureFullExport 同步取得整图 PNG，仅用于必须立即返回数据的拖出场景（拖拽数据回调无法异步）。
+func (tw *templateWindow) ensureFullExport() []byte {
+	if tw.fullCacheImg != nil && len(tw.fullCachePNG) > 0 && tw.fullCacheOpts == tw.opts {
+		return tw.fullCachePNG
+	}
+	out, pngBytes := renderTemplateExport(tw.srcImg, tw.srcScale, tw.opts)
+	if len(pngBytes) == 0 {
+		return nil
+	}
+	tw.fullCacheImg, tw.fullCachePNG, tw.fullCacheOpts = out, pngBytes, tw.opts
+	return pngBytes
+}
+
+// withFullExport 取得整图与 PNG 后回调 done（主线程）。缓存命中时同步回调；
+// 否则在后台渲染并编码，期间显示“正在导出…”并忽略重复触发。
+// 导出完成时窗口已关闭或参数已变化则丢弃本次动作（结果仍写入对应参数的缓存）。
+func (a *app) withFullExport(tw *templateWindow, done func(out *image.NRGBA, pngBytes []byte)) {
+	if tw.fullCacheImg != nil && len(tw.fullCachePNG) > 0 && tw.fullCacheOpts == tw.opts {
+		done(tw.fullCacheImg, tw.fullCachePNG)
+		return
+	}
+	if tw.exporting {
+		return
+	}
+	tw.exporting = true
+	if tw.win != nil && !tw.win.IsDestroyed() {
+		tw.win.Invalidate()
+	}
+	src, scale, opts := tw.srcImg, tw.srcScale, tw.opts
+	runBackground(func() {
+		out, pngBytes := renderTemplateExport(src, scale, opts)
+		runOnMain(func() {
+			tw.exporting = false
+			if tw.win != nil && !tw.win.IsDestroyed() {
+				tw.win.Invalidate()
+			}
+			if len(pngBytes) == 0 {
+				return
+			}
+			tw.fullCacheImg, tw.fullCachePNG, tw.fullCacheOpts = out, pngBytes, opts
+			if a.tplWin != tw || tw.opts != opts {
+				return
+			}
+			done(out, pngBytes)
+		})
+	})
 }
 
 func (a *app) copyTemplateResult(tw *templateWindow) {
 	a.lastTplOpts = tw.opts
 	a.hasTplOpts = true
-	out, pngBytes := tw.ensureFullExport()
-	if len(pngBytes) == 0 || out == nil {
-		return
-	}
-	_ = mygo.Clipboard.WriteImage(pngBytes)
-	a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
-	tw.setStatusBadge(fmt.Sprintf("✓ 已复制 · %d×%d px", out.Bounds().Dx(), out.Bounds().Dy()))
-	a.sessionStatus("模板成图已复制到剪贴板")
-	if tw.win != nil && !tw.win.IsDestroyed() {
-		tw.win.Invalidate()
-	}
+	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
+		_ = mygo.Clipboard.WriteImage(pngBytes)
+		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
+		tw.setStatusBadge(fmt.Sprintf("✓ 已复制 · %d×%d px", out.Bounds().Dx(), out.Bounds().Dy()))
+		a.sessionStatus("模板成图已复制到剪贴板")
+		if tw.win != nil && !tw.win.IsDestroyed() {
+			tw.win.Invalidate()
+		}
+	})
 }
 
 func (a *app) saveTemplateResult(tw *templateWindow) {
 	a.lastTplOpts = tw.opts
 	a.hasTplOpts = true
-	out, pngBytes := tw.ensureFullExport()
-	if len(pngBytes) == 0 || out == nil {
-		return
-	}
-	a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
-	a.SavePNG(pngBytes)
-	tw.setStatusBadge("✓ 已触发保存")
-	if tw.win != nil && !tw.win.IsDestroyed() {
-		tw.win.Invalidate()
-	}
+	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
+		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
+		a.SavePNG(pngBytes)
+		tw.setStatusBadge("✓ 已触发保存")
+		if tw.win != nil && !tw.win.IsDestroyed() {
+			tw.win.Invalidate()
+		}
+	})
 }
 
 func (a *app) pinTemplateResult(tw *templateWindow) {
 	a.lastTplOpts = tw.opts
 	a.hasTplOpts = true
-	out, pngBytes := tw.ensureFullExport()
-	if len(pngBytes) == 0 || out == nil {
-		return
-	}
-	a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
-	sc := max(1.0, tw.srcScale)
-	dipW := max(100, int(math.Round(float64(out.Bounds().Dx())/sc)))
-	dipH := max(80, int(math.Round(float64(out.Bounds().Dy())/sc)))
-	cur := mygo.Screen.CursorScreenPoint()
-	at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
-	a.ShowPin(out, pngBytes, at, dipW, dipH)
-	tw.setStatusBadge("✓ 已钉为悬浮贴图")
-	if tw.win != nil && !tw.win.IsDestroyed() {
-		tw.win.Invalidate()
-	}
+	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
+		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy())
+		sc := max(1.0, tw.srcScale)
+		dipW := max(100, int(math.Round(float64(out.Bounds().Dx())/sc)))
+		dipH := max(80, int(math.Round(float64(out.Bounds().Dy())/sc)))
+		cur := mygo.Screen.CursorScreenPoint()
+		at := image.Pt(max(24, cur.X-dipW/2), max(40, cur.Y-dipH/2))
+		a.ShowPin(out, pngBytes, at, dipW, dipH)
+		tw.setStatusBadge("✓ 已钉为悬浮贴图")
+		if tw.win != nil && !tw.win.IsDestroyed() {
+			tw.win.Invalidate()
+		}
+	})
 }
 
 func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
@@ -249,7 +287,11 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 					a.closeTemplateWindow()
 				}
 			}, func() {
-				statusBadgePill(c, tw.badge.Text(tw.statusBadge), true)
+				badge := tw.badge.Text(tw.statusBadge)
+				if tw.exporting {
+					badge = "正在导出…"
+				}
+				statusBadgePill(c, badge, true)
 			})
 
 			// 2. 主体左右分栏：左侧独立圆角透明预览画布 + 右侧参数侧边栏
@@ -467,7 +509,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 					Cursor(ui.CursorGrab)
 				dragChip := liquidSecondaryChrome(c, dragBtn, dragBtn.Hovered(), 14)
 				dragChip.DragDataFrom(func() transfer.Data {
-					_, pngBytes := tw.ensureFullExport()
+					pngBytes := tw.ensureFullExport()
 					return tempPNGDragData(pngBytes, "SnipGo-Template")
 				})
 				dragChip.Children(func() {

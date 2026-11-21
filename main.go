@@ -80,6 +80,8 @@ type app struct {
 	previewSnapPending image.Rectangle
 	previewSnapImg     *image.NRGBA
 	previewSnapBmp     *ui.Bitmap
+	// previewSnapCancel 取消在途的预览快照采集（选区变化、隐藏选区或被自动脱敏快照取代时）。
+	previewSnapCancel context.CancelFunc
 
 	quitting bool
 }
