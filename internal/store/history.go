@@ -4,12 +4,15 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
 	"image/png"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -66,10 +69,12 @@ func (s *HistoryStore) loadIndex() {
 		return
 	}
 	valid := make([]Entry, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
 	for _, e := range raw {
-		if e.FileName == "" {
+		if e.FileName == "" || seen[e.ID] {
 			continue
 		}
+		seen[e.ID] = true
 		full := filepath.Join(s.dir, filepath.Base(e.FileName))
 		if st, err := os.Stat(full); err == nil && !st.IsDir() {
 			e.FilePath = full
@@ -104,13 +109,22 @@ func (s *HistoryStore) Add(pngBytes []byte, w, h int) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.seq++
 	now := time.Now()
-	id := fmt.Sprintf("%s-%d", now.Format("20060102-150405"), s.seq)
-	fname := "SnipGo-" + id + ".png"
-	fpath := filepath.Join(s.dir, fname)
-	if err := os.WriteFile(fpath, pngBytes, 0o644); err != nil {
-		return Entry{}, err
+	// ID 含微秒，跨重启也不易重复；文件用 O_EXCL 创建，冲突时递增 seq 重试
+	stamp := strings.Replace(now.Format("20060102-150405.000000"), ".", "", 1)
+	var id, fname, fpath string
+	for tries := 0; ; tries++ {
+		s.seq++
+		id = fmt.Sprintf("%s-%d", stamp, s.seq)
+		fname = "SnipGo-" + id + ".png"
+		fpath = filepath.Join(s.dir, fname)
+		err := writeNewFile(fpath, pngBytes)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) || tries >= 1000 {
+			return Entry{}, err
+		}
 	}
 
 	entry := Entry{
@@ -194,4 +208,20 @@ func Load(e Entry) (*image.NRGBA, []byte, error) {
 	out := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(out, out.Bounds(), decoded, b.Min, draw.Src)
 	return out, data, nil
+}
+
+// writeNewFile 以 O_EXCL 创建并写入文件，已存在时返回 fs.ErrExist。
+func writeNewFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(path)
+	}
+	return werr
 }
