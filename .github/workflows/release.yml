@@ -13,22 +13,29 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref_name }}-${{ inputs.tag }}
 
 jobs:
-  release:
-    name: Build & Publish macOS Release
+  build:
+    name: Build macOS Release
     runs-on: macos-latest
     timeout-minutes: 30
+    # 构建与测试只需读权限；发布放到单独的 publish job。
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      notarized: ${{ steps.signing.outputs.notarized }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
@@ -144,18 +151,32 @@ jobs:
           cat dist/SHA256SUMS.txt
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: SnipGo-${{ steps.meta.outputs.tag }}-macOS
           path: dist/*
           if-no-files-found: error
 
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: SnipGo-${{ needs.build.outputs.tag }}-macOS
+          path: dist
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          NOTARIZED: ${{ steps.signing.outputs.notarized }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          NOTARIZED: ${{ needs.build.outputs.notarized }}
         run: |
           NOTES_FILE="$RUNNER_TEMP/release-notes.md"
           {

@@ -301,8 +301,8 @@ func TestVisualVerifyEveryFeature(t *testing.T) {
 	a.cfg = config.Default(tmpHistDir)
 
 	fBytes, _ := os.ReadFile(filepath.Join(dir, "verify_2_annotations_exported.png"))
-	_, _ = hStore.Add(fBytes, 1200, 640)
-	_, _ = hStore.Add(fBytes, 960, 540)
+	_, _ = hStore.Add(fBytes, 1200, 640, 0)
+	_, _ = hStore.Add(fBytes, 960, 540, 0)
 	hw := &historyWindow{thumbs: map[string]*ui.Bitmap{}}
 	a.histWin = hw
 	// 缩略图改为后台加载：用本 goroutine 充当主线程，取回 2 张缩略图后再渲染。

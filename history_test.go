@@ -23,8 +23,8 @@ func TestReloadHistoryWindowLoadsThumbsInBackground(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e1, _ := st.Add(testHistoryPNG(40, 30), 40, 30)
-	e2, _ := st.Add(testHistoryPNG(50, 30), 50, 30)
+	e1, _ := st.Add(testHistoryPNG(40, 30), 40, 30, 0)
+	e2, _ := st.Add(testHistoryPNG(50, 30), 50, 30, 0)
 
 	release := make(chan struct{})
 	var mu sync.Mutex
@@ -81,7 +81,7 @@ func TestReloadHistoryWindowLoadsThumbsInBackground(t *testing.T) {
 // 窗口被关闭或替换后，迟到的缩略图结果必须被丢弃。
 func TestHistoryThumbResultDroppedWhenWindowReplaced(t *testing.T) {
 	st, _ := store.Open(t.TempDir(), 5)
-	st.Add(testHistoryPNG(40, 30), 40, 30)
+	st.Add(testHistoryPNG(40, 30), 40, 30, 0)
 
 	mainQ := make(chan func(), 4)
 	prevLoad, prevRun := historyThumbLoader, runOnMain
@@ -117,7 +117,7 @@ func TestRecordHistoryWritesOffMainThread(t *testing.T) {
 	runOnMain = func(fn func()) { mainQ <- fn }
 
 	a := &app{history: st}
-	a.recordHistory(testHistoryPNG(20, 20), 20, 20)
+	a.recordHistory(testHistoryPNG(20, 20), 20, 20, 0)
 	select {
 	case <-mainQ:
 	case <-time.After(2 * time.Second):
@@ -125,5 +125,26 @@ func TestRecordHistoryWritesOffMainThread(t *testing.T) {
 	}
 	if st.Count() != 1 {
 		t.Fatalf("Count = %d, want 1", st.Count())
+	}
+}
+
+// 关闭「保存最近截图历史」后不再落盘；默认开启时照常记录。
+func TestRecordHistoryRespectsDisableHistory(t *testing.T) {
+	st, _ := store.Open(t.TempDir(), 5)
+	mainQ := make(chan func(), 2)
+	prevRun := runOnMain
+	t.Cleanup(func() { runOnMain = prevRun })
+	runOnMain = func(fn func()) { mainQ <- fn }
+
+	a := &app{history: st}
+	a.cfg.DisableHistory = true
+	a.recordHistory(testHistoryPNG(20, 20), 20, 20, 0)
+	select {
+	case <-mainQ:
+		t.Fatal("关闭历史后不应调度刷新")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if st.Count() != 0 {
+		t.Fatalf("关闭历史后 Count = %d, want 0", st.Count())
 	}
 }

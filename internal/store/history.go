@@ -27,6 +27,17 @@ type Entry struct {
 	Width     int       `json:"width"`
 	Height    int       `json:"height"`
 	CreatedAt time.Time `json:"created_at"`
+	// Scale 为截图时的像素/DIP 比例；0 表示旧记录未记录（调用方回退按 2x 估算）。
+	Scale float64 `json:"scale,omitempty"`
+}
+
+// DipSize 返回贴图使用的逻辑尺寸；Scale>0 时按 Scale 换算，否则回退到旧的 2x 假设。
+func (e Entry) DipSize() (w, h int) {
+	sc := e.Scale
+	if sc <= 0 {
+		sc = 2
+	}
+	return int(float64(e.Width)/sc + 0.5), int(float64(e.Height)/sc + 0.5)
 }
 
 // HistoryStore 管理磁盘上的截图历史。
@@ -44,9 +55,11 @@ func Open(baseDir string, maxEntries int) (*HistoryStore, error) {
 		maxEntries = DefaultMaxEntries
 	}
 	dir := filepath.Join(baseDir, "history")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 历史目录含截图内容，仅当前用户可访问；已存在的旧目录尽力收紧权限。
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	_ = os.Chmod(dir, 0o700)
 	s := &HistoryStore{
 		dir: dir,
 		max: maxEntries,
@@ -121,7 +134,7 @@ func (s *HistoryStore) saveIndexLocked() {
 }
 
 // Add 写入一张新截图 PNG 到历史记录（最新排在最前），自动淘汰超出容量上限的旧文件。
-func (s *HistoryStore) Add(pngBytes []byte, w, h int) (Entry, error) {
+func (s *HistoryStore) Add(pngBytes []byte, w, h int, scale float64) (Entry, error) {
 	if len(pngBytes) == 0 {
 		return Entry{}, fmt.Errorf("empty png data")
 	}
@@ -153,6 +166,7 @@ func (s *HistoryStore) Add(pngBytes []byte, w, h int) (Entry, error) {
 		Width:     w,
 		Height:    h,
 		CreatedAt: now,
+		Scale:     scale,
 	}
 	next := make([]Entry, 0, min(s.max, len(s.entries)+1))
 	next = append(next, entry)
@@ -242,7 +256,7 @@ func Load(e Entry) (*image.NRGBA, []byte, error) {
 
 // writeNewFile 以 O_EXCL 创建并写入文件，已存在时返回 fs.ErrExist。
 func writeNewFile(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

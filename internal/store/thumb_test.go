@@ -30,7 +30,7 @@ func TestThumbnailSizeAspectAndCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := bigPNG(t, 3000, 2000)
-	e, err := st.Add(raw, 3000, 2000)
+	e, err := st.Add(raw, 3000, 2000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestThumbnailSizeAspectAndCache(t *testing.T) {
 
 func TestThumbnailSmallImageNotUpscaledNorCached(t *testing.T) {
 	st, _ := Open(t.TempDir(), 5)
-	e, _ := st.Add(bigPNG(t, 100, 60), 100, 60)
+	e, _ := st.Add(bigPNG(t, 100, 60), 100, 60, 0)
 	th, err := Thumbnail(e, 320)
 	if err != nil || th.Bounds().Dx() != 100 || th.Bounds().Dy() != 60 {
 		t.Fatalf("thumb = %v err=%v", th.Bounds(), err)
@@ -99,7 +99,7 @@ func TestThumbsRemovedWithEntries(t *testing.T) {
 	tmp := t.TempDir()
 	st, _ := Open(tmp, 2)
 	mk := func() Entry {
-		e, err := st.Add(bigPNG(t, 640, 480), 640, 480)
+		e, err := st.Add(bigPNG(t, 640, 480), 640, 480, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +143,7 @@ func TestThumbsRemovedWithEntries(t *testing.T) {
 func TestReadPNGReturnsExactBytes(t *testing.T) {
 	st, _ := Open(t.TempDir(), 5)
 	raw := bigPNG(t, 64, 48)
-	e, _ := st.Add(raw, 64, 48)
+	e, _ := st.Add(raw, 64, 48, 0)
 	got, err := ReadPNG(e)
 	if err != nil || !bytes.Equal(got, raw) {
 		t.Fatalf("ReadPNG mismatch err=%v", err)

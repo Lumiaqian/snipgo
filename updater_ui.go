@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/config"
+	"snipgo/internal/session"
 )
 
 //go:embed resources/icon.png
@@ -321,12 +322,33 @@ func (a *app) checkForUpdates(manual bool) {
 				a.openUpdateWindow()
 				return
 			}
+			// 用户正在截图/标注/贴图编辑等操作时不抢焦点：保留菜单角标，且不记 notifiedVer，下次检查仍可弹出。
+			if a.userBusy() {
+				return
+			}
 			if cand.Version != a.cfg.SkippedVersion && cand.Version != u.notifiedVer {
 				u.notifiedVer = cand.Version
 				a.openUpdateWindow()
 			}
 		})
 	}()
+}
+
+// userBusy 报告用户是否正处于截图选区、文字输入、贴图编辑、长截图或倒计时中；
+// 这些时刻后台弹窗会抢走焦点打断操作。
+func (a *app) userBusy() bool {
+	if a.session != nil && a.session.Phase() != session.PhaseIdle {
+		return true
+	}
+	if a.textEditing || a.scrollCap != nil || a.countdown != nil {
+		return true
+	}
+	for _, p := range a.pins {
+		if p != nil && p.editMode {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) startUpdateDownload() {
@@ -776,7 +798,9 @@ func (a *app) paintUpdateFooter(c *ui.Context, p palette, u *updateManager) {
 					if u.release != nil {
 						a.cfg.SkippedVersion = u.release.Version
 						if a.userDataDir != "" {
-							_ = config.Save(a.userDataDir, a.cfg)
+							if err := config.Save(a.userDataDir, a.cfg); err != nil {
+								log.Printf("save settings: %v", err)
+							}
 						}
 						u.release = nil
 						u.state = updIdle

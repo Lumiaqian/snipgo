@@ -275,12 +275,8 @@ func tempPNGDragData(pngBytes []byte, prefix string) transfer.Data {
 	if len(pngBytes) == 0 {
 		return transfer.Data{}
 	}
-	dir := dragTempDir()
-	_ = os.MkdirAll(dir, 0o755)
-	pruneDragTempDirIn(dir, time.Now(), 30*time.Minute, 16)
-	name := fmt.Sprintf("%s-%s.png", prefix, time.Now().Format("20060102-150405.000"))
-	full := filepath.Join(dir, name)
-	if os.WriteFile(full, pngBytes, 0o644) != nil {
+	full, ok := writeDragTempPNG(dragTempDir(), pngBytes, prefix)
+	if !ok {
 		return transfer.Data{}
 	}
 	d, err := transfer.FileData(full)
@@ -288,6 +284,20 @@ func tempPNGDragData(pngBytes []byte, prefix string) transfer.Data {
 		return transfer.Data{}
 	}
 	return d
+}
+
+// writeDragTempPNG 在 dir 中写入拖拽用临时 PNG：目录 0o700、文件 0o600（截图内容不对其他用户可读），
+// 并顺带清理过期文件。返回写入后的完整路径。
+func writeDragTempPNG(dir string, pngBytes []byte, prefix string) (string, bool) {
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.Chmod(dir, 0o700) // 目录可能由旧版本以 0o755 创建，尽力收紧
+	pruneDragTempDirIn(dir, time.Now(), 30*time.Minute, 16)
+	name := fmt.Sprintf("%s-%s.png", prefix, time.Now().Format("20060102-150405.000"))
+	full := filepath.Join(dir, name)
+	if os.WriteFile(full, pngBytes, 0o600) != nil {
+		return "", false
+	}
+	return full, true
 }
 
 func pruneDragTempDirIn(dir string, now time.Time, maxAge time.Duration, maxFiles int) {

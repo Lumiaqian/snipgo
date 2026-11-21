@@ -531,8 +531,7 @@ func (a *app) pinExtractedText(txt string) {
 	}
 	dipW := max(120, card.Bounds().Dx()/2)
 	dipH := max(60, card.Bounds().Dy()/2)
-	cur := mygo.Screen.CursorScreenPoint()
-	at := image.Pt(max(20, cur.X-dipW/2), max(40, cur.Y-dipH/2))
+	at := pinPlacementNearCursorOnScreen(dipW, dipH)
 	a.ShowPin(card, buf.Bytes(), at, dipW, dipH)
 }
 

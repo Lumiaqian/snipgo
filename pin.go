@@ -1152,6 +1152,18 @@ func (a *app) popupPinMenu(p *pinWin) {
 	mygo.NewMenu(items).Popup(p.win)
 }
 
+// cutoutEncodeFailedStatus 为抠图结果 PNG 编码失败时的托盘状态文案。
+const cutoutEncodeFailedStatus = "抠图失败: 编码 PNG 出错"
+
+// cutoutEncode 把抠图结果编码为 PNG；做成变量以便测试注入失败。
+var cutoutEncode = func(cut *image.NRGBA) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, cut); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // cutoutSelection 对选区截图执行离线 Vision 前景实例分割，复制透明 PNG 并贴为无边框异形贴纸。
 func (a *app) cutoutSelection(img *image.NRGBA, r image.Rectangle) {
 	if img == nil || img.Bounds().Empty() {
@@ -1171,21 +1183,27 @@ func (a *app) cutoutSelection(img *image.NRGBA, r image.Rectangle) {
 			})
 			return
 		}
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, cut); err != nil {
-			return
-		}
-		data := buf.Bytes()
-		dipW := max(24, int(math.Round(float64(cut.Bounds().Dx())/scale)))
-		dipH := max(24, int(math.Round(float64(cut.Bounds().Dy())/scale)))
-		at := image.Pt(r.Min.X+(r.Dx()-dipW)/2, r.Min.Y+(r.Dy()-dipH)/2)
-		mygo.RunOnMain(func() {
-			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
-			a.sessionStatus("主体抠图已复制并贴为透明贴纸")
-			a.showPinWithState(cut, data, at, dipW, dipH, 1.0, 100, true)
-		})
+		a.finishCutoutSelection(cut, r, scale)
 	}()
+}
+
+// finishCutoutSelection 在后台线程编码抠图结果；编码失败时在主线程上给出失败状态，
+// 否则复制到剪贴板、写入历史并贴为透明贴纸。
+func (a *app) finishCutoutSelection(cut *image.NRGBA, r image.Rectangle, scale float64) {
+	data, err := cutoutEncode(cut)
+	if err != nil {
+		runOnMain(func() { a.sessionStatus(cutoutEncodeFailedStatus) })
+		return
+	}
+	dipW := max(24, int(math.Round(float64(cut.Bounds().Dx())/scale)))
+	dipH := max(24, int(math.Round(float64(cut.Bounds().Dy())/scale)))
+	at := image.Pt(r.Min.X+(r.Dx()-dipW)/2, r.Min.Y+(r.Dy()-dipH)/2)
+	runOnMain(func() {
+		_ = mygo.Clipboard.WriteImage(data)
+		a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy(), scale)
+		a.sessionStatus("主体抠图已复制并贴为透明贴纸")
+		a.showPinWithState(cut, data, at, dipW, dipH, 1.0, 100, true)
+	})
 }
 
 // cutoutPinInPlace 原地将悬浮贴图主体从背景中抠出，变为无边框透明异形贴纸并同步写入剪贴板。
@@ -1207,12 +1225,14 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 			})
 			return
 		}
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, cut); err != nil {
-			mygo.RunOnMain(func() { p.cutting = false })
+		data, err := cutoutEncode(cut)
+		if err != nil {
+			runOnMain(func() {
+				p.cutting = false
+				a.sessionStatus(cutoutEncodeFailedStatus)
+			})
 			return
 		}
-		data := buf.Bytes()
 		mygo.RunOnMain(func() {
 			p.cutting = false
 			if p.win == nil || p.win.IsDestroyed() {
@@ -1241,7 +1261,7 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 			p.win.Invalidate()
 			p.refreshShadowSoon()
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy())
+			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy(), scale)
 			a.sessionStatus("贴图已抠出透明主体并复制")
 		})
 	}()
@@ -1471,7 +1491,7 @@ func (a *app) copyCompareComposite(p *pinWin) {
 		w, h := out.Bounds().Dx(), out.Bounds().Dy()
 		runOnMain(func() {
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, w, h)
+			a.recordHistory(data, w, h, 0)
 			a.sessionStatus("已复制贴图对比结果")
 		})
 	})
@@ -1559,11 +1579,10 @@ func (a *app) mergeAllPins(horizontal bool) {
 				return
 			}
 			_ = mygo.Clipboard.WriteImage(data)
-			a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy())
+			a.recordHistory(data, merged.Bounds().Dx(), merged.Bounds().Dy(), 0)
 			dipW := max(120, min(1100, merged.Bounds().Dx()/2))
 			dipH := max(80, min(800, merged.Bounds().Dy()/2))
-			cur := mygo.Screen.CursorScreenPoint()
-			a.ShowPin(merged, data, image.Pt(max(20, cur.X-dipW/2), max(40, cur.Y-dipH/2)), dipW, dipH)
+			a.ShowPin(merged, data, pinPlacementNearCursorOnScreen(dipW, dipH), dipW, dipH)
 			a.sessionStatus(fmt.Sprintf("已拼接 %d 张贴图并复制到剪贴板", len(imgs)))
 		})
 	})

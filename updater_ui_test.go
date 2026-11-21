@@ -175,3 +175,41 @@ func TestUpdateManagerFlowAndSkippedVersion(t *testing.T) {
 		t.Fatalf("expected updError with friendly disabled hint, got state=%v err=%q", a.upd.state, a.upd.errMsg)
 	}
 }
+
+func TestAutoUpdateDoesNotStealFocusWhenBusy(t *testing.T) {
+	cases := map[string]func(a *app){
+		"文字输入中": func(a *app) { a.textEditing = true },
+		"贴图编辑中": func(a *app) { a.pins = []*pinWin{nil, {editMode: true}} },
+		"倒计时中":  func(a *app) { a.countdown = &countdownSession{} },
+		"长截图中":  func(a *app) { a.scrollCap = &scrollCaptureSession{} },
+	}
+	for name, setBusy := range cases {
+		t.Run(name, func(t *testing.T) {
+			mainCh := make(chan func(), 4)
+			opened := 0
+			a := &app{}
+			a.upd = &updateManager{
+				backend: &mockUpdateBackend{enabled: true, checkCand: &updateCandidate{Version: "0.3.0"}},
+				onMain:  func(fn func()) { mainCh <- fn },
+				onOpen:  func() { opened++ },
+			}
+			setBusy(a)
+			a.checkForUpdates(false)
+			drainMainTasks(t, mainCh, 1)
+			if opened != 0 || a.upd.notifiedVer != "" {
+				t.Fatalf("忙碌时不应弹窗也不应记录 notifiedVer: opened=%d notified=%q", opened, a.upd.notifiedVer)
+			}
+			if a.upd.state != updAvailable {
+				t.Fatalf("菜单角标依赖的状态应为 updAvailable, got %v", a.upd.state)
+			}
+
+			// 恢复空闲后下一次检查仍可弹出。
+			a.textEditing, a.pins, a.countdown, a.scrollCap = false, nil, nil, nil
+			a.checkForUpdates(false)
+			drainMainTasks(t, mainCh, 1)
+			if opened != 1 || a.upd.notifiedVer != "0.3.0" {
+				t.Fatalf("空闲时应弹出一次: opened=%d notified=%q", opened, a.upd.notifiedVer)
+			}
+		})
+	}
+}

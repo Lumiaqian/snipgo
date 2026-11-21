@@ -104,6 +104,16 @@ type dragState struct {
 	start  image.Rectangle
 	x0, y0 float64
 	x1, y1 float64
+	// restore 仅在 dragPendingRedraw 越过阈值、已清空旧选区后记录，供取消时找回。
+	restore *redrawBackup
+}
+
+// redrawBackup 保存「在选区外重画」开始前被清空的选区状态。
+type redrawBackup struct {
+	lockedWinID   uint32
+	lockedWinRect image.Rectangle
+	windowOnly    bool
+	items         []annotate.Item
 }
 
 // Session 同一时间只进行一轮截图。
@@ -122,8 +132,8 @@ type Session struct {
 	Capture func(context.Context) (Snapshot, error)
 	Clip    Clipboard
 	UI      UI
-	// OnOutput 在每次成功生成截图 PNG（复制 / 贴图 / 保存）时回调，供本地历史记录归档。
-	OnOutput func(png []byte, pxW, pxH int)
+	// OnOutput 在每次成功生成截图 PNG（复制 / 贴图 / 保存）时回调，供本地历史记录归档；scale 为输出的像素/DIP 比例（0 表示未知）。
+	OnOutput func(png []byte, pxW, pxH int, scale float64)
 	// OnCutout 在触发选区主体抠图（K）并采集完像素后回调，交由 Vision 离线去背景并生成异形贴纸。
 	OnCutout func(img *image.NRGBA, r image.Rectangle)
 	// OnTemplate 在触发套模板（B）并采集/合成完选区标注后回调，打开所见即所得「套模板工作台」。
@@ -414,14 +424,14 @@ func (s *Session) PinPickedPalette() bool {
 	dipH := max(64, int(math.Round(float64(card.Bounds().Dy())/scale)))
 	at := image.Pt(120, 120)
 	if s.hasCursor {
-		at = image.Pt(max(20, int(s.cursorX)-dipW/2), max(40, int(s.cursorY)-dipH/2))
+		at = s.palettePlacement(dipW, dipH)
 	}
 	s.clearSelection()
 	if s.Clip != nil {
 		_ = s.Clip.WritePNG(buf.Bytes())
 	}
 	if s.OnOutput != nil {
-		s.OnOutput(buf.Bytes(), card.Bounds().Dx(), card.Bounds().Dy())
+		s.OnOutput(buf.Bytes(), card.Bounds().Dx(), card.Bounds().Dy(), scale)
 	}
 	s.UI.ShowPin(card, buf.Bytes(), at, dipW, dipH)
 	return true
@@ -608,8 +618,10 @@ func (s *Session) enterSelecting(snap Snapshot) {
 	union := screensUnion(snap.Frames)
 	for _, wi := range snap.WindowInfos {
 		b := wi.Bounds.Canon()
-		if !union.Empty() {
-			b = b.Intersect(union)
+		// 仅登记完全位于显示器并集内的窗口：部分在屏外的窗口整窗采集会与裁剪后的选区错位，
+		// 此时退化为普通区域截图（CanWindowOnly 为 false）。
+		if !union.Empty() && b.Intersect(union) != b {
+			continue
 		}
 		if !b.Empty() && wi.ID != 0 {
 			if _, exists := s.winIDByRect[b]; !exists {
@@ -641,10 +653,11 @@ func (s *Session) enterSelecting(snap Snapshot) {
 	s.UI.SetStatus("")
 
 	front := snap.FrontWindow.Canon()
+	frontInside := union.Empty() || front.Intersect(union) == front
 	if !union.Empty() && !front.Empty() {
 		front = front.Intersect(union)
 	}
-	if !front.Empty() && snap.FrontWinID != 0 {
+	if !front.Empty() && snap.FrontWinID != 0 && frontInside {
 		if _, exists := s.winIDByRect[front]; !exists {
 			s.winIDByRect[front] = snap.FrontWinID
 		}
@@ -689,6 +702,33 @@ func (s *Session) Cancel() {
 	}
 	s.gen++
 	s.clearSelection()
+}
+
+// CancelDrag 仅中止当前拖拽（例如系统取消了指针），不丢弃已有选区与标注。
+func (s *Session) CancelDrag() {
+	d := s.drag
+	if d.kind == dragNone {
+		return
+	}
+	s.drag = dragState{owner: -1}
+	switch d.kind {
+	case dragAnnotate, dragAnnotateEdit:
+		// CancelPointer 会丢弃未完成图元，编辑中则还原到编辑前快照。
+		s.Annotations().CancelPointer()
+	case dragMove, dragResize:
+		s.sel = d.start
+	case dragBox:
+		// 由「选区外重画」转来的拖拽：找回被清空的旧选区、窗口锁定与标注。
+		if d.restore != nil && !d.start.Empty() {
+			s.sel = d.start
+			s.lockedWinID = d.restore.lockedWinID
+			s.lockedWinRect = d.restore.lockedWinRect
+			s.windowOnly = d.restore.windowOnly
+			s.Annotations().SetItems(d.restore.items)
+			s.phase = PhaseAdjusting
+		}
+		// 全新框选：保持 PhaseSelecting，不产生选区。
+	}
 }
 
 // RightClick 实现 Snipaste 的多级右键：
@@ -965,6 +1005,12 @@ func (s *Session) MoveDrag(owner int, x, y float64) {
 	case dragPendingRedraw:
 		r := normRect(s.drag.x0, s.drag.y0, x, y)
 		if r.Dx() >= minDIP && r.Dy() >= minDIP {
+			s.drag.restore = &redrawBackup{
+				lockedWinID:   s.lockedWinID,
+				lockedWinRect: s.lockedWinRect,
+				windowOnly:    s.windowOnly,
+				items:         s.Annotations().Items(),
+			}
 			s.phase = PhaseSelecting
 			s.sel = image.Rectangle{}
 			s.lockedWinID = 0
@@ -1235,13 +1281,36 @@ func postProcessImage(img *image.NRGBA, r image.Rectangle, scale float64, items 
 	return img, r
 }
 
-func (s *Session) scaleForRect(r image.Rectangle) float64 {
-	best := 2.0
+// palettePlacement 以光标为中心放置配色卡，并限制在光标所在显示器的 DIP 范围内
+// （左/上保留 20/40 的边距）；负坐标显示器同样适用。
+func (s *Session) palettePlacement(dipW, dipH int) image.Point {
+	cx, cy := int(math.Floor(s.cursorX)), int(math.Floor(s.cursorY))
+	at := image.Pt(cx-dipW/2, cy-dipH/2)
+	var b image.Rectangle
 	for _, f := range s.frames {
-		if !r.Intersect(f.Bounds.Canon()).Empty() && f.Scale > 0 {
-			best = f.Scale
+		if fb := f.Bounds.Canon(); image.Pt(cx, cy).In(fb) {
+			b = fb
 			break
 		}
+	}
+	if b.Empty() {
+		return at
+	}
+	minX, minY := b.Min.X+20, b.Min.Y+40
+	maxX, maxY := max(minX, b.Max.X-dipW), max(minY, b.Max.Y-dipH)
+	return image.Pt(min(max(at.X, minX), maxX), min(max(at.Y, minY), maxY))
+}
+
+// scaleForRect 返回与 r 相交的显示器中的最大缩放，与 crop.Crop/Stitch 的输出像素密度保持一致。
+func (s *Session) scaleForRect(r image.Rectangle) float64 {
+	best := 0.0
+	for _, f := range s.frames {
+		if !r.Intersect(f.Bounds.Canon()).Empty() && f.Scale > best {
+			best = f.Scale
+		}
+	}
+	if best <= 0 {
+		return 2.0
 	}
 	return best
 }
@@ -1336,7 +1405,7 @@ func (s *Session) CropFrozenSelection() (*image.NRGBA, image.Rectangle, bool) {
 
 func (s *Session) applyOutput(act ConfirmAction, r image.Rectangle, img *image.NRGBA, pngBytes []byte) {
 	if len(pngBytes) > 0 && img != nil && s.OnOutput != nil && act != ActionOCR {
-		s.OnOutput(pngBytes, img.Bounds().Dx(), img.Bounds().Dy())
+		s.OnOutput(pngBytes, img.Bounds().Dx(), img.Bounds().Dy(), s.scaleForRect(r))
 	}
 	switch act {
 	case ActionCopy:
