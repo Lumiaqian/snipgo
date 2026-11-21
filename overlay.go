@@ -305,7 +305,9 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 			return false
 		}
 		if ev.Canceled {
-			a.session.Cancel()
+			// 指针被系统取消只中止当前拖拽，保留已有选区与标注。
+			a.session.CancelDrag()
+			a.invalidateAll()
 			return true
 		}
 		a.session.MoveDrag(o.index, gx, gy)

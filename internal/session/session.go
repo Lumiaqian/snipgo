@@ -104,6 +104,16 @@ type dragState struct {
 	start  image.Rectangle
 	x0, y0 float64
 	x1, y1 float64
+	// restore 仅在 dragPendingRedraw 越过阈值、已清空旧选区后记录，供取消时找回。
+	restore *redrawBackup
+}
+
+// redrawBackup 保存「在选区外重画」开始前被清空的选区状态。
+type redrawBackup struct {
+	lockedWinID   uint32
+	lockedWinRect image.Rectangle
+	windowOnly    bool
+	items         []annotate.Item
 }
 
 // Session 同一时间只进行一轮截图。
@@ -694,6 +704,33 @@ func (s *Session) Cancel() {
 	s.clearSelection()
 }
 
+// CancelDrag 仅中止当前拖拽（例如系统取消了指针），不丢弃已有选区与标注。
+func (s *Session) CancelDrag() {
+	d := s.drag
+	if d.kind == dragNone {
+		return
+	}
+	s.drag = dragState{owner: -1}
+	switch d.kind {
+	case dragAnnotate, dragAnnotateEdit:
+		// CancelPointer 会丢弃未完成图元，编辑中则还原到编辑前快照。
+		s.Annotations().CancelPointer()
+	case dragMove, dragResize:
+		s.sel = d.start
+	case dragBox:
+		// 由「选区外重画」转来的拖拽：找回被清空的旧选区、窗口锁定与标注。
+		if d.restore != nil && !d.start.Empty() {
+			s.sel = d.start
+			s.lockedWinID = d.restore.lockedWinID
+			s.lockedWinRect = d.restore.lockedWinRect
+			s.windowOnly = d.restore.windowOnly
+			s.Annotations().SetItems(d.restore.items)
+			s.phase = PhaseAdjusting
+		}
+		// 全新框选：保持 PhaseSelecting，不产生选区。
+	}
+}
+
 // RightClick 实现 Snipaste 的多级右键：
 // 1. 若当前正在使用某个标注工具（Tool != ToolNone），右键先退出标注工具回到选区微调；
 // 2. 已有选区（Adjusting）时右键退回重新框选/自动识别窗口；
@@ -968,6 +1005,12 @@ func (s *Session) MoveDrag(owner int, x, y float64) {
 	case dragPendingRedraw:
 		r := normRect(s.drag.x0, s.drag.y0, x, y)
 		if r.Dx() >= minDIP && r.Dy() >= minDIP {
+			s.drag.restore = &redrawBackup{
+				lockedWinID:   s.lockedWinID,
+				lockedWinRect: s.lockedWinRect,
+				windowOnly:    s.windowOnly,
+				items:         s.Annotations().Items(),
+			}
 			s.phase = PhaseSelecting
 			s.sel = image.Rectangle{}
 			s.lockedWinID = 0
