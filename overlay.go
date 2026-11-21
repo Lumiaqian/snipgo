@@ -112,6 +112,7 @@ func (a *app) ShowSelection(frames []crop.Screen) {
 func (a *app) HideSelection() {
 	a.textEditing = false
 	a.textEditBuf = ""
+	a.cancelPreviewSnap()
 	a.previewSnapGen++
 	a.previewSnapRect = image.Rectangle{}
 	a.previewSnapPending = image.Rectangle{}
@@ -128,25 +129,49 @@ func (a *app) HideSelection() {
 	}
 }
 
+// previewSnapReady / previewCaptureRect 是预览快照的注入点：生产环境为 mygo 就绪判断与 ScreenCaptureKit 采集，测试可替换。
+var (
+	previewSnapReady   = func() bool { return mygo.App.IsReady() }
+	previewCaptureRect = func(a *app, ctx context.Context, sel image.Rectangle) (*image.NRGBA, error) {
+		return a.captureRect(ctx, sel)
+	}
+)
+
+// cancelPreviewSnap 取消仍在途的预览快照采集。
+func (a *app) cancelPreviewSnap() {
+	if a.previewSnapCancel != nil {
+		a.previewSnapCancel()
+		a.previewSnapCancel = nil
+	}
+}
+
 func (a *app) ensurePreviewSnapshot(sel image.Rectangle) {
 	sel = sel.Canon()
-	if sel.Empty() || a.session == nil || !a.session.IsLive() || !mygo.App.IsReady() {
+	if sel.Empty() || a.session == nil || !a.session.IsLive() || !previewSnapReady() {
+		return
+	}
+	// 拖动/缩放选区期间每帧选区都在变，不启动采集；松手后的下一帧绘制会再调用到这里。
+	if a.session.Dragging() {
 		return
 	}
 	if a.previewSnapRect == sel || a.previewSnapPending == sel {
 		return
 	}
+	// 选区已变：先取消上一次仍在途的采集，避免并发堆积多次整屏采集。
+	a.cancelPreviewSnap()
 	a.previewSnapGen++
 	gen := a.previewSnapGen
 	a.previewSnapPending = sel
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	a.previewSnapCancel = cancel
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		img, err := a.captureRect(ctx, sel)
-		mygo.RunOnMain(func() {
+		img, err := previewCaptureRect(a, ctx, sel)
+		runOnMain(func() {
 			if a.previewSnapGen != gen {
 				return
 			}
+			a.previewSnapCancel = nil
 			a.previewSnapPending = image.Rectangle{}
 			if a.session == nil {
 				return
@@ -1689,6 +1714,7 @@ func (a *app) autoRedactSelection() {
 				return
 			}
 			// 把这一帧装为预览快照：打码预览与最终输出（确认时直接用它）都基于识别所用像素。
+			a.cancelPreviewSnap()
 			a.previewSnapGen++ // 作废仍在途的旧快照采集，避免其覆盖本帧
 			a.previewSnapPending = image.Rectangle{}
 			a.previewSnapRect = sel.Canon()
