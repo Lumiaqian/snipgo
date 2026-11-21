@@ -144,9 +144,11 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 			return
 		}
 		b := p.win.Bounds()
+		// 编辑中直接关闭时，可恢复记录也要带上未完成的标注
+		pngBytes := p.exportPNG()
 		a.pushClosedPin(closedPinRecord{
 			img:     p.img,
-			png:     p.png,
+			png:     pngBytes,
 			at:      image.Pt(b.X, b.Y),
 			origW:   p.origW,
 			origH:   p.origH,
@@ -287,13 +289,12 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					a.copyCompareComposite(p)
 					return
 				}
-				if len(p.png) > 0 {
-					pngCopy := p.png
+				if pngCopy := p.exportPNG(); len(pngCopy) > 0 {
 					go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
 				}
 			case cmdS:
-				if len(p.png) > 0 {
-					a.SavePNG(p.png)
+				if data := p.exportPNG(); len(data) > 0 {
+					a.SavePNG(data)
 				}
 			case keyO:
 				a.recognizePin(p)
@@ -534,9 +535,9 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 				Radius(12).
 				Shrink(0).
 				Cursor(ui.CursorGrab)
-			pngCopy := p.png
 			dragBtn.DragDataFrom(func() transfer.Data {
-				return tempPNGDragData(pngCopy, "SnipGo-Pin")
+				// 拖出瞬间才导出，编辑中也包含未完成的标注
+				return tempPNGDragData(p.exportPNG(), "SnipGo-Pin")
 			})
 			if dragBtn.Hovered() {
 				liquidSecondaryChrome(c, dragBtn, true, 12)
@@ -568,7 +569,7 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 			go mygo.RunOnMain(func() { p.toggleCollapsed() })
 		}
 		if len(p.png) > 0 && pinMiniIconBtn(c, iconCopy, "复制图像 (⌘C)") {
-			pngCopy := p.png
+			pngCopy := p.exportPNG()
 			go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
 		}
 		if pinMiniIconBtn(c, iconClose, "关闭贴图 (Esc)") {
@@ -603,6 +604,14 @@ func (p *pinWin) finishPinEdit() {
 	p.annotEditDrg = false
 	p.annot.CancelPointer()
 	p.annot.ClearSelection()
+	p.flattenEdits()
+	if p.win != nil && !p.win.IsDestroyed() {
+		p.win.Invalidate()
+	}
+}
+
+// flattenEdits 把 baseImg 与当前标注合成为 img/bmp/png，不退出编辑模式。
+func (p *pinWin) flattenEdits() {
 	if p.baseImg == nil {
 		return
 	}
@@ -622,9 +631,14 @@ func (p *pinWin) finishPinEdit() {
 	if png.Encode(&buf, p.img) == nil {
 		p.png = buf.Bytes()
 	}
-	if p.win != nil && !p.win.IsDestroyed() {
-		p.win.Invalidate()
+}
+
+// exportPNG 返回用于复制/保存/拖出的 PNG；编辑模式下先合成进行中的标注。
+func (p *pinWin) exportPNG() []byte {
+	if p.editMode {
+		p.flattenEdits()
 	}
+	return p.png
 }
 
 func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32, hovered bool) {
@@ -981,7 +995,7 @@ func (a *app) popupPinMenu(p *pinWin) {
 			Accelerator: "Cmd+C",
 			Disabled:    len(p.png) == 0,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				_ = mygo.Clipboard.WriteImage(p.png)
+				_ = mygo.Clipboard.WriteImage(p.exportPNG())
 			},
 		},
 		{
@@ -1023,7 +1037,7 @@ func (a *app) popupPinMenu(p *pinWin) {
 			Accelerator: "Cmd+S",
 			Disabled:    len(p.png) == 0,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				a.SavePNG(p.png)
+				a.SavePNG(p.exportPNG())
 			},
 		},
 		mygo.Separator(),
