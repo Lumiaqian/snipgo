@@ -141,6 +141,7 @@ func (a *app) ready() {
 	}
 
 	a.session = &session.Session{
+		Allowed:       a.allowCapture,
 		Live:          a.liveSnapshot,
 		CaptureRect:   a.captureRect,
 		CaptureWindow: a.captureWindow,
@@ -430,11 +431,47 @@ func (a *app) showErrorAlert(title, detail string) {
 	})
 }
 
+// showAbortedAlert 在实时采集失败且保留了选区时，让用户选择恢复重试或放弃。
+func (a *app) showAbortedAlert(msg string) {
+	if !a.alertShowing.CompareAndSwap(false, true) {
+		return
+	}
+	defer a.alertShowing.Store(false)
+	mygo.App.Focus()
+	res, err := mygo.Dialog.Message(mygo.MessageOptions{
+		Title:         "截图或贴图失败",
+		Message:       msg,
+		Detail:        "已保留刚才的选区和标注，可以恢复后重试。",
+		Buttons:       []string{"恢复截图并重试", "放弃"},
+		DefaultButton: 0,
+		CancelButton:  1,
+	})
+	// 对话框出错时保留快照，仍可从菜单栏恢复。
+	if err != nil {
+		return
+	}
+	mygo.RunOnMain(func() {
+		if res.Button == 0 {
+			if !a.session.RestoreAborted() {
+				a.session.DiscardAborted()
+				a.extraStatus = "无法恢复选区"
+			}
+		} else {
+			a.session.DiscardAborted()
+		}
+		a.refreshMenu()
+	})
+}
+
 func (a *app) SetStatus(msg string) {
 	if msg != "" {
 		log.Printf("session status: %s", msg)
 		if msg != capture.ErrPermissionDenied.Error() {
-			go a.showErrorAlert("截图或贴图失败", msg)
+			if a.session != nil && a.session.HasAborted() {
+				go a.showAbortedAlert(msg)
+			} else {
+				go a.showErrorAlert("截图或贴图失败", msg)
+			}
 		}
 	}
 	a.extraStatus = ""
@@ -544,6 +581,18 @@ func (a *app) refreshMenu() {
 			Label: "关闭全部贴图",
 			Badge: strconv.Itoa(len(a.pins)),
 			Click: func(*mygo.MenuItem, *mygo.Window) { a.closeAllPins() },
+		})
+	}
+	if a.session.HasAborted() {
+		items = append(items, &mygo.MenuItem{
+			Label: fmt.Sprintf("恢复未完成的截图（%d 个标注）", a.session.AbortedItemCount()),
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				if !a.session.RestoreAborted() {
+					a.session.DiscardAborted()
+					a.extraStatus = "无法恢复选区"
+					a.refreshMenu()
+				}
+			},
 		})
 	}
 	status := a.session.Status()

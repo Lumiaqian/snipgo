@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -575,4 +576,120 @@ func ready(ui *fakeUI, clip *fakeClip, wins []image.Rectangle) *Session {
 	s.Hotkey()
 	s.Deliver(s.gen, Snapshot{Frames: []crop.Screen{redScreen()}, Windows: wins}, nil)
 	return s
+}
+
+// newLiveFailSession 构造实时模式会话；capture 由调用方通过 *capErr 控制成败，每次 OnMain 通过 done 通知。
+func newLiveFailSession(capErr *error, ui *fakeUI, clip *fakeClip, done chan struct{}) *Session {
+	return &Session{
+		Live: func() (Snapshot, error) {
+			return Snapshot{Frames: []crop.Screen{{Bounds: image.Rect(0, 0, 100, 80), Scale: 2}}}, nil
+		},
+		CaptureRect: func(_ context.Context, sel image.Rectangle) (*image.NRGBA, error) {
+			if *capErr != nil {
+				return nil, *capErr
+			}
+			return image.NewNRGBA(image.Rect(0, 0, sel.Dx()*2, sel.Dy()*2)), nil
+		},
+		Clip: clip,
+		UI:   ui,
+		OnMain: func(fn func()) {
+			fn()
+			done <- struct{}{}
+		},
+	}
+}
+
+func waitDone(t *testing.T, done chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("CaptureRect did not finish")
+	}
+}
+
+func drawLiveRectAnnotation(s *Session) {
+	s.Hotkey()
+	s.BeginDrag(0, 10, 10)
+	s.MoveDrag(0, 60, 50)
+	s.EndDrag()
+	s.Annotations().Tool = annotate.ToolRect
+	s.BeginDrag(0, 20, 20)
+	s.MoveDrag(0, 40, 40)
+	s.EndDrag()
+}
+
+func TestLiveCaptureFailureKeepsSelectionAndAnnotations(t *testing.T) {
+	ui := &fakeUI{}
+	clip := &fakeClip{}
+	done := make(chan struct{}, 1)
+	capErr := errors.New("boom")
+	s := newLiveFailSession(&capErr, ui, clip, done)
+
+	drawLiveRectAnnotation(s)
+	orig, _, ok := s.ActiveRect()
+	if !ok || orig != image.Rect(10, 10, 60, 50) || len(s.Annotations().Items()) != 1 {
+		t.Fatalf("setup: rect %v ok %v items %d", orig, ok, len(s.Annotations().Items()))
+	}
+	s.Copy()
+	waitDone(t, done)
+	if s.Phase() != PhaseIdle || !s.HasAborted() || s.AbortedItemCount() != 1 {
+		t.Fatalf("phase %v aborted %v count %d", s.Phase(), s.HasAborted(), s.AbortedItemCount())
+	}
+	if ui.status != "boom" {
+		t.Fatalf("status %q", ui.status)
+	}
+
+	shown := ui.shown
+	if !s.RestoreAborted() {
+		t.Fatal("RestoreAborted failed")
+	}
+	if s.HasAborted() || s.Phase() != PhaseAdjusting || ui.shown != shown+1 || !s.IsLive() {
+		t.Fatalf("aborted %v phase %v shown %d->%d live %v", s.HasAborted(), s.Phase(), shown, ui.shown, s.IsLive())
+	}
+	if r, _, ok := s.ActiveRect(); !ok || r != orig {
+		t.Fatalf("restored rect %v ok %v", r, ok)
+	}
+	items := s.Annotations().Items()
+	if len(items) != 1 || items[0].Tool != annotate.ToolRect {
+		t.Fatalf("restored items %+v", items)
+	}
+
+	// 恢复后重试成功：写入剪贴板，且不再有可恢复快照。
+	capErr = nil
+	s.Copy()
+	waitDone(t, done)
+	if len(clip.data) == 0 || s.HasAborted() || s.Phase() != PhaseIdle {
+		t.Fatalf("clip %d aborted %v phase %v", len(clip.data), s.HasAborted(), s.Phase())
+	}
+}
+
+func TestLiveCaptureSuccessLeavesNoAborted(t *testing.T) {
+	ui := &fakeUI{}
+	done := make(chan struct{}, 1)
+	var capErr error
+	s := newLiveFailSession(&capErr, ui, &fakeClip{}, done)
+	drawLiveRectAnnotation(s)
+	s.Copy()
+	waitDone(t, done)
+	if s.HasAborted() || s.AbortedItemCount() != 0 || s.RestoreAborted() {
+		t.Fatal("successful capture must not leave an aborted stash")
+	}
+}
+
+func TestLiveCaptureTimeoutStashesAndDiscard(t *testing.T) {
+	ui := &fakeUI{}
+	done := make(chan struct{}, 1)
+	capErr := context.DeadlineExceeded
+	s := newLiveFailSession(&capErr, ui, &fakeClip{}, done)
+	drawLiveRectAnnotation(s)
+	s.Copy()
+	waitDone(t, done)
+	if ui.status != "截图超时，请重试" || !s.HasAborted() || s.AbortedItemCount() != 1 {
+		t.Fatalf("status %q aborted %v count %d", ui.status, s.HasAborted(), s.AbortedItemCount())
+	}
+	s.DiscardAborted()
+	if s.HasAborted() || s.RestoreAborted() {
+		t.Fatal("discard should drop the stash")
+	}
 }
