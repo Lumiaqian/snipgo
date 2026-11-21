@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -1508,16 +1509,23 @@ func readClipboardContentAsNRGBA(scale float64) (*image.NRGBA, error) {
 		switch ext {
 		case ".png", ".jpg", ".jpeg", ".gif":
 			if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
-				if img, _, decErr := image.Decode(bytes.NewReader(data)); decErr == nil {
+				img, decErr := decodeImageLimited(data)
+				if decErr == nil {
 					return toNRGBA(img), nil
+				}
+				if errors.Is(decErr, errImageTooLarge) {
+					return nil, decErr
 				}
 			}
 		}
 	}
 	// 2. 剪贴板位图图像。
 	if raw := mygo.Clipboard.ReadImage(); len(raw) > 0 {
-		decoded, _, err := image.Decode(bytes.NewReader(raw))
+		decoded, err := decodeImageLimited(raw)
 		if err != nil {
+			if errors.Is(err, errImageTooLarge) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("无法解析剪贴板图像: %v", err)
 		}
 		return toNRGBA(decoded), nil
@@ -1529,6 +1537,35 @@ func readClipboardContentAsNRGBA(scale float64) (*image.NRGBA, error) {
 		}
 	}
 	return nil, fmt.Errorf("剪贴板为空（支持图片、图片文件、文字、代码或 #HEX 色号贴图）")
+}
+
+var errImageTooLarge = errors.New("图片尺寸超限")
+
+const (
+	maxImageSide   = 32768
+	maxImagePixels = 120_000_000
+)
+
+type imageTooLargeError struct{ w, h int }
+
+func (e *imageTooLargeError) Error() string {
+	return fmt.Sprintf("图片尺寸过大（%d×%d），已拒绝贴图", e.w, e.h)
+}
+
+func (e *imageTooLargeError) Is(target error) bool { return target == errImageTooLarge }
+
+// decodeImageLimited 先读头部校验尺寸再解码，防止超大图（解压炸弹）耗尽内存。
+func decodeImageLimited(data []byte) (image.Image, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImageSide || cfg.Height > maxImageSide ||
+		cfg.Width*cfg.Height > maxImagePixels {
+		return nil, &imageTooLargeError{cfg.Width, cfg.Height}
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	return img, err
 }
 
 func toNRGBA(img image.Image) *image.NRGBA {
