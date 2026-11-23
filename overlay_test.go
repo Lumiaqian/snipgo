@@ -143,39 +143,65 @@ func TestLiveOverlayTransparentHoleAndWorkflow(t *testing.T) {
 	tt.SetDark(true)
 	tt.Frame()
 
-	// 1. 启动即高亮当前应用窗口，且画布 Alpha 刚好处于 macOS SkyLight 不穿透阈值（14..16/255），视觉全透明但能接住鼠标点击。
-	// 同时验证选区边框向外生长：窗口内部首像素 (100, 100) 和末像素 (499, 399) 不被蓝色边框遮盖，外侧紧邻像素 (99, 200) 着色为高亮框。
+	// 1. 启动与移动鼠标时无预选高亮框，且画布 Alpha 刚好处于 macOS SkyLight 不穿透阈值（14..16/255），视觉全透明但能接住鼠标点击。
 	img := tt.Image()
 	insideAlpha := img.RGBAAt(250, 250).A
 	outsideAlpha := img.RGBAAt(20, 20).A
 	if insideAlpha < 13 || insideAlpha > 20 || outsideAlpha < 13 || outsideAlpha > 20 {
 		t.Fatalf("alpha must be >=13 (macOS SkyLight hit-test threshold) and <=20 (transparent): inside=%+v outside=%+v", img.RGBAAt(250, 250), img.RGBAAt(20, 20))
 	}
+	if edgeOut := img.RGBAAt(99, 200); edgeOut.B > 30 || edgeOut.A > 20 {
+		t.Fatalf("unexpected border pixel (99,200) before first click: %+v", edgeOut)
+	}
+	if r, locked, ok := a.session.ActiveRect(); ok {
+		t.Fatalf("expected no selection frame before first click, got %v locked=%v", r, locked)
+	}
+	tt.Move(250, 250)
+	tt.Frame()
+	if r, locked, ok := a.session.ActiveRect(); ok {
+		t.Fatalf("expected hover alone not to show selection frame, got %v locked=%v", r, locked)
+	}
+
+	// 1b. 按 Space 开启悬停窗口高亮：验证选区边框向外生长（内侧首像素不被遮盖，外侧紧邻像素着蓝色边框）；再按 Space 关闭回无框态。
+	tt.Key(0, ui.KeySpace)
+	tt.Frame()
+	if r, locked, ok := a.session.ActiveRect(); !ok || locked || r != image.Rect(100, 100, 500, 400) {
+		t.Fatalf("expected Space to highlight FrontWindow, got %v locked=%v ok=%v", r, locked, ok)
+	}
+	img = tt.Image()
 	if edgeIn := img.RGBAAt(100, 200); edgeIn.B > 30 || edgeIn.A > 40 {
 		t.Fatalf("interior edge pixel (100,200) covered by border: %+v", edgeIn)
 	}
 	if edgeOut := img.RGBAAt(99, 200); edgeOut.B < 180 {
 		t.Fatalf("exterior border pixel (99,200) should carry blue stroke, got %+v", edgeOut)
 	}
-	if r, locked, ok := a.session.ActiveRect(); !ok || locked || r != image.Rect(100, 100, 500, 400) {
-		t.Fatalf("expected FrontWindow highlighted on start, got %v locked=%v ok=%v", r, locked, ok)
+	tt.Key(0, ui.KeySpace)
+	tt.Frame()
+	if r, locked, ok := a.session.ActiveRect(); ok {
+		t.Fatalf("expected second Space to clear hover frame, got %v locked=%v", r, locked)
 	}
 
-	// 2. 单击锁定当前高亮窗口进入 Adjusting，弹出浮动工具栏。
+	// 2. 在无框状态下首次单击窗口内部直接识别并锁定窗口进入 Adjusting，弹出浮动工具栏。
 	tt.ClickAt(250, 250)
 	tt.Frame()
 	if a.session.Phase() != session.PhaseAdjusting {
 		t.Fatalf("expected PhaseAdjusting after clicking window, got %v", a.session.Phase())
 	}
+	if r, locked, ok := a.session.ActiveRect(); !ok || !locked || r != image.Rect(100, 100, 500, 400) {
+		t.Fatalf("expected FrontWindow locked after click, got %v locked=%v ok=%v", r, locked, ok)
+	}
 	if !tt.HasText("复制") || !tt.HasText("贴图") {
 		t.Fatalf("toolbar not rendered on locked window, texts=%v", tt.Texts())
 	}
 
-	// 3. 右键退回 Selecting 再次自由拖拽框选。
+	// 3. 右键退回无框的 Selecting 状态，再次自由拖拽框选。
 	tt.RightClickAt(250, 250)
 	tt.Frame()
 	if a.session.Phase() != session.PhaseSelecting {
 		t.Fatalf("expected right-click to return to PhaseSelecting, got %v", a.session.Phase())
+	}
+	if r, locked, ok := a.session.ActiveRect(); ok {
+		t.Fatalf("expected no frame after returning to PhaseSelecting, got %v locked=%v", r, locked)
 	}
 	tt.Press(120, 140)
 	tt.Frame()

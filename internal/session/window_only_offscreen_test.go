@@ -47,7 +47,7 @@ func TestWindowOnlyUnavailableForPartlyOffscreenWindow(t *testing.T) {
 			s := newWindowOnlySession(c.win)
 			s.StartLive()
 			s.InitCursor(float64(c.win.Min.X+20), 40)
-			// 前台窗口默认被悬停；单击锁定。
+			// 启动时无高亮框；单击窗口内部自动识别并锁定。
 			s.BeginDrag(0, float64(c.win.Min.X+20), 40)
 			s.EndDrag()
 			if s.Phase() != PhaseAdjusting {

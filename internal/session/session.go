@@ -493,12 +493,12 @@ func (s *Session) Hotkey() {
 	s.StartFrozen()
 }
 
-// StartLive 立即弹出实时透明选区蒙层（快捷键模式：优先高亮光标所在最上层可见窗口，光标在桌面/菜单栏时回退前台应用窗口）。
+// StartLive 立即弹出实时透明选区蒙层（无框启动：只展示十字准星与透明蒙层，首次拖拽或单击窗口后再出现选区框）。
 func (s *Session) StartLive() {
 	s.startLive(false, false)
 }
 
-// StartLiveFromMenu 从菜单栏点击启动实时透明选区蒙层（优先高亮当前活跃应用窗口，移动鼠标后切换为光标下窗口）。
+// StartLiveFromMenu 从菜单栏点击启动实时透明选区蒙层（无框启动：只展示十字准星与透明蒙层，首次拖拽或单击窗口后再出现选区框）。
 func (s *Session) StartLiveFromMenu() {
 	s.startLive(true, false)
 }
@@ -636,7 +636,7 @@ func (s *Session) enterSelecting(snap Snapshot) {
 		}
 	}
 
-	s.windowSnap = true
+	s.windowSnap = false
 	s.windowOnly = false
 	s.beautify = false
 	s.measureMode = false
@@ -662,11 +662,10 @@ func (s *Session) enterSelecting(snap Snapshot) {
 			s.winIDByRect[front] = snap.FrontWinID
 		}
 	}
-	if front.Dx() >= minDIP && front.Dy() >= minDIP {
-		s.hoverWin = front
-	} else {
-		s.hoverWin = image.Rectangle{}
+	if len(s.windows) == 0 && front.Dx() >= minDIP && front.Dy() >= minDIP {
+		s.windows = []image.Rectangle{front}
 	}
+	s.hoverWin = image.Rectangle{}
 	s.UI.ShowSelection(snap.Frames)
 }
 
@@ -752,18 +751,16 @@ func (s *Session) RightClick() {
 		s.lockedWinRect = image.Rectangle{}
 		s.windowOnly = false
 		s.Annotations().Reset()
-		s.windowSnap = true
+		s.windowSnap = false
+		s.hoverWin = image.Rectangle{}
 		s.drag = dragState{owner: -1}
 		s.phase = PhaseSelecting
-		if s.hasCursor {
-			s.hoverWin = detectWindow(s.windows, s.frames, s.cursorX, s.cursorY)
-		}
 	case PhaseSelecting:
 		s.Cancel()
 	}
 }
 
-// Hover 更新未按下左键时的光标位置；鼠标实际移动后按光标位置实时高亮所在应用窗口。
+// Hover 更新未按下左键时的光标位置；若按 Space 开启了窗口悬停高亮，则按光标位置实时高亮所在应用窗口。
 func (s *Session) Hover(gx, gy float64) bool {
 	if s.phase != PhaseSelecting && s.phase != PhaseAdjusting {
 		return false
@@ -823,7 +820,7 @@ func (s *Session) HitTest(gx, gy float64) Handle {
 	return h
 }
 
-// ActiveRect 返回当前应高亮展示的矩形（框选中、已锁定选区或悬停识别到的窗口），以及是否为已锁定选区。
+// ActiveRect 返回当前应高亮展示的矩形（框选中、已锁定选区或开启窗口高亮时悬停识别到的窗口），以及是否为已锁定选区。
 func (s *Session) ActiveRect() (rect image.Rectangle, locked bool, ok bool) {
 	switch s.phase {
 	case PhaseSelecting:
@@ -1055,10 +1052,14 @@ func (s *Session) EndDrag() {
 			}
 			return
 		}
-		if s.windowSnap && !s.hoverWin.Empty() {
-			s.sel = s.hoverWin
-			s.lockedWinRect = s.hoverWin
-			s.lockedWinID = s.winIDByRect[s.hoverWin]
+		win := s.hoverWin
+		if !s.windowSnap {
+			win = detectWindow(s.windows, s.frames, d.x0, d.y0)
+		}
+		if !win.Empty() {
+			s.sel = win
+			s.lockedWinRect = win
+			s.lockedWinID = s.winIDByRect[win]
 			s.phase = PhaseAdjusting
 			if s.autoOCR {
 				s.OCR()

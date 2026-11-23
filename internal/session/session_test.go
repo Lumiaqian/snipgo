@@ -189,13 +189,15 @@ func TestHoverAndSingleClickSelectsWindowWhenSpaceToggled(t *testing.T) {
 		image.Rect(0, 0, 18, 18), // 下层窗口
 	}
 	s := ready(ui, clip, wins)
-	// 进入 Selecting 后鼠标悬停自动高亮顶层窗口，单击锁定进入 Adjusting。
-	if !s.Hover(5, 6) {
-		t.Fatal("hover should highlight window under cursor")
+	// 进入 Selecting 时默认无画框，单纯悬停不会提前画框；首次单击直接识别并锁定顶层窗口。
+	if rect, locked, ok := s.ActiveRect(); ok {
+		t.Fatalf("expected no initial selection frame, got %v locked=%v", rect, locked)
 	}
-	rect, locked, ok := s.ActiveRect()
-	if !ok || locked || rect != wins[0] {
-		t.Fatalf("hover rect %v locked %v ok %v", rect, locked, ok)
+	if s.Hover(5, 6) {
+		t.Fatal("hover should not highlight window before first click or Space toggle")
+	}
+	if rect, locked, ok := s.ActiveRect(); ok {
+		t.Fatalf("expected no hover rect when windowSnap is off, got %v locked=%v", rect, locked)
 	}
 
 	s.BeginDrag(0, 5, 6)
@@ -203,15 +205,30 @@ func TestHoverAndSingleClickSelectsWindowWhenSpaceToggled(t *testing.T) {
 	if s.Phase() != PhaseAdjusting {
 		t.Fatalf("phase %v, want PhaseAdjusting", s.Phase())
 	}
-	rect, locked, ok = s.ActiveRect()
+	rect, locked, ok := s.ActiveRect()
 	if !ok || !locked || rect != wins[0] {
 		t.Fatalf("locked rect %v", rect)
 	}
 
-	// 第一次右键退回 Selecting，第二次右键退出截图。
+	// 第一次右键退回无框 Selecting，按 Space 可显式开关窗口悬停高亮，再次右键退出截图。
 	s.RightClick()
 	if s.Phase() != PhaseSelecting {
 		t.Fatalf("first right click should return to PhaseSelecting, got %v", s.Phase())
+	}
+	if rect, locked, ok := s.ActiveRect(); ok {
+		t.Fatalf("expected frameless PhaseSelecting after right click, got %v locked=%v", rect, locked)
+	}
+	if !s.ToggleWindowSnap() {
+		t.Fatal("Space toggle in PhaseSelecting should succeed")
+	}
+	if rect, locked, ok := s.ActiveRect(); !ok || locked || rect != wins[0] {
+		t.Fatalf("Space hover rect %v locked %v ok %v", rect, locked, ok)
+	}
+	if !s.ToggleWindowSnap() {
+		t.Fatal("second Space toggle should disable window hover highlight")
+	}
+	if rect, locked, ok := s.ActiveRect(); ok {
+		t.Fatalf("expected hover rect cleared after toggling Space off, got %v locked=%v", rect, locked)
 	}
 	s.RightClick()
 	if s.Phase() != PhaseIdle {
@@ -237,24 +254,46 @@ func TestAutoSelectFrontWindowAndDynamicHover(t *testing.T) {
 	}
 	s.StartLive()
 	s.InitCursor(195, 5) // 模拟从屏幕右上角菜单栏触发
-	// 1. 启动瞬间即自动高亮当前前台应用窗口。
-	r, locked, ok := s.ActiveRect()
-	if !ok || locked || r != front || s.Phase() != PhaseSelecting {
-		t.Fatalf("front window not highlighted initially: rect=%v locked=%v phase=%v", r, locked, s.Phase())
+	// 1. 启动和移动鼠标时保持无框，不预先高亮前台或悬停窗口。
+	if r, locked, ok := s.ActiveRect(); ok || s.Phase() != PhaseSelecting {
+		t.Fatalf("expected frameless Selecting on start: rect=%v locked=%v ok=%v phase=%v", r, locked, ok, s.Phase())
 	}
-	// 2. 鼠标移向另一个窗口后，高亮框自动跟随切换到该窗口，单击即可锁定进入 Adjusting。
-	if !s.Hover(130, 60) {
-		t.Fatal("moving cursor to another window should switch hoverWin")
+	if s.Hover(130, 60) {
+		t.Fatal("hover should not trigger repaint/highlight while windowSnap is off")
 	}
-	r, locked, ok = s.ActiveRect()
-	if !ok || locked || r != other {
-		t.Fatalf("hover did not switch to other window: %v", r)
+	if r, locked, ok := s.ActiveRect(); ok {
+		t.Fatalf("expected still frameless after hover: rect=%v locked=%v", r, locked)
 	}
+
+	// 2. 首次单击直接选中光标所在的 other 窗口。
 	s.BeginDrag(0, 130, 60)
 	s.EndDrag()
-	r, locked, ok = s.ActiveRect()
+	r, locked, ok := s.ActiveRect()
 	if !ok || !locked || r != other || s.Phase() != PhaseAdjusting {
-		t.Fatalf("single click should lock hovered window: rect=%v locked=%v phase=%v", r, locked, s.Phase())
+		t.Fatalf("single click should lock window under cursor: rect=%v locked=%v phase=%v", r, locked, s.Phase())
+	}
+
+	// 3. 右键退回无框状态；按 Space 开启窗口高亮后再移动鼠标到 front 可动态切换高亮并单击锁定。
+	s.RightClick()
+	if r, _, ok := s.ActiveRect(); ok || s.Phase() != PhaseSelecting {
+		t.Fatalf("expected frameless PhaseSelecting after right click: rect=%v ok=%v phase=%v", r, ok, s.Phase())
+	}
+	if !s.ToggleWindowSnap() {
+		t.Fatal("expected Space toggle to enable window snap")
+	}
+	if r, locked, ok := s.ActiveRect(); !ok || locked || r != other {
+		t.Fatalf("expected other highlighted at current cursor after Space: rect=%v locked=%v ok=%v", r, locked, ok)
+	}
+	if !s.Hover(50, 50) {
+		t.Fatal("moving cursor to front window with Space active should switch hoverWin")
+	}
+	if r, locked, ok := s.ActiveRect(); !ok || locked || r != front {
+		t.Fatalf("hover did not switch to front window: rect=%v locked=%v ok=%v", r, locked, ok)
+	}
+	s.BeginDrag(0, 50, 50)
+	s.EndDrag()
+	if r, locked, ok := s.ActiveRect(); !ok || !locked || r != front || s.Phase() != PhaseAdjusting {
+		t.Fatalf("single click should lock hovered front window: rect=%v locked=%v phase=%v", r, locked, s.Phase())
 	}
 }
 
@@ -277,11 +316,18 @@ func TestMaximizedForegroundWindowOccludesBackgroundWindows(t *testing.T) {
 	}
 	s.StartLive()
 	s.InitCursor(2400, 400)
-	// Z 序在前的最大化窗口不能被跳过，绝不能穿透选中底下被遮住的窗口。
-	r, locked, ok := s.ActiveRect()
-	if !ok || locked || r != maxWarp {
-		t.Fatalf("expected maximized foreground window %v, got %v", maxWarp, r)
+	if r, _, ok := s.ActiveRect(); ok {
+		t.Fatalf("expected no initial frame before first click, got %v", r)
 	}
+	// Z 序在前的最大化窗口在首次单击和按 Space 悬停时均不能被跳过，绝不能穿透选中底下被遮住的窗口。
+	s.BeginDrag(0, 2400, 400)
+	s.EndDrag()
+	r, locked, ok := s.ActiveRect()
+	if !ok || !locked || r != maxWarp {
+		t.Fatalf("expected single click to lock maximized foreground window %v, got %v locked=%v", maxWarp, r, locked)
+	}
+	s.RightClick()
+	s.ToggleWindowSnap()
 	s.Hover(2450, 450)
 	if r, _, _ = s.ActiveRect(); r != maxWarp {
 		t.Fatalf("hover over maximized foreground window picked occluded %v, want %v", r, maxWarp)
@@ -305,31 +351,39 @@ func TestHotkeyPrefersCursorWindowWhileMenuPrefersFrontWindow(t *testing.T) {
 		UI:   ui,
 	}
 
-	// 1. 快捷键启动且光标正指着可见旁侧窗口 side：立即精确高亮光标下的 side，而非跳回 front。
+	// 1. 快捷键启动且悬停在 side：先保持无框；单击空白桌面不产生选区；单击 side 精确锁定 side。
 	s.StartLive()
 	s.InitCursor(800, 200)
-	if r, _, ok := s.ActiveRect(); !ok || r != side {
-		t.Fatalf("hotkey should highlight window under cursor %v, got %v", side, r)
+	if r, _, ok := s.ActiveRect(); ok {
+		t.Fatalf("hotkey should start frameless before first click, got %v", r)
 	}
-	// 在空白桌面单击（不拖拽）应清空悬停，不能误锁远处的窗口。
+	// 在空白桌面单击（不拖拽）应保留无框 Selecting，不能误锁远处的窗口。
 	s.BeginDrag(0, 1300, 700)
 	s.EndDrag()
 	if s.Phase() != PhaseSelecting {
 		t.Fatalf("single click on empty desktop should stay in PhaseSelecting, got %v", s.Phase())
 	}
+	if r, _, ok := s.ActiveRect(); ok {
+		t.Fatalf("single click on empty desktop should stay frameless, got %v", r)
+	}
+	s.BeginDrag(0, 800, 200)
+	s.EndDrag()
+	if r, locked, ok := s.ActiveRect(); !ok || !locked || r != side {
+		t.Fatalf("single click on side should lock %v, got %v locked=%v ok=%v", side, r, locked, ok)
+	}
 
-	// 2. 从菜单栏点击启动（光标被迫在右上角菜单位置压在 side 上）：优先选中当前应用窗口 front；
-	// 随后用户移动鼠标 >= 4px 后再跟随光标切换到 side。
+	// 2. 从菜单栏点击启动同样先保持无框；按 Space 开关窗口高亮并移动鼠标后可跟随光标高亮 side。
 	s.StartLiveFromMenu()
 	s.InitCursor(1100, 45)
-	if r, _, ok := s.ActiveRect(); !ok || r != front {
-		t.Fatalf("menu start should highlight FrontWindow %v initially, got %v", front, r)
+	if r, _, ok := s.ActiveRect(); ok {
+		t.Fatalf("menu start should also start frameless before first click/Space, got %v", r)
 	}
-	if !s.Hover(900, 250) {
-		t.Fatal("moving mouse after menu start should switch to window under cursor")
+	if !s.ToggleWindowSnap() {
+		t.Fatal("Space toggle after menu start should enable window snap")
 	}
-	if r, _, _ := s.ActiveRect(); r != side {
-		t.Fatalf("after mouse move got %v, want %v", r, side)
+	s.Hover(900, 250)
+	if r, _, ok := s.ActiveRect(); !ok || r != side {
+		t.Fatalf("after Space + mouse move got %v, want %v", r, side)
 	}
 }
 
@@ -546,6 +600,12 @@ func TestAnnotationsWindowOnlyBeautifyOCRAndRuler(t *testing.T) {
 	}
 	s.StartLive()
 	s.InitCursor(30, 30)
+	s.OCR()
+	if len(ui.ocr) != 0 {
+		t.Fatalf("OCR should not trigger without an active selection, got %d", len(ui.ocr))
+	}
+	s.BeginDrag(0, 30, 30)
+	s.EndDrag()
 	s.OCR()
 	<-doneOCR
 	if len(ui.ocr) != 1 || ui.ocr[0] == nil {
