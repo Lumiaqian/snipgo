@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
+	"os"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/Lumiaqian/mygo-ui-sdk/uitest"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/annotate"
@@ -560,4 +564,31 @@ func TestAgentReadyScrollUpdateCountdown(t *testing.T) {
 		uitest.AssertAgentReady(t, tt, opts)
 		uitest.AssertThemeParity(t, tt, opts)
 	})
+}
+
+func TestAppAndBundleLocaleUseSimplifiedChinese(t *testing.T) {
+	configureAppLocale()
+
+	if langs := mygo.App.Languages(); !slices.Equal(langs, []string{"zh-Hans"}) {
+		t.Fatalf("App.Languages() = %v, want [zh-Hans]", langs)
+	}
+
+	raw, err := os.ReadFile("mygo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		MacOS struct {
+			InfoPlist struct {
+				Region        string   `json:"CFBundleDevelopmentRegion"`
+				Localizations []string `json:"CFBundleLocalizations"`
+			} `json:"infoPlist"`
+		} `json:"macos"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MacOS.InfoPlist.Region != "zh-Hans" || !slices.Contains(cfg.MacOS.InfoPlist.Localizations, "zh-Hans") {
+		t.Fatalf("mygo.json macos.infoPlist localization = (%q, %v), want zh-Hans", cfg.MacOS.InfoPlist.Region, cfg.MacOS.InfoPlist.Localizations)
+	}
 }

@@ -8,7 +8,11 @@
     "minimumSystemVersion": "14.0",
     "infoPlist": {
       "LSUIElement": true,
-      "LSApplicationCategoryType": "public.app-category.utilities"
+      "LSApplicationCategoryType": "public.app-category.utilities",
+      "CFBundleDevelopmentRegion": "zh-Hans",
+      "CFBundleLocalizations": [
+        "zh-Hans"
+      ]
     }
   },
   "updates": {

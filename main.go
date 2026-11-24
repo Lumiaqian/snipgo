@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/egoist/mygo"
+	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/beautify"
@@ -86,10 +87,15 @@ type app struct {
 	quitting bool
 }
 
+func configureAppLocale() {
+	mygo.App.SetName("SnipGo")
+	mygo.App.SetLanguages("zh-Hans")
+}
+
 func main() {
 	initLogFile()
 	a := &app{}
-	mygo.App.SetName("SnipGo")
+	configureAppLocale()
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnWindowAllClosed(func() {})
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
