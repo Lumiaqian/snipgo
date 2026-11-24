@@ -94,7 +94,7 @@ func (a *app) paintAnnotations(c *ui.Context, o *overlay, border image.Rectangle
 	ox := float64(o.bounds.Min.X)
 	oy := float64(o.bounds.Min.Y)
 
-	ui.Box(c).Absolute().
+	ui.Box(c.Key("overlay-annotations")).Absolute().
 		Left(float32(border.Min.X)).Top(float32(border.Min.Y)).
 		Size(float32(border.Dx()), float32(border.Dy())).
 		ZIndex(3).

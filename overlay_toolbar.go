@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"math"
 	"snipgo/internal/annotate"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -41,7 +43,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 	anchorRight := border.Max.X >= min(win.Max.X-edgeGap, estBarW+edgeGap*2)
 
 	var chosen func()
-	wrap := ui.Column(c).Absolute().
+	wrap := ui.Column(c.Key("overlay-toolbar-wrap")).Absolute().
 		Top(float32(pos.Y)).
 		ZIndex(10).
 		Gap(6)
@@ -54,9 +56,12 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 
 	nativeGlass := o.bitmap == nil
 	wrap.Children(func() {
+		mainTB := behaviors.Toolbar(c.Key("overlay-main-toolbar"), behaviors.ToolbarOptions{
+			Label: "标注工具栏",
+		})
 		bar := liquidGlassCapsule(
 			c,
-			ui.Row(c).
+			mainTB.Root.
 				Height(mainBarH).
 				Padding(4, 8).
 				Gap(1.5).
@@ -159,9 +164,12 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 		})
 
 		if showSubBar {
+			subTB := behaviors.Toolbar(c.Key("overlay-style-toolbar"), behaviors.ToolbarOptions{
+				Label: "标注样式栏",
+			})
 			sub := liquidGlassCapsule(
 				c,
-				ui.Row(c).
+				subTB.Root.
 					Height(subBarH).
 					Padding(4, 10).
 					Gap(7).
@@ -183,7 +191,15 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 					for i, pal := range annotate.Palette {
 						pal := pal
 						active := curCol == pal
-						dot := ui.Box(c.Key(i)).Size(18, 18).Radius(9).
+						dot := subTB.RadioItem(
+							c.Key(fmt.Sprintf("palette-%d", i)),
+							fmt.Sprintf("颜色 %d", i+1),
+							active,
+							behaviors.ToolbarItemOptions{
+								Tooltip: fmt.Sprintf("颜色 #%02X%02X%02X", pal.R, pal.G, pal.B),
+							},
+						).
+							Size(18, 18).Radius(9).
 							Shrink(0).
 							Background(ui.RGB(pal.R, pal.G, pal.B)).
 							Cursor(ui.CursorPointer)

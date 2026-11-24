@@ -8,6 +8,7 @@ import (
 	"snipgo/internal/beautify"
 	"snipgo/internal/session"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
@@ -34,7 +35,7 @@ func (a *app) paintMask(c *ui.Context, o *overlay, canvasHovered bool) {
 		by0 := max(float32(win.Min.Y), float32(border.Min.Y)-strokeW)
 		bx1 := min(float32(win.Max.X), float32(border.Max.X)+strokeW)
 		by1 := min(float32(win.Max.Y), float32(border.Max.Y)+strokeW)
-		ui.Box(c).Absolute().
+		ui.Box(c.Key("overlay-sel-border")).Absolute().
 			Left(bx0).Top(by0).
 			Size(bx1-bx0, by1-by0).
 			ZIndex(3).
@@ -47,13 +48,13 @@ func (a *app) paintMask(c *ui.Context, o *overlay, canvasHovered bool) {
 		}
 	}
 	if locked && !a.session.Dragging() && a.session.Annotations().Tool == annotate.ToolNone {
-		for _, gp := range session.HandlePoints(rect) {
+		for idx, gp := range session.HandlePoints(rect) {
 			lx := gp.X - o.bounds.Min.X
 			ly := gp.Y - o.bounds.Min.Y
 			if lx < -4 || lx > win.Max.X+4 || ly < -4 || ly > win.Max.Y+4 {
 				continue
 			}
-			ui.Box(c).Absolute().
+			ui.Box(c.Key(fmt.Sprintf("overlay-handle-%d", idx))).Absolute().
 				Left(float32(lx)-4.5).Top(float32(ly)-4.5).
 				Size(9, 9).
 				ZIndex(4).
@@ -75,7 +76,7 @@ func (a *app) paintMask(c *ui.Context, o *overlay, canvasHovered bool) {
 			pos := hudTopLeft(win, border)
 			liquidGlassCapsule(
 				c,
-				ui.Box(c).Absolute().
+				ui.Box(c.Key("overlay-size-hud")).Absolute().
 					Left(float32(pos.X)).Top(float32(pos.Y)).
 					ZIndex(5).
 					Padding(4, 10).
@@ -94,7 +95,7 @@ func (a *app) paintMask(c *ui.Context, o *overlay, canvasHovered bool) {
 	if a.session.AutoOCR() && len(a.overlays) > 0 && o == a.overlays[0] {
 		liquidGlassCapsule(
 			c,
-			ui.Row(c).Absolute().
+			ui.Row(c.Key("overlay-ocr-banner")).Absolute().
 				Left(float32(max(12, win.Dx()/2-200))).Top(44).
 				Height(34).
 				Padding(0, 14).
@@ -165,7 +166,7 @@ func (a *app) paintTextEditor(c *ui.Context, o *overlay) {
 
 	box := liquidGlassCapsule(
 		c,
-		ui.Row(c).Absolute().
+		ui.Row(c.Key("overlay-text-editor")).Absolute().
 			Left(float32(lx)).Top(float32(ly)).
 			Width(220).
 			ZIndex(12).
@@ -207,7 +208,7 @@ func (a *app) paintRuler(c *ui.Context, o *overlay, win image.Rectangle) {
 	y0 := float32(rd.TopDIP) - oy
 	y1 := float32(rd.BottomDIP) - oy
 
-	ui.Box(c).Absolute().Left(0).Top(0).Size(float32(win.Dx()), float32(win.Dy())).
+	ui.Box(c.Key("overlay-ruler-lines")).Absolute().Left(0).Top(0).Size(float32(win.Dx()), float32(win.Dy())).
 		ZIndex(6).IgnoreInput(true).
 		Draw(func(p *ui.Painter, r ui.Rect) {
 			lineCol := ui.RGB(255, 69, 58)
@@ -225,7 +226,7 @@ func (a *app) paintRuler(c *ui.Context, o *overlay, win image.Rectangle) {
 	pal := uiPalette(c)
 	liquidGlassCapsule(
 		c,
-		ui.Row(c).Absolute().
+		ui.Row(c.Key("overlay-ruler-badge")).Absolute().
 			Left(float32(pos.X)).Top(float32(pos.Y)).
 			ZIndex(7).
 			Padding(5, 10).
@@ -272,7 +273,7 @@ func (a *app) paintLoupe(c *ui.Context, o *overlay, win image.Rectangle) {
 
 	liquidGlassCapsule(
 		c,
-		ui.Box(c).Absolute().
+		ui.Box(c.Key("overlay-loupe")).Absolute().
 			Left(float32(pos.X)).Top(float32(pos.Y)).
 			Size(float32(boxW), float32(boxH)).
 			ZIndex(6).
@@ -327,7 +328,7 @@ func (a *app) paintPickedPaletteBar(c *ui.Context, o *overlay, win image.Rectang
 	pal := uiPalette(c)
 	bar := liquidGlassCapsule(
 		c,
-		ui.Row(c).Absolute().
+		ui.Row(c.Key("overlay-picked-palette")).Absolute().
 			Left(float32(max(12, win.Dx()/2-210))).Top(14).
 			Height(34).
 			Padding(0, 10).
@@ -428,17 +429,12 @@ func hudTopLeft(win, border image.Rectangle) image.Point {
 }
 
 func toolbarTopLeft(win, border image.Rectangle, barW, barH int) image.Point {
-	const gap = 8
-	x := border.Max.X - barW
-	x = max(win.Min.X+gap, min(x, win.Max.X-barW-gap))
-	y := border.Max.Y + gap
-	if y+barH+gap > win.Max.Y {
-		y = border.Min.Y - barH - gap
-	}
-	if y < win.Min.Y+gap {
-		y = max(win.Min.Y+gap, border.Max.Y-barH-gap)
-	}
-	return image.Pt(x, y)
+	return behaviors.PlaceFloating(win, border, image.Pt(barW, barH), behaviors.PlacementOptions{
+		PreferredSide:  behaviors.SideBottom,
+		Align:          behaviors.AlignEnd,
+		Gap:            8,
+		InsideFallback: true,
+	}).Point
 }
 
 func loupePos(win image.Rectangle, cursor image.Point, boxW, boxH int) image.Point {

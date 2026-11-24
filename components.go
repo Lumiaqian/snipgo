@@ -119,7 +119,11 @@ func toolbarDivider(c *ui.Context) {
 
 func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) bool {
 	p := uiPalette(c)
-	btn := ui.Row(c).
+	btn := ui.ButtonBase(c).
+		Role(ui.RoleToggleButton).
+		Checked(active).
+		Disabled(disabled).
+		DimDisabled(false).
 		Label(label).
 		Tooltip(tip).
 		Size(26, 26).
@@ -162,7 +166,7 @@ func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled 
 func pillButton(c *ui.Context, ic *ui.SVG, label, tip string, h, padX, iconSize, fontSize float32, primary, subtleBg bool) bool {
 	p := uiPalette(c)
 	rad := h * 0.5
-	el := ui.Row(c).
+	el := ui.ButtonBase(c).
 		Label(label).
 		Height(h).
 		Padding(0, padX).
@@ -211,7 +215,9 @@ func miniPillBtn(c *ui.Context, ic *ui.SVG, label string, primary bool) bool {
 
 func strokeDotBtn(c *ui.Context, label, tip string, dotR float32, active bool) bool {
 	p := uiPalette(c)
-	btn := ui.Box(c).
+	btn := ui.ButtonBase(c).
+		Role(ui.RoleRadio).
+		Checked(active).
 		Label(label).
 		Tooltip(tip).
 		Size(24, 24).

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
@@ -577,7 +578,12 @@ func renderSegmented(c *ui.Context, groupID string, selected int, labels []strin
 		trackBg = ui.RGBA(255, 255, 255, 0.07)
 		trackBd = ui.RGBA(255, 255, 255, 0.07)
 	}
-	track := ui.Row(c.Key(groupID+"-track")).
+	sel := selected
+	seg := behaviors.SegmentedGroup(c.Key(groupID+"-track"), &sel, behaviors.SegmentedGroupOptions{
+		Label:  groupID,
+		Labels: labels,
+	})
+	track := seg.Track.
 		Height(trackH).
 		Padding(pad, pad).
 		Gap(2).
@@ -589,9 +595,8 @@ func renderSegmented(c *ui.Context, groupID string, selected int, labels []strin
 	track.Children(func() {
 		for i, lbl := range labels {
 			i, lbl := i, lbl
-			active := i == selected
-			opt := ui.Box(c.Key(fmt.Sprintf("%s-opt-%d", groupID, i))).
-				Label(lbl).
+			active := i == sel
+			opt := seg.Segment(i).
 				Height(optH).
 				Radius(optR).
 				Cursor(ui.CursorPointer).
@@ -654,11 +659,11 @@ func renderSegmented(c *ui.Context, groupID string, selected int, labels []strin
 					ui.Text(c, lbl).FontSize(fs).FontWeight(fw).NoWrap().TextColor(txtCol)
 				})
 			})
-			if opt.Clicked() {
-				clicked = i
-			}
 		}
 	})
+	if seg.Changed() {
+		return sel
+	}
 	return clicked
 }
 
