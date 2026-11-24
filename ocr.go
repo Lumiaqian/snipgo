@@ -434,11 +434,19 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 								ui.Text(c, lk).FontSize(12).MaxLines(1).Ellipsis("…").Grow(1).
 									TextColor(p.Text)
 								if isURL {
-									if miniPillBtn(c, iconExternal, "打开", true) {
+									openLabel := "打开"
+									if len(ow.links) > 1 {
+										openLabel = fmt.Sprintf("打开链接 %d", i+1)
+									}
+									if miniPillBtnLabeled(c.Key("ocr-open"), iconExternal, "打开", openLabel, true) {
 										go func() { _ = mygo.Shell.OpenExternal(lk) }()
 									}
 								}
-								if miniPillBtn(c, iconCopy, "复制", false) {
+								copyLabel := "复制链接"
+								if len(ow.links) > 1 {
+									copyLabel = fmt.Sprintf("复制链接 %d", i+1)
+								}
+								if miniPillBtnLabeled(c.Key("ocr-copy"), iconCopy, "复制", copyLabel, false) {
 									ow.copyText(lk)
 									ow.setCopiedBadge("已复制链接")
 								}
@@ -606,13 +614,18 @@ func ocrTableColWeights(tbl vision.Table) []float32 {
 	return weights
 }
 
-func paintOCRTableCell(c *ui.Context, key, cell string, weight float32, isHeader bool, ow *ocrWindow) {
+func paintOCRTableCell(c *ui.Context, key string, rowIdx, colIdx int, cell string, weight float32, isHeader bool, ow *ocrWindow) {
 	p := uiPalette(c)
 	hovBg := p.Accent.Alpha(0.10)
 	if p.Dark {
 		hovBg = p.Accent.Alpha(0.14)
 	}
-	box := ui.Box(c.Key(key)).
+	cellLabel := fmt.Sprintf("单元格 %d-%d", rowIdx+1, colIdx+1)
+	if strings.TrimSpace(cell) != "" {
+		cellLabel = fmt.Sprintf("单元格 %d-%d：%s", rowIdx+1, colIdx+1, cell)
+	}
+	box := ui.ButtonBase(c.Key(key)).
+		Label(cellLabel).
 		Grow(weight).
 		Basis(0).
 		MinWidth(44).
@@ -665,7 +678,7 @@ func paintOCRTableView(c *ui.Context, ow *ocrWindow) {
 			if j < len(r0) {
 				cell = r0[j]
 			}
-			paintOCRTableCell(c, fmt.Sprintf("ocr-cell-0-%d", j), cell, w, true, ow)
+			paintOCRTableCell(c, fmt.Sprintf("ocr-cell-0-%d", j), 0, j, cell, w, true, ow)
 		}
 	})
 	panelHairline(c)
@@ -687,7 +700,7 @@ func paintOCRTableView(c *ui.Context, ow *ocrWindow) {
 						if j < len(row) {
 							cell = row[j]
 						}
-						paintOCRTableCell(c, fmt.Sprintf("ocr-cell-%d-%d", i+1, j), cell, w, false, ow)
+						paintOCRTableCell(c, fmt.Sprintf("ocr-cell-%d-%d", i+1, j), i+1, j, cell, w, false, ow)
 					}
 				})
 				if i < len(bodyRows)-1 {

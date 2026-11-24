@@ -4,6 +4,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
@@ -301,56 +302,61 @@ func (a *app) paintSettingsAppearanceTab(c *ui.Context, p palette, sw *settingsW
 			accentRow := ui.Row(c).AlignItems(ui.Center).Gap(7)
 			accentRow.Children(func() {
 				ui.Text(c, "主题色").Width(68).FontSize(12).NoWrap().TextColor(p.TextSecondary)
-				autoActive := sw.draft.AccentColor == "" || sw.draft.AccentColor == "system"
-				if miniPillBtn(c.Key("acc-system"), nil, "自动", autoActive) && !autoActive {
-					sw.draft.AccentColor = "system"
-					a.applyAndSaveSettings(sw.draft)
-					sw.setSavedBadge("✓ 已实时生效")
-				}
-				for i, opt := range accentOptions {
-					if opt.ID == "system" {
-						continue
-					}
-					opt := opt
-					active := sw.draft.AccentColor == opt.ID
-					dotCol := opt.Light
-					if p.Dark {
-						dotCol = opt.Dark
-					}
-					swBtn := ui.Box(c.Key(840+i)).
-						Label(opt.Name).
-						Tooltip(opt.Name).
-						Size(24, 24).
-						Radius(12).
-						Shrink(0).
-						Padding(2.5, 2.5).
-						Cursor(ui.CursorPointer)
-					targetScale := float32(1.0)
-					if swBtn.Pressed() {
-						targetScale = 0.94
-					} else if active || swBtn.Hovered() {
-						targetScale = 1.08
-					}
-					sc := swBtn.AnimateTo("acc-pop", targetScale, springPop)
-					if sc != 1.0 {
-						swBtn.Scale(sc, sc)
-					}
-					ringCol := ui.Transparent
-					if active {
-						ringCol = dotCol
-					} else if swBtn.Hovered() {
-						ringCol = p.TextSecondary
-					}
-					animRing := swBtn.AnimateColor("acc-ring", ringCol, colorMorph)
-					swBtn.Border(1.5, animRing).Children(func() {
-						ui.Box(c).Fill().Radius(9).Background(dotCol).Border(1, ui.RGBA(255, 255, 255, 0.38))
-					})
-					if swBtn.Clicked() && !active {
-						sw.draft.AccentColor = opt.ID
+				accentGroup := behaviors.RadioGroup(c.Key("set-accent-group"), behaviors.RadioGroupOptions{
+					Label: "主题色",
+				})
+				accentGroup.Root.AlignItems(ui.Center).Gap(7).Children(func() {
+					autoActive := sw.draft.AccentColor == "" || sw.draft.AccentColor == "system"
+					if miniPillBtn(c.Key("acc-system"), nil, "自动", autoActive) && !autoActive {
+						sw.draft.AccentColor = "system"
 						a.applyAndSaveSettings(sw.draft)
 						sw.setSavedBadge("✓ 已实时生效")
 					}
-				}
+					for i, opt := range accentOptions {
+						if opt.ID == "system" {
+							continue
+						}
+						opt := opt
+						active := sw.draft.AccentColor == opt.ID
+						dotCol := opt.Light
+						if p.Dark {
+							dotCol = opt.Dark
+						}
+						swBtn := accentGroup.Item(c.Key(840+i), opt.Name, active, behaviors.RadioItemOptions{
+							Tooltip: opt.Name,
+						}).
+							Size(24, 24).
+							Radius(12).
+							Shrink(0).
+							Padding(2.5, 2.5).
+							Cursor(ui.CursorPointer)
+						targetScale := float32(1.0)
+						if swBtn.Pressed() {
+							targetScale = 0.94
+						} else if active || swBtn.Hovered() {
+							targetScale = 1.08
+						}
+						sc := swBtn.AnimateTo("acc-pop", targetScale, springPop)
+						if sc != 1.0 {
+							swBtn.Scale(sc, sc)
+						}
+						ringCol := ui.Transparent
+						if active {
+							ringCol = dotCol
+						} else if swBtn.Hovered() {
+							ringCol = p.TextSecondary
+						}
+						animRing := swBtn.AnimateColor("acc-ring", ringCol, colorMorph)
+						swBtn.Border(1.5, animRing).Children(func() {
+							ui.Box(c).Fill().Radius(9).Background(dotCol).Border(1, ui.RGBA(255, 255, 255, 0.38))
+						})
+						if swBtn.Clicked() && !active {
+							sw.draft.AccentColor = opt.ID
+							a.applyAndSaveSettings(sw.draft)
+							sw.setSavedBadge("✓ 已实时生效")
+						}
+					}
+				})
 			})
 		})
 
@@ -364,10 +370,10 @@ func (a *app) paintSettingsAppearanceTab(c *ui.Context, p palette, sw *settingsW
 				statusBadgePill(c, "效果就绪", true)
 			})
 			ui.Row(c).Gap(8).AlignItems(ui.Center).IgnoreInput(true).Children(func() {
-				_ = actionPillBtn(c, iconOCR, "识图", "", false, true)
-				_ = actionPillBtn(c, iconPin, "贴图", "", false, true)
+				paintPreviewPillChip(c, iconOCR, "识图", false)
+				paintPreviewPillChip(c, iconPin, "贴图", false)
 				ui.Spacer(c)
-				_ = actionPillBtn(c, iconCheck, "复制选中", "", true, false)
+				paintPreviewPillChip(c, iconCheck, "复制选中", true)
 			})
 		})
 	})
@@ -523,4 +529,24 @@ func sectionTitle(c *ui.Context, title string) {
 
 func settingsCard(c *ui.Context) ui.Element {
 	return liquidCard(c, ui.Column(c).Padding(12, 14).Gap(9))
+}
+
+func paintPreviewPillChip(c *ui.Context, ic *ui.SVG, label string, primary bool) {
+	p := uiPalette(c)
+	el := ui.Row(c).Height(26).Padding(0, 9).Gap(4).AlignItems(ui.Center).Radius(13).Shrink(0)
+	if primary {
+		liquidPrimaryChrome(c, el, 13)
+	} else {
+		liquidSecondaryChrome(c, el, false, 13)
+	}
+	el.Children(func() {
+		col := p.Text
+		if primary {
+			col = p.AccentText
+		}
+		if ic != nil {
+			ui.Icon(c, ic).FontSize(14).TextColor(col)
+		}
+		ui.Text(c, label).FontSize(12).FontWeight(500).NoWrap().TextColor(col)
+	})
 }

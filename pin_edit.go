@@ -10,6 +10,7 @@ import (
 	"snipgo/internal/annotate"
 	"snipgo/internal/measure"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -111,9 +112,12 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32, hovered bool) {
 	}
 
 	// 底部内嵌紧凑标注工具栏
+	tb := behaviors.Toolbar(c.Key("pin-edit-toolbar"), behaviors.ToolbarOptions{
+		Label: "贴图标注栏",
+	})
 	bar := liquidGlassCapsule(
 		c,
-		ui.Row(c).Absolute().
+		tb.Root.Absolute().
 			Right(8).Bottom(8).
 			Height(36).
 			Padding(0, 6).

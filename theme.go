@@ -475,7 +475,7 @@ func glassGroupBtn(c *ui.Context, add func(ui.Element) ui.Element, ic *ui.SVG, l
 		return actionPillBtn(c, ic, label, tip, false, true)
 	}
 	p := uiPalette(c)
-	btn := add(ui.Row(c).
+	btn := add(ui.ButtonBase(c).
 		Label(label).
 		Tooltip(tip).
 		Height(26).
@@ -667,18 +667,23 @@ func renderSegmented(c *ui.Context, groupID string, selected int, labels []strin
 	return clicked
 }
 
-// liquidSwitch 绘制带物理弹簧拉伸胶囊旋钮与 Oklab 变色的 macOS 26 开关控件。
+// liquidSwitch 绘制带物理弹簧拉伸胶囊旋钮与 Oklab 变色的 macOS 26 开关控件（基于 ui.SwitchBase，支持整行点击与键盘 Space/Enter）。
 func liquidSwitch(c *ui.Context, key string, on *bool, label string) bool {
 	p := uiPalette(c)
-	toggled := false
-	row := ui.Row(c.Key("sw-row-" + key)).
+	var fallback bool
+	target := on
+	if target == nil {
+		target = &fallback
+	}
+	row := ui.SwitchBase(c.Key("sw-row-"+key), target).
 		Label(label).
 		AlignItems(ui.Center).
 		Gap(12).
 		Cursor(ui.CursorPointer)
+	changed := row.Changed()
+	val := *target
 	row.Children(func() {
 		ui.Text(c, label).FontSize(12.5).Grow(1).TextColor(p.Text)
-		val := on != nil && *on
 		knobBox := ui.Box(c.Key("sw-knob-"+key)).Size(42, 24).Radius(12).Shrink(0)
 		targetTrack := p.InputBg
 		targetBorder := p.InputBorder
@@ -707,11 +712,7 @@ func liquidSwitch(c *ui.Context, key string, on *bool, label string) bool {
 			painter.Fill(pill, fill, h/2)
 		})
 	})
-	if row.Clicked() && on != nil {
-		*on = !*on
-		toggled = true
-	}
-	return toggled
+	return changed
 }
 
 func boolFloat(b bool) float32 {
@@ -747,7 +748,7 @@ func panelHairline(c *ui.Context) {
 
 // macTrafficCloseBtn 绘制 macOS 原生风格左上角红色关闭圆钮（常显清晰 × 符号，带弹簧缩放与高光）。
 func macTrafficCloseBtn(c *ui.Context, label, tip string) bool {
-	btn := ui.Box(c).
+	btn := ui.ButtonBase(c.Key("traffic-close-"+label)).
 		Label(label).
 		Tooltip(tip).
 		Size(20, 20).

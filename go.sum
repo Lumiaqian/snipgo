@@ -1,5 +1,7 @@
 github.com/Lumiaqian/mygo-ui-sdk v0.1.0 h1:i81kLpjG3pyCkGaPuDcjdaxaog0X8OKqxP0wcb69cng=
 github.com/Lumiaqian/mygo-ui-sdk v0.1.0/go.mod h1:TLJoDjqcwPTOFKsKhaD28LKczXxcBTQ0HvUs3sYfUAg=
+github.com/Lumiaqian/mygo-ui-sdk v0.1.1 h1:S7eRTpoX5hq8KsUrbX55zgedeXh0q0kAUI/UDg8Z/8Y=
+github.com/Lumiaqian/mygo-ui-sdk v0.1.1/go.mod h1:TLJoDjqcwPTOFKsKhaD28LKczXxcBTQ0HvUs3sYfUAg=
 github.com/ProtonMail/go-crypto v1.4.1 h1:9RfcZHqEQUvP8RzecWEUafnZVtEvrBVL9BiF67IQOfM=
 github.com/ProtonMail/go-crypto v1.4.1/go.mod h1:e1OaTyu5SYVrO9gKOEhTc+5UcXtTUa+P3uLudwcgPqo=
 github.com/cloudflare/circl v1.6.2 h1:hL7VBpHHKzrV5WTfHCaBsgx/HGbBYlgrwvNXEVDYYsQ=

@@ -164,10 +164,14 @@ func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled 
 }
 
 func pillButton(c *ui.Context, ic *ui.SVG, label, tip string, h, padX, iconSize, fontSize float32, primary, subtleBg bool) bool {
+	return pillButtonLabeled(c, ic, label, label, tip, h, padX, iconSize, fontSize, primary, subtleBg)
+}
+
+func pillButtonLabeled(c *ui.Context, ic *ui.SVG, text, accessLabel, tip string, h, padX, iconSize, fontSize float32, primary, subtleBg bool) bool {
 	p := uiPalette(c)
 	rad := h * 0.5
 	el := ui.ButtonBase(c).
-		Label(label).
+		Label(accessLabel).
 		Height(h).
 		Padding(0, padX).
 		Gap(4).
@@ -200,7 +204,7 @@ func pillButton(c *ui.Context, ic *ui.SVG, label, tip string, h, padX, iconSize,
 		if ic != nil {
 			ui.Icon(c, ic).FontSize(iconSize).TextColor(col)
 		}
-		ui.Text(c, label).FontSize(fontSize).FontWeight(500).NoWrap().TextColor(col)
+		ui.Text(c, text).FontSize(fontSize).FontWeight(500).NoWrap().TextColor(col)
 	})
 	return el.Clicked()
 }
@@ -211,6 +215,10 @@ func actionPillBtn(c *ui.Context, ic *ui.SVG, label, tip string, primary, subtle
 
 func miniPillBtn(c *ui.Context, ic *ui.SVG, label string, primary bool) bool {
 	return pillButton(c, ic, label, "", 24, 10, 11.5, 11, primary, true)
+}
+
+func miniPillBtnLabeled(c *ui.Context, ic *ui.SVG, text, accessLabel string, primary bool) bool {
+	return pillButtonLabeled(c, ic, text, accessLabel, "", 24, 10, 11.5, 11, primary, true)
 }
 
 func strokeDotBtn(c *ui.Context, label, tip string, dotR float32, active bool) bool {
@@ -250,9 +258,10 @@ func strokeDotBtn(c *ui.Context, label, tip string, dotR float32, active bool) b
 	return btn.Clicked()
 }
 
-func pinMiniIconBtn(c *ui.Context, ic *ui.SVG, tip string) bool {
+func pinMiniIconBtn(c *ui.Context, ic *ui.SVG, label, tip string) bool {
 	p := uiPalette(c)
-	btn := ui.Row(c).
+	btn := ui.ButtonBase(c.Key("mini-"+label)).
+		Label(label).
 		Tooltip(tip).
 		Size(24, 24).
 		AlignItems(ui.Center).

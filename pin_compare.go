@@ -176,6 +176,8 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 	bar := liquidGlassCapsule(
 		c,
 		ui.Row(c).Absolute().
+			Role(ui.RoleToolbar).
+			Label("贴图对比栏").
 			Right(8).Bottom(8).
 			Height(34).
 			Padding(0, 6).

@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
@@ -362,15 +363,18 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 							// A. 模板网格（2列×5行，全部 10 套模板一屏直达）
 							sectionTitle(c, "模板样式")
 							metas := beautify.AllTemplates()
-							grid := ui.Column(c).Gap(4)
-							grid.Children(func() {
+							tplGroup := behaviors.RadioGroup(c.Key("tpl-kind-group"), behaviors.RadioGroupOptions{
+								Label:       "模板样式",
+								Orientation: ui.Vertical,
+							})
+							tplGroup.Root.Gap(4).Children(func() {
 								for r := 0; r < len(metas); r += 2 {
 									r := r
 									row := ui.Row(c.Key(4000 + r)).Gap(5)
 									row.Children(func() {
-										a.paintTemplateChoiceCard(c.Key(4100+r), tw, metas[r])
+										a.paintTemplateChoiceCard(c.Key(4100+r), tplGroup, tw, metas[r])
 										if r+1 < len(metas) {
-											a.paintTemplateChoiceCard(c.Key(4100+r+1), tw, metas[r+1])
+											a.paintTemplateChoiceCard(c.Key(4100+r+1), tplGroup, tw, metas[r+1])
 										} else {
 											ui.Box(c).Grow(1)
 										}
@@ -388,14 +392,16 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 									ui.Spacer(c)
 									ui.Text(c, themes[curIdx].Name).FontSize(11).FontWeight(500).TextColor(p.ActiveText)
 								})
-								dots := ui.Row(c).Gap(8).AlignItems(ui.Center)
-								dots.Children(func() {
+								themeGroup := behaviors.RadioGroup(c.Key("tpl-theme-group"), behaviors.RadioGroupOptions{
+									Label: "纸色风格",
+								})
+								themeGroup.Root.Gap(8).AlignItems(ui.Center).Children(func() {
 									for i, th := range themes {
 										i, th := i, th
 										active := i == curIdx
-										btn := ui.Row(c.Key(4300+i)).
-											Label(th.Name).
-											Tooltip(th.Name).
+										btn := themeGroup.Item(c.Key(4300+i), th.Name, active, behaviors.RadioItemOptions{
+											Tooltip: th.Name,
+										}).
 											Size(28, 20).
 											Radius(10).
 											Padding(2, 2).
@@ -534,12 +540,12 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 	})
 }
 
-func (a *app) paintTemplateChoiceCard(c *ui.Context, tw *templateWindow, meta beautify.TemplateMeta) {
+func (a *app) paintTemplateChoiceCard(c *ui.Context, group behaviors.RadioGroupParts, tw *templateWindow, meta beautify.TemplateMeta) {
 	p := uiPalette(c)
 	active := tw.opts.Kind == meta.Kind
-	btn := ui.Row(c).
-		Label(meta.Name).
-		Tooltip(meta.ShortDesc).
+	btn := group.Item(c, meta.Name, active, behaviors.RadioItemOptions{
+		Tooltip: meta.ShortDesc,
+	}).
 		Grow(1).
 		Height(33).
 		AlignItems(ui.Center).

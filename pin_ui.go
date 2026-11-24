@@ -6,6 +6,7 @@ import (
 	"math"
 	"snipgo/internal/pinops"
 
+	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
@@ -25,9 +26,12 @@ func (a *app) recognizePin(p *pinWin) {
 
 func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 	pal := uiPalette(c)
+	tb := behaviors.Toolbar(c.Key("pin-hover-toolbar"), behaviors.ToolbarOptions{
+		Label: "贴图工具栏",
+	})
 	bar := liquidGlassCapsule(
 		c,
-		ui.Row(c).Absolute().
+		tb.Root.Absolute().
 			Right(8).Top(8).
 			Height(32).
 			Padding(0, 6).
@@ -62,32 +66,32 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 			})
 		}
 		// 2. 贴图原地二次矢量标注 / 一键主体抠图 / 套模板 / 像素对比
-		if pinMiniIconBtn(c, iconEdit, "原地编辑标注 (E)") {
+		if pinMiniIconBtn(c, iconEdit, "原地标注", "原地编辑标注 (E)") {
 			p.togglePinEdit()
 		}
-		if pinMiniIconBtn(c, iconTemplate, "套模板（便签 / 拍立得 / 浏览器…）(B)") {
+		if pinMiniIconBtn(c, iconTemplate, "套模板", "套模板（便签 / 拍立得 / 浏览器…）(B)") {
 			a.openPinTemplate(p)
 		}
-		if pinMiniIconBtn(c, iconCutout, "离线 AI 主体抠图去背景 (K)") && !p.cutting {
+		if pinMiniIconBtn(c, iconCutout, "主体抠图", "离线 AI 主体抠图去背景 (K)") && !p.cutting {
 			a.cutoutPinInPlace(p)
 		}
-		if len(a.pins) >= 2 && pinMiniIconBtn(c, iconCompare, "拉帘对比 / 像素 Diff (D)") {
+		if len(a.pins) >= 2 && pinMiniIconBtn(c, iconCompare, "拉帘对比", "拉帘对比 / 像素 Diff (D)") {
 			a.togglePinCompare(p)
 		}
-		if pinMiniIconBtn(c, iconOCR, "识图提取文字 (O)") {
+		if pinMiniIconBtn(c, iconOCR, "识图", "识图提取文字 (O)") {
 			a.recognizePin(p)
 		}
-		if pinMiniIconBtn(c, iconGhost, "鼠标点击穿透 (P)") {
+		if pinMiniIconBtn(c, iconGhost, "点击穿透", "鼠标点击穿透 (P)") {
 			go mygo.RunOnMain(func() { a.togglePinPassthrough(p) })
 		}
-		if pinMiniIconBtn(c, iconCollapse, "折叠为胶囊 (M)") {
+		if pinMiniIconBtn(c, iconCollapse, "折叠胶囊", "折叠为胶囊 (M)") {
 			go mygo.RunOnMain(func() { p.toggleCollapsed() })
 		}
-		if len(p.png) > 0 && pinMiniIconBtn(c, iconCopy, "复制图像 (⌘C)") {
+		if len(p.png) > 0 && pinMiniIconBtn(c, iconCopy, "复制贴图", "复制图像 (⌘C)") {
 			pngCopy := p.exportPNG()
 			go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
 		}
-		if pinMiniIconBtn(c, iconClose, "关闭贴图 (Esc)") {
+		if pinMiniIconBtn(c, iconClose, "关闭贴图", "关闭贴图 (Esc)") {
 			go mygo.RunOnMain(func() {
 				if p.win != nil && !p.win.IsDestroyed() {
 					p.win.Close()

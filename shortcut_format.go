@@ -23,7 +23,7 @@ func (a *app) shortcutRecorderRow(c *ui.Context, p palette, sw *settingsWindow, 
 		ui.Spacer(c)
 
 		if recording {
-			recBtn := ui.Row(c.Key("sc-rec-"+def.id)).
+			recBtn := ui.ButtonBase(c.Key("sc-rec-"+def.id)).
 				Label("录制"+def.label+"快捷键").
 				Tooltip("按下新组合键，按 Esc 取消，点击退出录制").
 				Height(28).
@@ -35,7 +35,6 @@ func (a *app) shortcutRecorderRow(c *ui.Context, p palette, sw *settingsWindow, 
 				Border(1.5, p.Accent).
 				InsetShadow(0, 1, 0, 0, p.CardTopRim).
 				Cursor(ui.CursorPointer).
-				Focusable().
 				AutoFocus()
 			recBtn.HandleInput(func(ev ui.InputEvent) bool {
 				switch ev.Kind {
@@ -103,7 +102,7 @@ func (a *app) shortcutRecorderRow(c *ui.Context, p palette, sw *settingsWindow, 
 		}
 
 		if *valPtr != defVal {
-			resetBtn := ui.Box(c.Key("sc-rst-"+def.id)).
+			resetBtn := ui.ButtonBase(c.Key("sc-rst-"+def.id)).
 				Label("重置"+def.label+"快捷键").
 				Tooltip("恢复默认："+strings.Join(formatMacShortcutSymbols(defVal), " ")).
 				Size(24, 24).
@@ -125,7 +124,7 @@ func (a *app) shortcutRecorderRow(c *ui.Context, p palette, sw *settingsWindow, 
 			}
 		}
 
-		idleBtn := ui.Row(c.Key("sc-idle-"+def.id)).
+		idleBtn := ui.ButtonBase(c.Key("sc-idle-"+def.id)).
 			Label("录制"+def.label).
 			Tooltip("点击后直接按下新组合键").
 			Height(28).

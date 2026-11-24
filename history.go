@@ -318,9 +318,9 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 								rIdx := rowIdx
 								rowEl := ui.Row(c.Key(1000 + rIdx)).Gap(10)
 								rowEl.Children(func() {
-									a.paintHistoryCard(c.Key(2000+rIdx), hw, hw.entries[rIdx])
+									a.paintHistoryCard(c.Key(2000+rIdx), hw, rIdx+1, hw.entries[rIdx])
 									if rIdx+1 < len(hw.entries) {
-										a.paintHistoryCard(c.Key(2000+rIdx+1), hw, hw.entries[rIdx+1])
+										a.paintHistoryCard(c.Key(2000+rIdx+1), hw, rIdx+2, hw.entries[rIdx+1])
 									} else {
 										ui.Box(c).Grow(1)
 									}
@@ -334,7 +334,7 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 	})
 }
 
-func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) {
+func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, idx int, e store.Entry) {
 	p := uiPalette(c)
 	bmp := hw.thumbs[e.ID]
 	cardCol := ui.Column(c.Key("hc-"+e.ID)).
@@ -360,7 +360,8 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 
 	itemCard.Children(func() {
 		// 缩略图区域：拖拽导 PNG、单击复制、双击直接转为贴图
-		thumbBox := ui.Box(c).
+		thumbBox := ui.ButtonBase(c.Key("hc-thumb-"+e.ID)).
+			Label(fmt.Sprintf("历史截图 %d", idx)).
 			Height(116).
 			Radius(10).
 			Clip().
@@ -399,23 +400,23 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, e store.Entry) 
 			ui.Text(c, e.CreatedAt.Format("15:04")).
 				FontSize(10.5).FontFeatures("tnum").NoWrap().TextColor(p.TextMuted)
 			ui.Spacer(c)
-			if pinMiniIconBtn(c, iconCopy, "复制到剪贴板") {
+			if pinMiniIconBtn(c, iconCopy, fmt.Sprintf("复制历史 %d", idx), "复制到剪贴板") {
 				hw.historyCopy(e)
 			}
-			if pinMiniIconBtn(c, iconPin, "转为悬浮贴图") {
+			if pinMiniIconBtn(c, iconPin, fmt.Sprintf("贴图历史 %d", idx), "转为悬浮贴图") {
 				a.historyPin(hw, e)
 			}
-			if pinMiniIconBtn(c, iconTemplate, "套模板（便签 / 拍立得 / 浏览器…）") {
+			if pinMiniIconBtn(c, iconTemplate, fmt.Sprintf("套模板历史 %d", idx), "套模板（便签 / 拍立得 / 浏览器…）") {
 				a.historyDecodeAsync(hw, e, func(img *image.NRGBA, _ []byte) {
 					a.openTemplateWindow(img, image.Rectangle{})
 				})
 			}
-			if pinMiniIconBtn(c, iconOCR, "识图提取文字") {
+			if pinMiniIconBtn(c, iconOCR, fmt.Sprintf("识图历史 %d", idx), "识图提取文字") {
 				a.historyDecodeAsync(hw, e, func(img *image.NRGBA, _ []byte) {
 					a.RecognizeImage(img)
 				})
 			}
-			if pinMiniIconBtn(c, iconTrash, "删除此记录") {
+			if pinMiniIconBtn(c, iconTrash, fmt.Sprintf("删除历史 %d", idx), "删除此记录") {
 				if a.history != nil {
 					a.history.Delete(e.ID)
 					a.reloadHistoryWindow()
