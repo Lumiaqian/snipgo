@@ -18,7 +18,7 @@ func (a *app) paintPalettePinOverlay(c *ui.Context, p *pinWin, w, h float32) {
 	pal := uiPalette(c)
 	copyAndToast := func(val string) {
 		a.copyTextToClipboard(val)
-		p.setPaletteNotice("已复制 " + val)
+		p.setPinNotice("已复制 " + val)
 	}
 
 	renderHitBtn := func(key string, r image.Rectangle, sx, sy float32, radius float32, label, tip, val string) {
@@ -76,21 +76,26 @@ func (a *app) paintPalettePinOverlay(c *ui.Context, p *pinWin, w, h float32) {
 			renderHitBtn(fmt.Sprintf("pin-palette-swatch-%d", i), r, sx, sy, 10, lbl, tip, val)
 		}
 	}
+}
 
+func (p *pinWin) paintPinNoticeOverlay(c *ui.Context) {
+	if p == nil || p.collapsed {
+		return
+	}
 	if toastTxt := p.paletteToast.Text(p.paletteToastFallback); toastTxt != "" {
 		ui.Row(c.Key("pin-palette-toast-wrap")).
 			Absolute().
 			Left(0).Right(0).Bottom(8).
 			Justify(ui.Center).
 			IgnoreInput(true).
-			ZIndex(4).
+			ZIndex(9).
 			Children(func() {
 				statusBadgePill(c.Key("pin-palette-toast-badge"), toastTxt, true)
 			})
 	}
 }
 
-func (p *pinWin) setPaletteNotice(msg string) {
+func (p *pinWin) setPinNotice(msg string) {
 	if p == nil {
 		return
 	}
@@ -109,7 +114,7 @@ func (a *app) copyPaletteCSS(p *pinWin) {
 		return
 	}
 	a.copyTextToClipboard(beautify.FormatPaletteCSS(p.paletteColors, p.paletteFmt))
-	p.setPaletteNotice("已复制 CSS")
+	p.setPinNotice("已复制 CSS")
 }
 
 func cloneColorSlice(colors []color.NRGBA) []color.NRGBA {

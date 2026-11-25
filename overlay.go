@@ -184,7 +184,7 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 			return false
 		}
 		hoverChanged := a.session.Hover(gx, gy)
-		if (len(a.session.PickedColors()) > 0 || a.session.ColorPickerMode()) && len(a.overlays) > 1 && o.index != a.lastOverlayIdx {
+		if (len(a.session.PickedColors()) > 0 || a.session.ColorPickerMode() || a.session.AutoOCR()) && len(a.overlays) > 1 && o.index != a.lastOverlayIdx {
 			a.lastOverlayIdx = o.index
 			a.invalidateOthers(o)
 			return true

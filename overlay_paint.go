@@ -91,24 +91,28 @@ func (a *app) paintMask(c *ui.Context, o *overlay, canvasHovered bool) {
 			})
 		}
 	}
-	if a.session.AutoOCR() && len(a.overlays) > 0 && o == a.overlays[0] {
-		liquidGlassCapsule(
-			c,
-			ui.Row(c.Key("overlay-ocr-banner")).Absolute().
-				Left(float32(max(12, win.Dx()/2-200))).Top(44).
-				Height(34).
-				Padding(0, 14).
-				Gap(7).
-				AlignItems(ui.Center).
-				ZIndex(6).
-				IgnoreInput(true),
-			17,
-			nativeGlass,
-		).Children(func() {
-			ui.Icon(c, iconOCR).FontSize(14).TextColor(pal.Accent)
-			ui.Text(c, "识图模式 · 拖拽框选或单击窗口松手即刻提取文字与二维码 · Esc 取消").
-				FontSize(12).FontWeight(500).NoWrap().TextColor(pal.Text)
-		})
+	if a.session.AutoOCR() && a.ownsCursorDisplay(o) {
+		ui.Row(c.Key("overlay-ocr-banner-wrap")).Absolute().
+			Left(0).Right(0).Top(44).
+			Justify(ui.Center).
+			IgnoreInput(true).
+			ZIndex(6).
+			Children(func() {
+				liquidGlassCapsule(
+					c,
+					ui.Row(c.Key("overlay-ocr-banner")).
+						Height(34).
+						Padding(0, 14).
+						Gap(7).
+						AlignItems(ui.Center),
+					17,
+					nativeGlass,
+				).Children(func() {
+					ui.Icon(c, iconOCR).FontSize(14).TextColor(pal.Accent)
+					ui.Text(c, "识图模式 · 拖拽框选或单击窗口松手即刻提取文字与二维码 · Esc 取消").
+						FontSize(12).FontWeight(500).NoWrap().TextColor(pal.Text)
+				})
+			})
 	}
 	if a.session.ColorPickerMode() && len(a.session.PickedColors()) == 0 && a.ownsCursorDisplay(o) {
 		ui.Row(c.Key("overlay-picker-banner-wrap")).Absolute().

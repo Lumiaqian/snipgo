@@ -26,6 +26,10 @@ func (a *app) savePNGWithMode(data []byte, forceDialog bool) {
 	if len(data) == 0 {
 		return
 	}
+	if a.savePNGHook != nil {
+		a.savePNGHook(data, forceDialog)
+		return
+	}
 	if a.cfg.CopyOnSave {
 		_ = mygo.Clipboard.WriteImage(data)
 	}
@@ -51,6 +55,7 @@ func (a *app) savePNGWithMode(data []byte, forceDialog bool) {
 			saved := filepath.Base(full)
 			mygo.RunOnMain(func() {
 				a.sessionStatus("已快存: " + saved)
+				a.showActionToast("已快存 " + saved)
 			})
 		}()
 		return

@@ -211,11 +211,19 @@ func (a *app) copyTemplateResult(tw *templateWindow) {
 }
 
 func (a *app) saveTemplateResult(tw *templateWindow) {
+	a.saveTemplateResultWithMode(tw, false)
+}
+
+func (a *app) saveTemplateResultWithMode(tw *templateWindow, saveAs bool) {
 	a.lastTplOpts = tw.opts
 	a.hasTplOpts = true
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
 		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
-		a.SavePNG(pngBytes)
+		if saveAs {
+			a.SavePNGAs(pngBytes)
+		} else {
+			a.SavePNG(pngBytes)
+		}
 		tw.setStatusBadge("✓ 已触发保存")
 		if tw.win != nil && !tw.win.IsDestroyed() {
 			tw.win.Invalidate()
@@ -249,6 +257,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 
 		typing := c.FocusTakesText()
 		cmdC := c.Shortcut(ui.Cmd, ui.KeyC)
+		cmdShiftS := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyS)
 		cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
 		cmdT := c.Shortcut(ui.Cmd, ui.KeyT)
 		cmdEnter := c.Shortcut(ui.Cmd, ui.KeyEnter)
@@ -257,6 +266,8 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 
 		if (!typing && cmdC) || cmdEnter || plainEnter {
 			a.copyTemplateResult(tw)
+		} else if cmdShiftS {
+			a.saveTemplateResultWithMode(tw, true)
 		} else if cmdS {
 			a.saveTemplateResult(tw)
 		} else if cmdT || plainT {

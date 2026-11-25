@@ -68,6 +68,7 @@ type app struct {
 	paletteBarNotice    badgeState
 	paletteNoticeText   string
 	clipboardTextHook   func(string)
+	savePNGHook         func([]byte, bool)
 	lastTplOpts         beautify.TemplateOptions
 	hasTplOpts          bool
 	countdown           *countdownSession
@@ -172,7 +173,9 @@ func (a *app) ready() {
 		OnOutput:        a.recordHistory,
 		OnCutout:        a.cutoutSelection,
 		OnTemplate:      a.openTemplateWindow,
+		OnSaveAs:        a.SavePNGAs,
 		OnColorCopied:   a.showColorToast,
+		OnRulerCopied:   func(txt string) { a.showActionToast("已复制 " + txt) },
 		OnPalettePinned: a.showPalettePin,
 		OnMain:          mygo.RunOnMain,
 	}

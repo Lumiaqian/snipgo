@@ -232,6 +232,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 		cmdQ := c.Shortcut(ui.Cmd, ui.KeyQ)
 		cmdW := c.Shortcut(ui.Cmd, ui.KeyW)
 		cmdC := c.Shortcut(ui.Cmd, ui.KeyC)
+		cmdShiftS := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyS)
 		cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
 		cmdZ := c.Shortcut(ui.Cmd, ui.KeyZ)
 		cmdShiftZ := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ)
@@ -253,7 +254,32 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 
 		if tabKey && len(p.paletteColors) > 0 && !p.collapsed && !p.editMode && !p.rulerMode && !p.compareMode {
 			p.paletteFmt = beautify.NextColorFormat(p.paletteFmt)
-			p.setPaletteNotice("格式: " + beautify.ColorFormatName(p.paletteFmt))
+			p.setPinNotice("格式: " + beautify.ColorFormatName(p.paletteFmt))
+			return
+		}
+		if cmdC {
+			if p.compareMode {
+				a.copyCompareComposite(p)
+				return
+			}
+			if pngCopy := p.exportPNG(); len(pngCopy) > 0 {
+				if mygo.App.IsReady() {
+					go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
+				}
+				p.setPinNotice("已复制图像")
+			}
+			return
+		}
+		if cmdShiftS {
+			if data := p.exportPNG(); len(data) > 0 {
+				a.SavePNGAs(data)
+			}
+			return
+		}
+		if cmdS {
+			if data := p.exportPNG(); len(data) > 0 {
+				a.SavePNG(data)
+			}
 			return
 		}
 
@@ -326,18 +352,6 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					}
 				})
 				return
-			case cmdC:
-				if p.compareMode {
-					a.copyCompareComposite(p)
-					return
-				}
-				if pngCopy := p.exportPNG(); len(pngCopy) > 0 {
-					go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
-				}
-			case cmdS:
-				if data := p.exportPNG(); len(data) > 0 {
-					a.SavePNG(data)
-				}
 			case keyO:
 				a.recognizePin(p)
 			case keyB:
@@ -435,7 +449,10 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					p.hoverX, p.hoverY, p.hasHover = float64(ev.X), float64(ev.Y), true
 					if sp, ok := p.sampleRuler(); ok {
 						txt := fmt.Sprintf("%d × %d px", sp.WidthPx(), sp.HeightPx())
-						go mygo.RunOnMain(func() { mygo.Clipboard.WriteText(txt) })
+						if mygo.App.IsReady() {
+							go mygo.RunOnMain(func() { mygo.Clipboard.WriteText(txt) })
+						}
+						p.setPinNotice("已复制 " + txt)
 					}
 					return true
 				}
@@ -518,6 +535,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					a.paintPinHoverBar(c, p)
 				}
 			}
+			p.paintPinNoticeOverlay(c)
 			pal := uiPalette(c)
 			borderCol := ui.Transparent
 			switch {
