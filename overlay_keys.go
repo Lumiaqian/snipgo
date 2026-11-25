@@ -53,6 +53,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	cmdShiftZ := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ)
 	keyT := c.Shortcut(0, ui.KeyT)
 	cmdT := c.Shortcut(ui.Cmd, ui.KeyT)
+	cmdShiftS := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyS)
 	cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
 	keyO := c.Shortcut(0, ui.KeyO)
 	keyW := c.Shortcut(0, ui.KeyW)
@@ -194,6 +195,9 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	case keyT || cmdT:
 		a.deferUI(a.session.Pin)
 		return true
+	case cmdShiftS:
+		a.deferUI(a.session.SaveAs)
+		return true
 	case cmdS:
 		a.deferUI(a.session.Save)
 		return true
@@ -210,6 +214,10 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		a.deferUI(a.session.Template)
 		return true
 	case keyR:
+		if a.session.IsLive() && a.session.Phase() == session.PhaseSelecting {
+			a.deferUI(func() { a.session.SwitchLiveToFrozenForMeasure() })
+			return true
+		}
 		if a.session.ToggleMeasure() {
 			a.invalidateAll()
 		}

@@ -13,10 +13,11 @@ import (
 )
 
 type colorToastWin struct {
-	win  *mygo.Window
-	gen  int
-	text string
-	col  color.NRGBA
+	win      *mygo.Window
+	gen      int
+	text     string
+	hasColor bool
+	col      color.NRGBA
 }
 
 func (a *app) copyTextToClipboard(text string) {
@@ -69,7 +70,60 @@ func paintColorToast(c *ui.Context, text string, col color.NRGBA) {
 	})
 }
 
+func toastWidthForText(displayText string) int {
+	textW := 0
+	for _, r := range displayText {
+		if r > 127 {
+			textW += 13
+		} else {
+			textW += 8
+		}
+	}
+	return max(144, min(360, 56+textW))
+}
+
+func paintActionToast(c *ui.Context, text string) {
+	pal := uiPalette(c)
+	liquidGlassCapsule(
+		c,
+		ui.Row(c.Key("action-copy-toast")).
+			Fill().
+			Padding(0, 12).
+			Gap(7).
+			AlignItems(ui.Center),
+		18,
+		false,
+	).Children(func() {
+		ui.Icon(c, iconCheck).
+			FontSize(13.5).
+			TextColor(pal.Accent)
+		ui.Text(c, text).
+			FontSize(12).
+			FontWeight(600).
+			FontFeatures("tnum").
+			NoWrap().
+			MaxLines(1).
+			Ellipsis("…").
+			Grow(1).
+			TextColor(pal.Text)
+	})
+}
+
 func (a *app) showColorToast(text string, col color.NRGBA) {
+	if text == "" {
+		return
+	}
+	a.showToastWindow(text, true, col)
+}
+
+func (a *app) showActionToast(text string) {
+	if text == "" {
+		return
+	}
+	a.showToastWindow(text, false, color.NRGBA{})
+}
+
+func (a *app) showToastWindow(text string, hasColor bool, col color.NRGBA) {
 	if text == "" || !mygo.App.IsReady() {
 		return
 	}
@@ -79,7 +133,11 @@ func (a *app) showColorToast(text string, col color.NRGBA) {
 	}
 	a.closeColorToast()
 
-	w := max(168, min(320, 96+len(text)*8))
+	displayText := text
+	if hasColor {
+		displayText = "已复制 " + text
+	}
+	w := toastWidthForText(displayText)
 	h := 36
 	pt := mygo.Screen.CursorScreenPoint()
 	x, y := pt.X+16, pt.Y+18
@@ -99,9 +157,9 @@ func (a *app) showColorToast(text string, col color.NRGBA) {
 	}
 
 	col.A = 255
-	toast := &colorToastWin{gen: gen, text: text, col: col}
+	toast := &colorToastWin{gen: gen, text: text, hasColor: hasColor, col: col}
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:           "取色提示",
+		Title:           "操作提示",
 		Width:           w,
 		Height:          h,
 		X:               x,
@@ -114,7 +172,13 @@ func (a *app) showColorToast(text string, col color.NRGBA) {
 		SkipTaskbar:     true,
 		DisableResize:   true,
 		DisableMaximize: true,
-		Content:         ui.View(func(c *ui.Context) { paintColorToast(c, toast.text, toast.col) }),
+		Content: ui.View(func(c *ui.Context) {
+			if toast.hasColor {
+				paintColorToast(c, toast.text, toast.col)
+			} else {
+				paintActionToast(c, toast.text)
+			}
+		}),
 	})
 	toast.win = win
 	a.colorToast = toast

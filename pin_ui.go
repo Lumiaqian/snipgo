@@ -93,7 +93,10 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 		}
 		if len(p.png) > 0 && pinMiniIconBtn(c, iconCopy, "复制贴图", "复制图像 (⌘C)") {
 			pngCopy := p.exportPNG()
-			go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
+			if mygo.App.IsReady() {
+				go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
+			}
+			p.setPinNotice("已复制图像")
 		}
 		if pinMiniIconBtn(c, iconClose, "关闭贴图", "关闭贴图 (Esc)") {
 			go mygo.RunOnMain(func() {
@@ -301,7 +304,7 @@ func (a *app) popupPinMenu(p *pinWin) {
 				Checked: p.paletteFmt == f,
 				Click: func(*mygo.MenuItem, *mygo.Window) {
 					p.paletteFmt = f
-					p.setPaletteNotice("格式: " + beautify.ColorFormatName(f))
+					p.setPinNotice("格式: " + beautify.ColorFormatName(f))
 				},
 			})
 		}
@@ -327,6 +330,7 @@ func (a *app) popupPinMenu(p *pinWin) {
 			Disabled:    len(p.png) == 0,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				_ = mygo.Clipboard.WriteImage(p.exportPNG())
+				p.setPinNotice("已复制图像")
 			},
 		},
 		{

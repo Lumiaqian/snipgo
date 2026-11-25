@@ -40,6 +40,7 @@ const (
 	ActionCopy ConfirmAction = iota
 	ActionPin
 	ActionSave
+	ActionSaveAs
 	ActionOCR
 	ActionCutout
 	ActionTemplate
@@ -138,6 +139,8 @@ type Session struct {
 	OnCutout func(img *image.NRGBA, r image.Rectangle)
 	// OnTemplate 在触发套模板（B）并采集/合成完选区标注后回调，打开所见即所得「套模板工作台」。
 	OnTemplate func(img *image.NRGBA, r image.Rectangle)
+	// OnSaveAs 在触发 ⇧⌘S 另存为并编码 PNG 后回调，强制弹出保存对话框。
+	OnSaveAs func(png []byte)
 	// OnMain 把后台采集结果送回主线程。测试里直接同步执行。
 	OnMain func(func())
 	// Launch 替换默认的后台整屏冻结采集（测试钩子）。
@@ -147,25 +150,28 @@ type Session struct {
 	// Background 在后台执行冻结模式的后处理与编码（默认 go fn()，测试可替换为同步执行）。
 	Background func(func())
 
-	gen             int
-	phase           Phase
-	live            bool
-	autoOCR         bool
-	preferFront     bool
-	windowSnap      bool
-	windowOnly      bool
-	beautify        bool
-	beautifyPreset  beautify.Preset
-	beautifyChrome  bool
-	colorFmt        beautify.ColorFormat
-	pickedColors    []color.NRGBA
-	colorPickerMode bool
-	preservePicked  bool
+	gen                   int
+	phase                 Phase
+	live                  bool
+	autoOCR               bool
+	preferFront           bool
+	windowSnap            bool
+	windowOnly            bool
+	beautify              bool
+	beautifyPreset        beautify.Preset
+	beautifyChrome        bool
+	colorFmt              beautify.ColorFormat
+	pickedColors          []color.NRGBA
+	colorPickerMode       bool
+	preservePicked        bool
+	enterMeasureOnDeliver bool
 
 	// OnColorFormatChanged 在用户在选区或色板栏切换取色格式时触发，便于上层持久化配置。
 	OnColorFormatChanged func(beautify.ColorFormat)
 	// OnColorCopied 在取色复制到剪贴板后触发（供轻提示浮层显示反馈）。
 	OnColorCopied func(text string, col color.NRGBA)
+	// OnRulerCopied 在测量尺单击复制尺寸后触发（供轻提示浮层显示反馈）。
+	OnRulerCopied func(text string)
 	// OnPalettePinned 在贴出色板卡时触发；为空时回退到 UI.ShowPin。
 	OnPalettePinned func(colors []color.NRGBA, img *image.NRGBA, png []byte, at image.Point, dipW, dipH int)
 	measureMode     bool
@@ -612,6 +618,7 @@ func (s *Session) startLive(preferFront, autoOCR bool) {
 	s.autoOCR = autoOCR
 	s.colorPickerMode = false
 	s.preservePicked = false
+	s.enterMeasureOnDeliver = false
 	s.preferFront = preferFront
 	s.enterSelecting(snap)
 }
@@ -638,6 +645,15 @@ func (s *Session) StartColorPickerFromMenu() {
 
 // SwitchLiveToFrozenForColor 在实时选区阶段按 Tab 切入冻结取色模式，保留已采集色板与光标位置。
 func (s *Session) SwitchLiveToFrozenForColor() bool {
+	return s.switchLiveToFrozen(true, false)
+}
+
+// SwitchLiveToFrozenForMeasure 在实时选区阶段按 R 切入冻结像素测量尺模式，保留已采集色板与光标位置。
+func (s *Session) SwitchLiveToFrozenForMeasure() bool {
+	return s.switchLiveToFrozen(false, true)
+}
+
+func (s *Session) switchLiveToFrozen(colorPicker, measure bool) bool {
 	if !s.live || s.phase != PhaseSelecting {
 		return false
 	}
@@ -653,7 +669,8 @@ func (s *Session) SwitchLiveToFrozenForColor() bool {
 	s.gen++
 	gen := s.gen
 	s.preservePicked = true
-	s.colorPickerMode = true
+	s.colorPickerMode = colorPicker
+	s.enterMeasureOnDeliver = measure
 	s.live = false
 	s.autoOCR = false
 	s.preferFront = false
@@ -684,6 +701,7 @@ func (s *Session) startFrozen(preferFront, colorPicker bool) {
 	s.autoOCR = false
 	s.colorPickerMode = colorPicker
 	s.preservePicked = false
+	s.enterMeasureOnDeliver = false
 	s.preferFront = preferFront
 	s.phase = PhaseCapturing
 	s.kickFrozen(gen)
@@ -749,11 +767,13 @@ func (s *Session) enterSelecting(snap Snapshot) {
 
 	preservePicked := s.preservePicked
 	s.preservePicked = false
+	enterMeasure := s.enterMeasureOnDeliver
+	s.enterMeasureOnDeliver = false
 
 	s.windowSnap = false
 	s.windowOnly = false
 	s.beautify = false
-	s.measureMode = false
+	s.measureMode = enterMeasure
 	if !preservePicked {
 		s.pickedColors = nil
 		s.hasCursor = false
@@ -1034,7 +1054,11 @@ func (s *Session) BeginDrag(owner int, x, y float64) {
 	s.cursorX, s.cursorY, s.hasCursor = x, y, true
 	if s.MeasureMode() {
 		if rd, ok := s.SampleRuler(); ok && s.Clip != nil {
-			s.Clip.WriteText(fmt.Sprintf("%d × %d px", rd.WidthPx, rd.HeightPx))
+			txt := fmt.Sprintf("%d × %d px", rd.WidthPx, rd.HeightPx)
+			s.Clip.WriteText(txt)
+			if s.OnRulerCopied != nil {
+				s.OnRulerCopied(txt)
+			}
 		}
 		return
 	}
@@ -1221,8 +1245,11 @@ func (s *Session) Copy() { s.confirm(ActionCopy) }
 // Pin 把当前选区原地悬浮贴图并结束本轮截图。
 func (s *Session) Pin() { s.confirm(ActionPin) }
 
-// Save 裁剪当前选区并弹出保存文件对话框。
+// Save 裁剪当前选区并执行默认保存流程。
 func (s *Session) Save() { s.confirm(ActionSave) }
+
+// SaveAs 裁剪当前选区并强制弹出“另存为”对话框。
+func (s *Session) SaveAs() { s.confirm(ActionSaveAs) }
 
 // OCR 识别当前选区文字或二维码并复制到剪贴板。
 func (s *Session) OCR() { s.confirm(ActionOCR) }
@@ -1544,6 +1571,14 @@ func (s *Session) applyOutput(act ConfirmAction, r image.Rectangle, img *image.N
 		s.status = ""
 		s.UI.SetStatus("")
 		s.UI.SavePNG(pngBytes)
+	case ActionSaveAs:
+		s.status = ""
+		s.UI.SetStatus("")
+		if s.OnSaveAs != nil {
+			s.OnSaveAs(pngBytes)
+		} else {
+			s.UI.SavePNG(pngBytes)
+		}
 	case ActionOCR:
 		s.status = ""
 		s.UI.SetStatus("")
@@ -1659,6 +1694,7 @@ func (s *Session) fail(msg string) {
 	s.live = false
 	s.colorPickerMode = false
 	s.preservePicked = false
+	s.enterMeasureOnDeliver = false
 	s.dropFrames()
 	s.drag = dragState{owner: -1}
 	s.status = msg
@@ -1673,6 +1709,7 @@ func (s *Session) clearSelection() {
 	s.measureMode = false
 	s.colorPickerMode = false
 	s.preservePicked = false
+	s.enterMeasureOnDeliver = false
 	s.pickedColors = nil
 	s.dropFrames()
 	s.hoverWin = image.Rectangle{}

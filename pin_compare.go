@@ -240,6 +240,7 @@ func (a *app) copyCompareComposite(p *pinWin) {
 			_ = mygo.Clipboard.WriteImage(data)
 			a.recordHistory(data, w, h, 0)
 			a.sessionStatus("已复制贴图对比结果")
+			p.setPinNotice("已复制对比图")
 		})
 	})
 }
