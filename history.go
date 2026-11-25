@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	historyWinW = 580
+	historyWinW = 620
 	historyWinH = 448
 )
 
@@ -205,6 +205,17 @@ func (a *app) historyPin(hw *historyWindow, e store.Entry) {
 	})
 }
 
+func (a *app) historySave(hw *historyWindow, e store.Entry) {
+	if raw, err := store.ReadPNG(e); err == nil && len(raw) > 0 {
+		a.SavePNG(raw)
+		if a.cfg.QuickSave {
+			hw.setStatusBadge("已保存 PNG")
+		} else {
+			hw.setStatusBadge("正在保存 PNG…")
+		}
+	}
+}
+
 func (a *app) openHistoryWindow() {
 	a.closeHistoryWindow()
 	hw := &historyWindow{
@@ -229,7 +240,7 @@ func (a *app) openHistoryWindow() {
 		AlwaysOnTop:     true,
 		DisableMinimize: true,
 		DisableMaximize: true,
-		MinWidth:        500,
+		MinWidth:        540,
 		MinHeight:       320,
 		Content: ui.View(func(c *ui.Context) {
 			a.paintHistoryView(c, hw)
@@ -275,6 +286,15 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 		if handlePanelWindowShortcuts(c, func() { a.closeHistoryWindow() }) {
 			return
 		}
+		if len(hw.entries) > 0 && !c.FocusTakesText() {
+			digits := [...]ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9}
+			for i, k := range digits {
+				if i < len(hw.entries) && c.Shortcut(0, k) {
+					hw.historyCopy(hw.entries[i])
+					break
+				}
+			}
+		}
 
 		p := uiPalette(c)
 		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &hw.enter)
@@ -306,7 +326,7 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 				})
 			} else {
 				ui.Row(c).Height(22).Padding(0, 18, 4, 18).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "按住缩略图可拖出 PNG · 单击复制 · 双击贴图").FontSize(11).TextColor(p.TextMuted)
+					ui.Text(c, "按住缩略图可拖出 PNG · 单击复制 · 双击贴图 · 按 1~9 快拷").FontSize(11).TextColor(p.TextMuted)
 				})
 				scrollWrap := ui.Box(c).Grow(1).FillWidth().Clip()
 				scrollWrap.Children(func() {
@@ -405,6 +425,9 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, idx int, e stor
 			}
 			if pinMiniIconBtn(c, iconPin, fmt.Sprintf("贴图历史 %d", idx), "转为悬浮贴图") {
 				a.historyPin(hw, e)
+			}
+			if pinMiniIconBtn(c, iconSave, fmt.Sprintf("保存历史 %d", idx), "保存为 PNG") {
+				a.historySave(hw, e)
 			}
 			if pinMiniIconBtn(c, iconTemplate, fmt.Sprintf("套模板历史 %d", idx), "套模板（便签 / 拍立得 / 浏览器…）") {
 				a.historyDecodeAsync(hw, e, func(img *image.NRGBA, _ []byte) {

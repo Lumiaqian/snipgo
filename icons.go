@@ -98,4 +98,8 @@ var (
 	iconSlide = svgIcon(`<rect x="3" y="4.5" width="18" height="15" rx="2.2"/><path d="M10 4.5v15"/><path d="M5.8 9h2.2M5.8 12h2.5"/>`)
 
 	iconUpdate = svgIcon(`<circle cx="12" cy="12" r="9"/><path d="M12 8v7.5"/><path d="M8.8 12.8L12 16l3.2-3.2"/>`)
+
+	iconPause = svgIcon(`<path d="M9 5.5v13M15 5.5v13"/>`)
+
+	iconPlay = svgIcon(`<polygon points="7.5,5.5 18.5,12 7.5,18.5"/>`)
 )

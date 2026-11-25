@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	scrollCtrlW = 236
+	scrollCtrlW = 264
 	scrollCtrlH = 340
 
 	// 预览位图宽度：面板内预览区约 208pt，按 2x 屏取 480px 足够清晰，避免把整张长图转成位图。
@@ -41,6 +41,7 @@ type scrollCaptureSession struct {
 	pxH     int
 	frames  int
 	capped  bool // 已达最大长度，后续帧被拒绝
+	paused  bool
 	done    bool
 
 	lastPreview time.Time // 上次生成预览的时间
@@ -158,6 +159,12 @@ func (a *app) placeSidePanel(anchor image.Rectangle, w, h int) image.Point {
 
 func (a *app) runScrollCaptureLoop(ctx context.Context, sc *scrollCaptureSession) {
 	captureOnce := func() {
+		sc.mu.Lock()
+		skip := sc.paused || sc.done
+		sc.mu.Unlock()
+		if skip {
+			return
+		}
 		shotCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		img, err := a.captureRect(shotCtx, sc.sel)
@@ -246,9 +253,12 @@ func (a *app) finishScrollCapture(mode string) {
 			case "copy":
 				_ = mygo.Clipboard.WriteImage(pngBytes)
 				a.sessionStatus(fmt.Sprintf("长截图已复制（%d×%d px）", res.Bounds().Dx(), res.Bounds().Dy()))
+				a.showActionToast(fmt.Sprintf("已复制长截图（%d×%d px）", res.Bounds().Dx(), res.Bounds().Dy()))
 			case "pin":
 				dipW, dipH, zoom := longPinGeometry(res.Bounds().Dx(), res.Bounds().Dy(), sel.Dx())
 				a.showPinWithState(res, pngBytes, sel.Min, dipW, dipH, zoom, 100, false)
+			case "saveAs":
+				a.SavePNGAs(pngBytes)
 			case "save":
 				a.SavePNG(pngBytes)
 			}
@@ -292,14 +302,33 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 		if handlePanelWindowShortcuts(c, func() { a.stopScrollCapture() }) {
 			return
 		}
-		if c.Shortcut(0, ui.KeyEnter) {
-			go mygo.RunOnMain(func() { a.finishScrollCapture("copy") })
-			return
+		if !c.FocusTakesText() {
+			if c.Shortcut(0, ui.KeySpace) {
+				sc.mu.Lock()
+				sc.paused = !sc.paused
+				sc.mu.Unlock()
+				if sc.ctrlWin != nil {
+					sc.ctrlWin.Invalidate()
+					return
+				}
+			} else if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyS) {
+				go mygo.RunOnMain(func() { a.finishScrollCapture("saveAs") })
+				return
+			} else if c.Shortcut(ui.Cmd, ui.KeyS) {
+				go mygo.RunOnMain(func() { a.finishScrollCapture("save") })
+				return
+			} else if c.Shortcut(ui.Cmd, ui.KeyT) || c.Shortcut(0, ui.KeyT) {
+				go mygo.RunOnMain(func() { a.finishScrollCapture("pin") })
+				return
+			} else if c.Shortcut(0, ui.KeyEnter) {
+				go mygo.RunOnMain(func() { a.finishScrollCapture("copy") })
+				return
+			}
 		}
 
 		sc.mu.Lock()
 		bmp := sc.preview
-		pxW, pxH, frames, capped := sc.pxW, sc.pxH, sc.frames, sc.capped
+		pxW, pxH, frames, capped, paused := sc.pxW, sc.pxH, sc.frames, sc.capped, sc.paused
 		sc.mu.Unlock()
 
 		p := uiPalette(c)
@@ -310,11 +339,19 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 			paintPanelHeader(c, iconScrollCap, "滚动长截图", "取消长截图", "取消 (⌘W / Esc)", func() {
 				a.stopScrollCapture()
 			}, func() {
+				badgeBg, badgeBd, badgeFg := p.BadgeSuccessBg, p.BadgeSuccessBd, p.BadgeSuccessFg
+				dotCol := ui.RGB(52, 199, 89)
+				badgeLabel := "拼接中"
+				if paused {
+					badgeBg, badgeBd, badgeFg = p.BadgeInfoBg, p.BadgeInfoBd, p.BadgeInfoFg
+					dotCol = ui.RGB(255, 159, 10)
+					badgeLabel = "已暂停"
+				}
 				ui.Row(c).Height(20).Padding(0, 8).Gap(5).AlignItems(ui.Center).Radius(10).
-					Background(p.BadgeSuccessBg).Border(1, p.BadgeSuccessBd).
+					Background(badgeBg).Border(1, badgeBd).
 					Children(func() {
-						ui.Box(c).Size(6, 6).Radius(3).Background(ui.RGB(52, 199, 89))
-						ui.Text(c, "拼接中").FontSize(10.5).FontWeight(500).NoWrap().TextColor(p.BadgeSuccessFg)
+						ui.Box(c).Size(6, 6).Radius(3).Background(dotCol)
+						ui.Text(c, badgeLabel).FontSize(10.5).FontWeight(500).NoWrap().TextColor(badgeFg)
 					})
 			})
 
@@ -373,10 +410,22 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 				AlignItems(ui.Center)
 			footer.Children(func() {
 				liquidGlassGroup(c, 13, 6, func(add func(ui.Element) ui.Element) {
-					if iconToolBtn(c, iconPin, "长图贴图", "转为桌面贴图", false, false) {
+					pauseIc, pauseLabel, pauseTip := iconPause, "暂停拼接", "暂停自动拼接 (Space)"
+					if paused {
+						pauseIc, pauseLabel, pauseTip = iconPlay, "继续拼接", "继续自动拼接 (Space)"
+					}
+					if iconToolBtn(c, pauseIc, pauseLabel, pauseTip, paused, false) {
+						sc.mu.Lock()
+						sc.paused = !sc.paused
+						sc.mu.Unlock()
+						if sc.ctrlWin != nil {
+							sc.ctrlWin.Invalidate()
+						}
+					}
+					if iconToolBtn(c, iconPin, "长图贴图", "转为桌面贴图 (T)", false, false) {
 						go mygo.RunOnMain(func() { a.finishScrollCapture("pin") })
 					}
-					if iconToolBtn(c, iconSave, "保存长图", "保存长图 PNG", false, false) {
+					if iconToolBtn(c, iconSave, "保存长图", "保存长图 PNG (⌘S / ⇧⌘S)", false, false) {
 						go mygo.RunOnMain(func() { a.finishScrollCapture("save") })
 					}
 				})

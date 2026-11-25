@@ -240,6 +240,9 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 		cmdC := c.Shortcut(ui.Cmd, ui.KeyC)
 		cmdShiftS := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyS)
 		cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
+		cmd0 := c.Shortcut(ui.Cmd, ui.Key0)
+		cmdPlus := c.Shortcut(ui.Cmd, ui.KeyEqual) || c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEqual)
+		cmdMinus := c.Shortcut(ui.Cmd, ui.KeyMinus)
 		cmdZ := c.Shortcut(ui.Cmd, ui.KeyZ)
 		cmdShiftZ := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ)
 		delKey := c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)
@@ -321,6 +324,26 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					a.SavePNG(data)
 				}
 				return
+			}
+			if !p.collapsed {
+				zoomTarget := 0.0
+				switch {
+				case cmd0:
+					zoomTarget = 1.0
+				case cmdPlus:
+					zoomTarget = p.zoom * 1.15
+				case cmdMinus:
+					zoomTarget = p.zoom / 1.15
+				}
+				if zoomTarget > 0 {
+					ax, ay := float64(p.curW)/2, float64(p.curH)/2
+					if p.win == nil {
+						p.applyZoom(zoomTarget, ax, ay)
+					} else {
+						go mygo.RunOnMain(func() { p.applyZoom(zoomTarget, ax, ay) })
+						return
+					}
+				}
 			}
 		}
 
@@ -563,6 +586,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 							if p.win != nil && !p.win.IsDestroyed() {
 								p.win.SetOpacity(float64(next) / 100)
 							}
+							p.setPinNotice(fmt.Sprintf("不透明度 %d%%", next))
 						}
 					})
 					return true
