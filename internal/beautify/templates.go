@@ -250,6 +250,84 @@ func resolveDate(opts TemplateOptions) string {
 	return time.Now().Format("2006.01.02")
 }
 
+// TemplateKindKey 返回可序列化的模板标识键，用于配置持久化。
+func TemplateKindKey(k TemplateKind) string {
+	switch k {
+	case TemplatePolaroid:
+		return "polaroid"
+	case TemplateBrowser:
+		return "browser"
+	case TemplateEditorial:
+		return "editorial"
+	case TemplateReceipt:
+		return "receipt"
+	case TemplateTerminal:
+		return "terminal"
+	case TemplateFilm:
+		return "film"
+	case TemplateReview:
+		return "review"
+	case TemplatePostcard:
+		return "postcard"
+	case TemplateSlide:
+		return "slide"
+	default:
+		return "sticky_note"
+	}
+}
+
+// ParseTemplateKind 将序列化键解析为 TemplateKind；不认识时返回 false。
+func ParseTemplateKind(s string) (TemplateKind, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "sticky_note":
+		return TemplateStickyNote, true
+	case "polaroid":
+		return TemplatePolaroid, true
+	case "browser":
+		return TemplateBrowser, true
+	case "editorial":
+		return TemplateEditorial, true
+	case "receipt":
+		return TemplateReceipt, true
+	case "terminal":
+		return TemplateTerminal, true
+	case "film":
+		return TemplateFilm, true
+	case "review":
+		return TemplateReview, true
+	case "postcard":
+		return TemplatePostcard, true
+	case "slide":
+		return TemplateSlide, true
+	default:
+		return TemplateStickyNote, false
+	}
+}
+
+// TemplatePaddingKey 返回可序列化的留白尺寸标识键。
+func TemplatePaddingKey(p TemplatePadding) string {
+	switch p {
+	case PadCompact:
+		return "compact"
+	case PadWide:
+		return "wide"
+	default:
+		return "normal"
+	}
+}
+
+// ParseTemplatePadding 将序列化键解析为 TemplatePadding，默认返回 PadNormal。
+func ParseTemplatePadding(s string) TemplatePadding {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "compact":
+		return PadCompact
+	case "wide":
+		return PadWide
+	default:
+		return PadNormal
+	}
+}
+
 // RenderTemplate 按照指定创意/实用模板与文案选项合成高清成图。
 func RenderTemplate(src *image.NRGBA, scale float64, opts TemplateOptions) *image.NRGBA {
 	if src == nil || src.Bounds().Empty() {

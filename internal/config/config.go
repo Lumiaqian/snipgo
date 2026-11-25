@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"snipgo/internal/beautify"
 )
 
 // Settings 是用户可配置的全部偏好项。
@@ -36,6 +38,11 @@ type Settings struct {
 	DisableHistory bool `json:"disable_history,omitempty"`
 	// ColorFormat 为默认开发者取色格式（"hex" / "rgb" / "oklch" / "tailwind"）。
 	ColorFormat string `json:"color_format,omitempty"`
+	// 套模板工作台记忆偏好（上次使用的模板、主题色、留白、是否隐藏日期水印）。
+	TemplateKind     string `json:"template_kind,omitempty"`
+	TemplateTheme    int    `json:"template_theme,omitempty"`
+	TemplatePadding  string `json:"template_padding,omitempty"`
+	TemplateHideDate bool   `json:"template_hide_date,omitempty"`
 }
 
 // Default 返回带合理默认值的配置。
@@ -66,6 +73,8 @@ func Default(defaultPicturesDir string) Settings {
 		GlassLevel:          "regular",
 		AccentColor:         "system",
 		ColorFormat:         "hex",
+		TemplateKind:        "sticky_note",
+		TemplatePadding:     "normal",
 	}
 }
 
@@ -126,6 +135,15 @@ func (s *Settings) Normalize(defaultPicturesDir string) {
 	default:
 		s.ColorFormat = "hex"
 	}
+	if k, ok := beautify.ParseTemplateKind(s.TemplateKind); ok {
+		s.TemplateKind = beautify.TemplateKindKey(k)
+	} else {
+		s.TemplateKind = "sticky_note"
+	}
+	if s.TemplateTheme < 0 {
+		s.TemplateTheme = 0
+	}
+	s.TemplatePadding = beautify.TemplatePaddingKey(beautify.ParseTemplatePadding(s.TemplatePadding))
 }
 
 // Load 从 baseDir/settings.json 读取配置；文件不存在或损坏时返回默认配置。

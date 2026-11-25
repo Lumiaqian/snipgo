@@ -28,6 +28,39 @@ func TestCanvasUndoRedoAndStepNumbering(t *testing.T) {
 	}
 }
 
+func TestCanvasUpdateTextAndDeleteEmpty(t *testing.T) {
+	c := NewCanvas()
+	if !c.AddText(20, 30, "初版批注") {
+		t.Fatal("AddText failed")
+	}
+	// 内容未变不产生多余撤销步
+	if c.UpdateText(0, "  初版批注 ") {
+		t.Fatal("expected unchanged UpdateText to return false")
+	}
+	if !c.UpdateText(0, "修改后批注") {
+		t.Fatal("expected UpdateText to modify text")
+	}
+	if got := c.Items()[0].Text; got != "修改后批注" {
+		t.Fatalf("Text = %q, want 修改后批注", got)
+	}
+	if !c.Undo() || c.Items()[0].Text != "初版批注" {
+		t.Fatalf("Undo should restore original text, got %+v", c.Items())
+	}
+	if !c.Redo() || c.Items()[0].Text != "修改后批注" {
+		t.Fatalf("Redo should restore updated text, got %+v", c.Items())
+	}
+	// 清空内容视作删除，且可通过 Undo 恢复
+	if !c.UpdateText(0, "   ") {
+		t.Fatal("expected empty UpdateText to delete text item")
+	}
+	if len(c.Items()) != 0 {
+		t.Fatalf("expected 0 items after empty update, got %d", len(c.Items()))
+	}
+	if !c.Undo() || len(c.Items()) != 1 || c.Items()[0].Text != "修改后批注" {
+		t.Fatalf("Undo after empty delete failed, items=%+v", c.Items())
+	}
+}
+
 func TestRasterAllToolsAtRetinaScale(t *testing.T) {
 	// 100x80 DIP 选区，2x Retina = 200x160 像素。
 	sel := image.Rect(50, 60, 150, 140)

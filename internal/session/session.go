@@ -908,7 +908,8 @@ func (s *Session) BeginDrag(owner int, x, y float64) {
 			if idx, part := ac.HitTest(x, y); part != annotate.EditNone {
 				items := ac.Items()
 				hitExistingLoupe := ac.Tool == annotate.ToolLoupe && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolLoupe
-				if ac.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1 || hitExistingLoupe {
+				hitExistingText := ac.Tool == annotate.ToolText && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolText
+				if ac.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1 || hitExistingLoupe || hitExistingText {
 					if ac.BeginEdit(x, y) {
 						s.drag = dragState{kind: dragAnnotateEdit, owner: owner, x0: x, y0: y, x1: x, y1: y}
 						return

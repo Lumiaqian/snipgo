@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/beautify"
+	"snipgo/internal/config"
 )
 
 const (
@@ -51,16 +52,47 @@ func (tw *templateWindow) setStatusBadge(msg string) {
 
 type tplChoiceMatch struct{}
 
+func (a *app) templateOptionsFromConfig() beautify.TemplateOptions {
+	if a.hasTplOpts {
+		return a.lastTplOpts
+	}
+	opts := beautify.DefaultTemplateOptions()
+	if k, ok := beautify.ParseTemplateKind(a.cfg.TemplateKind); ok {
+		opts.Kind = k
+	}
+	if themes := beautify.TemplateThemes(opts.Kind); len(themes) > 0 && a.cfg.TemplateTheme >= 0 {
+		opts.Theme = a.cfg.TemplateTheme % len(themes)
+	}
+	opts.Padding = beautify.ParseTemplatePadding(a.cfg.TemplatePadding)
+	opts.ShowDate = !a.cfg.TemplateHideDate
+	return opts
+}
+
+func (a *app) persistTemplatePrefs(opts beautify.TemplateOptions) {
+	a.lastTplOpts = opts
+	a.hasTplOpts = true
+	kindKey := beautify.TemplateKindKey(opts.Kind)
+	padKey := beautify.TemplatePaddingKey(opts.Padding)
+	hideDate := !opts.ShowDate
+	if a.cfg.TemplateKind == kindKey && a.cfg.TemplateTheme == opts.Theme && a.cfg.TemplatePadding == padKey && a.cfg.TemplateHideDate == hideDate {
+		return
+	}
+	a.cfg.TemplateKind = kindKey
+	a.cfg.TemplateTheme = opts.Theme
+	a.cfg.TemplatePadding = padKey
+	a.cfg.TemplateHideDate = hideDate
+	if a.userDataDir != "" {
+		_ = config.Save(a.userDataDir, a.cfg)
+	}
+}
+
 func (a *app) openTemplateWindow(img *image.NRGBA, anchor image.Rectangle) {
 	if img == nil || img.Bounds().Empty() {
 		return
 	}
 	a.closeTemplateWindow()
 
-	opts := a.lastTplOpts
-	if !a.hasTplOpts {
-		opts = beautify.DefaultTemplateOptions()
-	}
+	opts := a.templateOptionsFromConfig()
 
 	scale := 2.0
 	if !anchor.Empty() && anchor.Dx() > 0 {
@@ -117,6 +149,7 @@ func (a *app) closeTemplateWindow() {
 	if a.tplWin != nil {
 		old := a.tplWin
 		a.tplWin = nil
+		a.persistTemplatePrefs(old.opts)
 		if old.win != nil && !old.win.IsDestroyed() {
 			old.win.Close()
 		}
@@ -197,8 +230,7 @@ func (a *app) withFullExport(tw *templateWindow, done func(out *image.NRGBA, png
 }
 
 func (a *app) copyTemplateResult(tw *templateWindow) {
-	a.lastTplOpts = tw.opts
-	a.hasTplOpts = true
+	a.persistTemplatePrefs(tw.opts)
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
 		_ = mygo.Clipboard.WriteImage(pngBytes)
 		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
@@ -215,8 +247,7 @@ func (a *app) saveTemplateResult(tw *templateWindow) {
 }
 
 func (a *app) saveTemplateResultWithMode(tw *templateWindow, saveAs bool) {
-	a.lastTplOpts = tw.opts
-	a.hasTplOpts = true
+	a.persistTemplatePrefs(tw.opts)
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
 		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
 		if saveAs {
@@ -232,8 +263,7 @@ func (a *app) saveTemplateResultWithMode(tw *templateWindow, saveAs bool) {
 }
 
 func (a *app) pinTemplateResult(tw *templateWindow) {
-	a.lastTplOpts = tw.opts
-	a.hasTplOpts = true
+	a.persistTemplatePrefs(tw.opts)
 	a.withFullExport(tw, func(out *image.NRGBA, pngBytes []byte) {
 		a.recordHistory(pngBytes, out.Bounds().Dx(), out.Bounds().Dy(), tw.srcScale)
 		sc := max(1.0, tw.srcScale)
@@ -276,8 +306,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 
 		if !tw.renderedValid || tw.opts != tw.renderedOpts {
 			tw.refreshPreview()
-			a.lastTplOpts = tw.opts
-			a.hasTplOpts = true
+			a.persistTemplatePrefs(tw.opts)
 		}
 
 		winW, winH := templateWinW, templateWinH
@@ -536,7 +565,7 @@ func (a *app) paintTemplateView(c *ui.Context, tw *templateWindow) {
 				ui.Spacer(c)
 
 				liquidGlassGroup(c, 13, 6, func(add func(ui.Element) ui.Element) {
-					if glassGroupBtn(c, add, iconSave, "保存 PNG", "保存为 PNG (⌘S)") {
+					if glassGroupBtn(c, add, iconSave, "保存 PNG", "保存为 PNG (⌘S 快存 / ⇧⌘S 另存为)") {
 						a.saveTemplateResult(tw)
 					}
 					if glassGroupBtn(c, add, iconPin, "贴图", "钉到桌面作为悬浮贴图 (T)") {

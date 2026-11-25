@@ -38,6 +38,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	if a.textEditing {
 		if esc {
 			a.textEditing = false
+			a.textEditIdx = -1
 			a.textEditBuf = ""
 			a.invalidateAll()
 		}
