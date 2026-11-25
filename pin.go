@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/annotate"
+	"snipgo/internal/beautify"
 	"snipgo/internal/pinops"
 )
 
@@ -26,59 +28,77 @@ const (
 )
 
 type pinWin struct {
-	win            *mygo.Window
-	baseImg        *image.NRGBA
-	baseBmp        *ui.Bitmap
-	img            *image.NRGBA
-	bmp            *ui.Bitmap
-	png            []byte
-	annot          *annotate.Canvas
-	origW          int
-	origH          int
-	curW           int
-	curH           int
-	zoom           float64
-	opacity        int
-	prevOpacity    int
-	clickThrough   bool
-	collapsed      bool
-	rulerMode      bool
-	editMode       bool
-	cutout         bool
-	cutting        bool
-	compareMode    bool
-	compareDiff    bool
-	comparePeer    *image.NRGBA
-	comparePeerBmp *ui.Bitmap
-	compareDiffRes pinops.DiffResult
-	compareDiffBmp *ui.Bitmap
-	comparePending bool // 像素 Diff 正在后台计算
-	compareGen     int  // 每次进入/退出对比递增，用于丢弃过期的后台结果
-	compareSplit   float64
-	compareDrag    bool
-	annotDrag      bool
-	annotEditDrg   bool
-	hoverX         float64
-	hoverY         float64
-	hasHover       bool
+	win                  *mygo.Window
+	baseImg              *image.NRGBA
+	baseBmp              *ui.Bitmap
+	img                  *image.NRGBA
+	bmp                  *ui.Bitmap
+	png                  []byte
+	annot                *annotate.Canvas
+	origW                int
+	origH                int
+	curW                 int
+	curH                 int
+	zoom                 float64
+	opacity              int
+	prevOpacity          int
+	clickThrough         bool
+	collapsed            bool
+	rulerMode            bool
+	editMode             bool
+	cutout               bool
+	cutting              bool
+	compareMode          bool
+	compareDiff          bool
+	comparePeer          *image.NRGBA
+	comparePeerBmp       *ui.Bitmap
+	compareDiffRes       pinops.DiffResult
+	compareDiffBmp       *ui.Bitmap
+	comparePending       bool // 像素 Diff 正在后台计算
+	compareGen           int  // 每次进入/退出对比递增，用于丢弃过期的后台结果
+	compareSplit         float64
+	compareDrag          bool
+	annotDrag            bool
+	annotEditDrg         bool
+	hoverX               float64
+	hoverY               float64
+	hasHover             bool
+	paletteColors        []color.NRGBA
+	paletteFmt           beautify.ColorFormat
+	paletteToast         badgeState
+	paletteToastFallback string
 }
 
 // closedPinRecord 只保存 PNG 与几何信息；恢复时再解码，避免长期占用整张 NRGBA。
 type closedPinRecord struct {
-	png     []byte
-	at      image.Point
-	origW   int
-	origH   int
-	zoom    float64
-	opacity int
-	cutout  bool
+	png           []byte
+	at            image.Point
+	origW         int
+	origH         int
+	zoom          float64
+	opacity       int
+	cutout        bool
+	paletteColors []color.NRGBA
+	paletteFmt    beautify.ColorFormat
 }
 
 func (a *app) ShowPin(img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int) {
-	a.showPinWithState(img, pngBytes, at, dipW, dipH, 1.0, 100, false)
+	a.showPinFull(img, pngBytes, at, dipW, dipH, 1.0, 100, false, nil, beautify.ColorHEX)
+}
+
+func (a *app) showPalettePin(colors []color.NRGBA, img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int) {
+	paletteFmt := beautify.ParseColorFormat(a.cfg.ColorFormat)
+	if a.session != nil {
+		paletteFmt = a.session.ColorFormat()
+	}
+	a.showPinFull(img, pngBytes, at, dipW, dipH, 1.0, 100, false, colors, paletteFmt)
 }
 
 func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int, zoom float64, opacity int, cutout bool) {
+	a.showPinFull(img, pngBytes, at, dipW, dipH, zoom, opacity, cutout, nil, beautify.ColorHEX)
+}
+
+func (a *app) showPinFull(img *image.NRGBA, pngBytes []byte, at image.Point, dipW, dipH int, zoom float64, opacity int, cutout bool, paletteColors []color.NRGBA, paletteFmt beautify.ColorFormat) {
 	if img == nil || dipW < 1 || dipH < 1 {
 		return
 	}
@@ -93,21 +113,23 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 
 	baseBmp := ui.NewBitmap(img)
 	p := &pinWin{
-		baseImg:      img,
-		baseBmp:      baseBmp,
-		img:          img,
-		bmp:          baseBmp,
-		png:          append([]byte(nil), pngBytes...),
-		annot:        annotate.NewCanvas(),
-		origW:        dipW,
-		origH:        dipH,
-		curW:         curW,
-		curH:         curH,
-		zoom:         zoom,
-		opacity:      opacity,
-		prevOpacity:  opacity,
-		cutout:       cutout,
-		compareSplit: 0.5,
+		baseImg:       img,
+		baseBmp:       baseBmp,
+		img:           img,
+		bmp:           baseBmp,
+		png:           append([]byte(nil), pngBytes...),
+		annot:         annotate.NewCanvas(),
+		origW:         dipW,
+		origH:         dipH,
+		curW:          curW,
+		curH:          curH,
+		zoom:          zoom,
+		opacity:       opacity,
+		prevOpacity:   opacity,
+		cutout:        cutout,
+		compareSplit:  0.5,
+		paletteColors: cloneColorSlice(paletteColors),
+		paletteFmt:    paletteFmt,
 	}
 	p.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:           "贴图",
@@ -139,13 +161,15 @@ func (a *app) showPinWithState(img *image.NRGBA, pngBytes []byte, at image.Point
 		// 编辑中直接关闭时，可恢复记录也要带上未完成的标注
 		pngBytes := p.exportPNG()
 		a.pushClosedPin(closedPinRecord{
-			png:     pngBytes,
-			at:      image.Pt(b.X, b.Y),
-			origW:   p.origW,
-			origH:   p.origH,
-			zoom:    p.zoom,
-			opacity: p.opacity,
-			cutout:  p.cutout,
+			png:           pngBytes,
+			at:            image.Pt(b.X, b.Y),
+			origW:         p.origW,
+			origH:         p.origH,
+			zoom:          p.zoom,
+			opacity:       p.opacity,
+			cutout:        p.cutout,
+			paletteColors: cloneColorSlice(p.paletteColors),
+			paletteFmt:    p.paletteFmt,
 		})
 	})
 	p.win.OnMove(func() {
@@ -224,6 +248,12 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 
 		if cmdQ {
 			go mygo.RunOnMain(func() { mygo.App.Quit() })
+			return
+		}
+
+		if tabKey && len(p.paletteColors) > 0 && !p.collapsed && !p.editMode && !p.rulerMode && !p.compareMode {
+			p.paletteFmt = beautify.NextColorFormat(p.paletteFmt)
+			p.setPaletteNotice("格式: " + beautify.ColorFormatName(p.paletteFmt))
 			return
 		}
 
@@ -483,6 +513,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 				if p.rulerMode {
 					p.paintPinRuler(c, w, h)
 				}
+				a.paintPalettePinOverlay(c, p, w, h)
 				if showHoverBar {
 					a.paintPinHoverBar(c, p)
 				}
@@ -548,7 +579,7 @@ func (a *app) RestoreLastPin() {
 			return
 		}
 		mygo.RunOnMain(func() {
-			a.showPinWithState(img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout)
+			a.showPinFull(img, last.png, last.at, last.origW, last.origH, last.zoom, last.opacity, last.cutout, last.paletteColors, last.paletteFmt)
 		})
 	}()
 }

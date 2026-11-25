@@ -13,7 +13,7 @@ import (
 
 const (
 	settingsWinW = 500
-	settingsWinH = 448
+	settingsWinH = 488
 )
 
 type settingsWindow struct {
@@ -40,6 +40,7 @@ var shortcutDefs = []shortcutItemDef{
 	{id: "ocr", label: "截图识图 (OCR)", ptr: func(s *config.Settings) *string { return &s.OCRShortcut }},
 	{id: "freeze", label: "定格与像素标尺", ptr: func(s *config.Settings) *string { return &s.FreezeShortcut }},
 	{id: "delay", label: "延时定格截图", ptr: func(s *config.Settings) *string { return &s.DelayShortcut }},
+	{id: "colorpicker", label: "屏幕取色器", ptr: func(s *config.Settings) *string { return &s.ColorPickerShortcut }},
 	{id: "pin", label: "从剪贴板贴图", ptr: func(s *config.Settings) *string { return &s.PinShortcut }},
 	{id: "history", label: "最近截图历史", ptr: func(s *config.Settings) *string { return &s.HistoryShortcut }},
 }
@@ -147,6 +148,7 @@ func (a *app) applyAndSaveSettings(next config.Settings) {
 	prevPre := a.cfg.IncludePrereleases
 	a.cfg = next
 	a.applyThemeLive(a.cfg)
+	a.syncSessionColorFormat()
 	if a.userDataDir != "" {
 		saveErr := config.Save(a.userDataDir, a.cfg)
 		if saveErr != nil {
@@ -470,6 +472,24 @@ func (a *app) paintSettingsGeneralTab(c *ui.Context, p palette, sw *settingsWind
 					ui.Spacer(c)
 					if picked := liquidSegmented(c, "set-delay", delaySel, []string{"3 秒", "5 秒", "10 秒"}); picked >= 0 && delayVals[picked] != sw.draft.DelaySeconds {
 						sw.draft.DelaySeconds = delayVals[picked]
+						a.applyAndSaveSettings(sw.draft)
+						sw.setSavedBadge("✓ 已保存")
+					}
+				})
+
+				fmtVals := []string{"hex", "rgb", "oklch", "tailwind"}
+				fmtSel := 0
+				for i, key := range fmtVals {
+					if sw.draft.ColorFormat == key {
+						fmtSel = i
+						break
+					}
+				}
+				ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+					ui.Text(c, "默认取色格式：").FontSize(12).TextColor(p.TextSecondary)
+					ui.Spacer(c)
+					if picked := liquidSegmented(c, "set-colorfmt", fmtSel, []string{"HEX", "RGB", "OKLCH", "Tailwind"}); picked >= 0 && fmtVals[picked] != sw.draft.ColorFormat {
+						sw.draft.ColorFormat = fmtVals[picked]
 						a.applyAndSaveSettings(sw.draft)
 						sw.setSavedBadge("✓ 已保存")
 					}
