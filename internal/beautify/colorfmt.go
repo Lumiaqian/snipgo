@@ -5,6 +5,9 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"snipgo/internal/textrender"
 )
@@ -25,6 +28,34 @@ func NextColorFormat(f ColorFormat) ColorFormat {
 	return (f + 1) % colorFormatCount
 }
 
+// ColorFormatKey 返回用于配置持久化的稳定小写格式键名。
+func ColorFormatKey(f ColorFormat) string {
+	switch f {
+	case ColorRGB:
+		return "rgb"
+	case ColorOKLCH:
+		return "oklch"
+	case ColorTailwind:
+		return "tailwind"
+	default:
+		return "hex"
+	}
+}
+
+// ParseColorFormat 将持久化键名解析为 ColorFormat（未知值默认回退 ColorHEX）。
+func ParseColorFormat(s string) ColorFormat {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "rgb":
+		return ColorRGB
+	case "oklch":
+		return ColorOKLCH
+	case "tailwind":
+		return ColorTailwind
+	default:
+		return ColorHEX
+	}
+}
+
 // ColorFormatName 返回取色格式短标签。
 func ColorFormatName(f ColorFormat) string {
 	switch f {
@@ -39,7 +70,7 @@ func ColorFormatName(f ColorFormat) string {
 	}
 }
 
-// FormatColor 按指定格式将颜色格式化为可直接粘贴进代码的色值文本。
+// FormatColor 按指定格式将颜色格式化为可直接粘贴进代码的色值文本（含格式前缀）。
 func FormatColor(c color.NRGBA, f ColorFormat) string {
 	switch f {
 	case ColorRGB:
@@ -57,6 +88,24 @@ func FormatColor(c color.NRGBA, f ColorFormat) string {
 	}
 }
 
+// FormatColorRaw 返回去掉函数/符号前缀的纯色值文本（用于 Shift+C 快捷复制）。
+func FormatColorRaw(c color.NRGBA, f ColorFormat) string {
+	switch f {
+	case ColorRGB:
+		return fmt.Sprintf("%d, %d, %d", c.R, c.G, c.B)
+	case ColorOKLCH:
+		l, ch, h := ToOKLCH(c)
+		if ch < 0.0005 {
+			return fmt.Sprintf("%.3f 0 0", l)
+		}
+		return fmt.Sprintf("%.3f %.3f %.1f", l, ch, h)
+	case ColorTailwind:
+		return NearestTailwind(c)
+	default:
+		return fmt.Sprintf("%02X%02X%02X", c.R, c.G, c.B)
+	}
+}
+
 // ToOKLCH 按 Björn Ottosson OKLab 规范将 sRGB 精确转换为感知均匀的 OKLCH (L∈[0,1], C≥0, H∈[0,360))。
 func ToOKLCH(c color.NRGBA) (L, C, H float64) {
 	l, a, b := srgbToOKLab(c)
@@ -68,15 +117,27 @@ func ToOKLCH(c color.NRGBA) (L, C, H float64) {
 	return l, C, H
 }
 
-func srgbToOKLab(c color.NRGBA) (L, a, b float64) {
-	lin := func(u uint8) float64 {
-		v := float64(u) / 255.0
-		if v <= 0.04045 {
-			return v / 12.92
-		}
-		return math.Pow((v+0.055)/1.055, 2.4)
+func srgbLinear(u uint8) float64 {
+	v := float64(u) / 255.0
+	if v <= 0.04045 {
+		return v / 12.92
 	}
-	r, g, bl := lin(c.R), lin(c.G), lin(c.B)
+	return math.Pow((v+0.055)/1.055, 2.4)
+}
+
+func linearToSRGBByte(v float64) uint8 {
+	v = max(0, min(1, v))
+	var s float64
+	if v <= 0.0031308 {
+		s = 12.92 * v
+	} else {
+		s = 1.055*math.Pow(v, 1.0/2.4) - 0.055
+	}
+	return uint8(max(0, min(255, math.Round(s*255.0))))
+}
+
+func srgbToOKLab(c color.NRGBA) (L, a, b float64) {
+	r, g, bl := srgbLinear(c.R), srgbLinear(c.G), srgbLinear(c.B)
 	l := 0.4122214708*r + 0.5363325363*g + 0.0514459929*bl
 	m := 0.2119034982*r + 0.6806995451*g + 0.1073969566*bl
 	s := 0.0883024619*r + 0.2817188376*g + 0.6299787005*bl
@@ -91,52 +152,299 @@ func srgbToOKLab(c color.NRGBA) (L, a, b float64) {
 	return L, a, b
 }
 
-type twColor struct {
-	name    string
-	r, g, b uint8
+func oklchToNRGBA(L, C, H, alpha float64) color.NRGBA {
+	hRad := H * math.Pi / 180.0
+	a := C * math.Cos(hRad)
+	b := C * math.Sin(hRad)
+
+	l_ := L + 0.3963377774*a + 0.2158037573*b
+	m_ := L - 0.1055613458*a - 0.0638541728*b
+	s_ := L - 0.0894841775*a - 1.2914855480*b
+
+	l := l_ * l_ * l_
+	m := m_ * m_ * m_
+	s := s_ * s_ * s_
+
+	rLin := +4.0767416621*l - 3.3077115913*m + 0.2309699292*s
+	gLin := -1.2684380046*l + 2.6097574011*m - 0.3413193965*s
+	bLin := -0.0041960863*l - 0.7034186147*m + 1.7076147010*s
+
+	return color.NRGBA{
+		R: linearToSRGBByte(rLin),
+		G: linearToSRGBByte(gLin),
+		B: linearToSRGBByte(bLin),
+		A: uint8(max(0, min(255, math.Round(max(0, min(1, alpha))*255.0)))),
+	}
 }
 
-// 精简精选覆盖全部 Tailwind 色系与常用色阶，按 OKLab 感知距离匹配最接近色阶。
-var tailwindPalette = []twColor{
-	{"white", 255, 255, 255},
-	{"black", 0, 0, 0},
-	{"slate-50", 248, 250, 252}, {"slate-200", 226, 232, 240}, {"slate-400", 148, 163, 184}, {"slate-600", 71, 85, 105}, {"slate-800", 30, 41, 59}, {"slate-900", 15, 23, 42}, {"slate-950", 2, 6, 23},
-	{"gray-100", 243, 244, 246}, {"gray-300", 209, 213, 219}, {"gray-500", 107, 114, 128}, {"gray-700", 55, 65, 81}, {"gray-900", 17, 24, 39},
-	{"zinc-100", 244, 244, 245}, {"zinc-400", 161, 161, 170}, {"zinc-700", 63, 63, 70}, {"zinc-900", 24, 24, 27},
-	{"red-300", 252, 165, 165}, {"red-400", 248, 113, 113}, {"red-500", 239, 68, 68}, {"red-600", 220, 38, 38}, {"red-700", 185, 28, 28},
-	{"orange-300", 253, 186, 116}, {"orange-400", 251, 146, 60}, {"orange-500", 249, 115, 22}, {"orange-600", 234, 88, 12},
-	{"amber-300", 252, 211, 77}, {"amber-400", 251, 191, 36}, {"amber-500", 245, 158, 11}, {"amber-600", 217, 119, 6},
-	{"yellow-300", 253, 224, 71}, {"yellow-400", 250, 204, 21}, {"yellow-500", 234, 179, 8},
-	{"lime-400", 163, 230, 53}, {"lime-500", 132, 204, 22}, {"lime-600", 101, 163, 13},
-	{"green-300", 134, 239, 172}, {"green-400", 74, 222, 128}, {"green-500", 34, 197, 94}, {"green-600", 22, 163, 74}, {"green-700", 21, 128, 61},
-	{"emerald-400", 52, 211, 153}, {"emerald-500", 16, 185, 129}, {"emerald-600", 5, 150, 105},
-	{"teal-400", 45, 212, 191}, {"teal-500", 20, 184, 166}, {"teal-600", 13, 148, 136},
-	{"cyan-400", 34, 211, 238}, {"cyan-500", 6, 182, 212}, {"cyan-600", 8, 145, 178},
-	{"sky-300", 125, 211, 252}, {"sky-400", 56, 189, 248}, {"sky-500", 14, 165, 233}, {"sky-600", 2, 132, 199},
-	{"blue-300", 147, 197, 253}, {"blue-400", 96, 165, 250}, {"blue-500", 59, 130, 246}, {"blue-600", 37, 99, 235}, {"blue-700", 29, 78, 216},
-	{"indigo-400", 129, 140, 248}, {"indigo-500", 99, 102, 241}, {"indigo-600", 79, 70, 229},
-	{"violet-400", 167, 139, 250}, {"violet-500", 139, 92, 246}, {"violet-600", 124, 58, 237},
-	{"purple-400", 192, 132, 252}, {"purple-500", 168, 85, 247}, {"purple-600", 147, 51, 234},
-	{"fuchsia-400", 232, 121, 249}, {"fuchsia-500", 217, 70, 239}, {"fuchsia-600", 192, 38, 211},
-	{"pink-400", 244, 114, 182}, {"pink-500", 236, 72, 153}, {"pink-600", 219, 39, 119},
-	{"rose-400", 251, 113, 133}, {"rose-500", 244, 63, 94}, {"rose-600", 225, 29, 72},
+var oklchColorRe = regexp.MustCompile(`(?i)^oklch\(\s*([^\s/]+)\s+([^\s/]+)\s+([^\s/)]+)(?:\s*/\s*([^\s)]+))?\s*\)$`)
+
+func parseOKLCH(s string) (color.NRGBA, bool) {
+	m := oklchColorRe.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return color.NRGBA{}, false
+	}
+	L, okL := parseUnitFloat(m[1], 1.0)
+	if !okL || L < 0 || L > 1 {
+		return color.NRGBA{}, false
+	}
+	C, okC := parseUnitFloat(m[2], 0.4)
+	if !okC || C < 0 {
+		return color.NRGBA{}, false
+	}
+	H, okH := parseHueDeg(m[3])
+	if !okH {
+		return color.NRGBA{}, false
+	}
+	alpha := 1.0
+	if m[4] != "" {
+		a, okA := parseUnitFloat(m[4], 1.0)
+		if !okA || a < 0 || a > 1 {
+			return color.NRGBA{}, false
+		}
+		alpha = a
+	}
+	return oklchToNRGBA(L, C, H, alpha), true
+}
+
+func parseUnitFloat(tok string, pctScale float64) (float64, bool) {
+	tok = strings.TrimSpace(strings.ToLower(tok))
+	if tok == "none" {
+		return 0, true
+	}
+	if num, ok := strings.CutSuffix(tok, "%"); ok {
+		v, err := strconv.ParseFloat(num, 64)
+		if err != nil {
+			return 0, false
+		}
+		return (v / 100.0) * pctScale, true
+	}
+	v, err := strconv.ParseFloat(tok, 64)
+	return v, err == nil
+}
+
+func parseHueDeg(tok string) (float64, bool) {
+	tok = strings.TrimSpace(strings.ToLower(tok))
+	if tok == "none" {
+		return 0, true
+	}
+	scale := 1.0
+	switch {
+	case strings.HasSuffix(tok, "deg"):
+		tok = strings.TrimSuffix(tok, "deg")
+	case strings.HasSuffix(tok, "rad"):
+		tok = strings.TrimSuffix(tok, "rad")
+		scale = 180.0 / math.Pi
+	case strings.HasSuffix(tok, "grad"):
+		tok = strings.TrimSuffix(tok, "grad")
+		scale = 0.9
+	case strings.HasSuffix(tok, "turn"):
+		tok = strings.TrimSuffix(tok, "turn")
+		scale = 360.0
+	}
+	v, err := strconv.ParseFloat(tok, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v * scale, true
+}
+
+type twColor struct {
+	name     string
+	r, g, b  uint8
+	l, a, bv float64
+}
+
+var (
+	tailwindShades   = [11]string{"50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950"}
+	tailwindFamilies = []struct {
+		name string
+		hex  [11]uint32
+	}{
+		{"slate", [11]uint32{0xf8fafc, 0xf1f5f9, 0xe2e8f0, 0xcbd5e1, 0x94a3b8, 0x64748b, 0x475569, 0x334155, 0x1e293b, 0x0f172a, 0x020617}},
+		{"gray", [11]uint32{0xf9fafb, 0xf3f4f6, 0xe5e7eb, 0xd1d5db, 0x9ca3af, 0x6b7280, 0x4b5563, 0x374151, 0x1f2937, 0x111827, 0x030712}},
+		{"zinc", [11]uint32{0xfafafa, 0xf4f4f5, 0xe4e4e7, 0xd4d4d8, 0xa1a1aa, 0x71717a, 0x52525b, 0x3f3f46, 0x27272a, 0x18181b, 0x09090b}},
+		{"neutral", [11]uint32{0xfafafa, 0xf5f5f5, 0xe5e5e5, 0xd4d4d4, 0xa3a3a3, 0x737373, 0x525252, 0x404040, 0x262626, 0x171717, 0x0a0a0a}},
+		{"stone", [11]uint32{0xfafaf9, 0xf5f5f4, 0xe7e5e4, 0xd6d3d1, 0xa8a29e, 0x78716c, 0x57534e, 0x44403c, 0x292524, 0x1c1917, 0x0c0a09}},
+		{"red", [11]uint32{0xfef2f2, 0xfee2e2, 0xfecaca, 0xfca5a5, 0xf87171, 0xef4444, 0xdc2626, 0xb91c1c, 0x991b1b, 0x7f1d1d, 0x450a0a}},
+		{"orange", [11]uint32{0xfff7ed, 0xffedd5, 0xfed7aa, 0xfdba74, 0xfb923c, 0xf97316, 0xea580c, 0xc2410c, 0x9a3412, 0x7c2d12, 0x431407}},
+		{"amber", [11]uint32{0xfffbeb, 0xfef3c7, 0xfde68a, 0xfcd34d, 0xfbbf24, 0xf59e0b, 0xd97706, 0xb45309, 0x92400e, 0x78350f, 0x451a03}},
+		{"yellow", [11]uint32{0xfefce8, 0xfef9c3, 0xfef08a, 0xfde047, 0xfacc15, 0xeab308, 0xca8a04, 0xa16207, 0x854d0e, 0x713f12, 0x422006}},
+		{"lime", [11]uint32{0xf7fee7, 0xecfccb, 0xd9f99d, 0xbef264, 0xa3e635, 0x84cc16, 0x65a30d, 0x4d7c0f, 0x3f6212, 0x365314, 0x1a2e05}},
+		{"green", [11]uint32{0xf0fdf4, 0xdcfce7, 0xbbf7d0, 0x86efac, 0x4ade80, 0x22c55e, 0x16a34a, 0x15803d, 0x166534, 0x14532d, 0x052e16}},
+		{"emerald", [11]uint32{0xecfdf5, 0xd1fae5, 0xa7f3d0, 0x6ee7b7, 0x34d399, 0x10b981, 0x059669, 0x047857, 0x065f46, 0x064e3b, 0x022c22}},
+		{"teal", [11]uint32{0xf0fdfa, 0xccfbf1, 0x99f6e4, 0x5eead4, 0x2dd4bf, 0x14b8a6, 0x0d9488, 0x0f766e, 0x115e59, 0x134e4a, 0x042f2e}},
+		{"cyan", [11]uint32{0xecfeff, 0xcffafe, 0xa5f3fc, 0x67e8f9, 0x22d3ee, 0x06b6d4, 0x0891b2, 0x0e7490, 0x155e75, 0x164e63, 0x083344}},
+		{"sky", [11]uint32{0xf0f9ff, 0xe0f2fe, 0xbae6fd, 0x7dd3fc, 0x38bdf8, 0x0ea5e9, 0x0284c7, 0x0369a1, 0x075985, 0x0c4a6e, 0x082f49}},
+		{"blue", [11]uint32{0xeff6ff, 0xdbeafe, 0xbfdbfe, 0x93c5fd, 0x60a5fa, 0x3b82f6, 0x2563eb, 0x1d4ed8, 0x1e40af, 0x1e3a8a, 0x172554}},
+		{"indigo", [11]uint32{0xeef2ff, 0xe0e7ff, 0xc7d2fe, 0xa5b4fc, 0x818cf8, 0x6366f1, 0x4f46e5, 0x4338ca, 0x3730a3, 0x312e81, 0x1e1b4b}},
+		{"violet", [11]uint32{0xf5f3ff, 0xede9fe, 0xddd6fe, 0xc4b5fd, 0xa78bfa, 0x8b5cf6, 0x7c3aed, 0x6d28d9, 0x5b21b6, 0x4c1d95, 0x2e1065}},
+		{"purple", [11]uint32{0xfaf5ff, 0xf3e8ff, 0xe9d5ff, 0xd8b4fe, 0xc084fc, 0xa855f7, 0x9333ea, 0x7e22ce, 0x6b21a8, 0x581c87, 0x3b0764}},
+		{"fuchsia", [11]uint32{0xfdf4ff, 0xfae8ff, 0xf5d0fe, 0xf0abfc, 0xe879f9, 0xd946ef, 0xc026d3, 0xa21caf, 0x86198f, 0x701a75, 0x4a044e}},
+		{"pink", [11]uint32{0xfdf2f8, 0xfce7f3, 0xfbcfe8, 0xf9a8d4, 0xf472b6, 0xec4899, 0xdb2777, 0xbe185d, 0x9d174d, 0x831843, 0x500724}},
+		{"rose", [11]uint32{0xfff1f2, 0xffe4e6, 0xfecdd3, 0xfda4af, 0xfb7185, 0xf43f5e, 0xe11d48, 0xbe123c, 0x9f1239, 0x881337, 0x4c0519}},
+	}
+	tailwindPalette []twColor
+	tailwindByName  map[string]color.NRGBA
+)
+
+func init() {
+	tailwindPalette = make([]twColor, 0, 2+len(tailwindFamilies)*len(tailwindShades))
+	tailwindByName = make(map[string]color.NRGBA, len(tailwindFamilies)*len(tailwindShades)+2)
+	add := func(name string, r, g, b uint8) {
+		l, a, bv := srgbToOKLab(color.NRGBA{R: r, G: g, B: b, A: 255})
+		tailwindPalette = append(tailwindPalette, twColor{name: name, r: r, g: g, b: b, l: l, a: a, bv: bv})
+		tailwindByName[name] = color.NRGBA{R: r, G: g, B: b, A: 255}
+	}
+	add("white", 255, 255, 255)
+	add("black", 0, 0, 0)
+	for _, fam := range tailwindFamilies {
+		for i, sh := range tailwindShades {
+			v := fam.hex[i]
+			add(fam.name+"-"+sh, uint8(v>>16), uint8(v>>8), uint8(v))
+		}
+	}
+}
+
+func parseTailwindToken(s string) (color.NRGBA, bool) {
+	tok := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "≈"))
+	tok = strings.ToLower(strings.TrimSpace(tok))
+	if !strings.Contains(tok, "-") {
+		return color.NRGBA{}, false
+	}
+	col, ok := tailwindByName[tok]
+	return col, ok
+}
+
+// MatchTailwind 在 OKLab 感知颜色空间中匹配最接近的官方 Tailwind 色阶，并返回是否精确命中与 OKLab 距离。
+func MatchTailwind(c color.NRGBA) (name string, exact bool, dist float64) {
+	l0, a0, b0 := srgbToOKLab(c)
+	bestName := "blue-500"
+	bestDistSq := math.MaxFloat64
+	for _, tw := range tailwindPalette {
+		if c.R == tw.r && c.G == tw.g && c.B == tw.b {
+			return tw.name, true, 0
+		}
+		dl, da, db := l0-tw.l, a0-tw.a, b0-tw.bv
+		d2 := dl*dl + da*da + db*db
+		if d2 < bestDistSq {
+			bestDistSq = d2
+			bestName = tw.name
+		}
+	}
+	dist = math.Sqrt(bestDistSq)
+	return bestName, dist < 0.002, dist
 }
 
 // NearestTailwind 在 OKLab 感知颜色空间中匹配最接近的标准 Tailwind 色阶名（如 "sky-500"）。
 func NearestTailwind(c color.NRGBA) string {
-	l0, a0, b0 := srgbToOKLab(c)
-	bestName := "blue-500"
-	bestDist := math.MaxFloat64
-	for _, tw := range tailwindPalette {
-		l1, a1, b1 := srgbToOKLab(color.NRGBA{R: tw.r, G: tw.g, B: tw.b, A: 255})
-		dl, da, db := l0-l1, a0-a1, b0-b1
-		d := dl*dl + da*da + db*db
-		if d < bestDist {
-			bestDist = d
-			bestName = tw.name
-		}
+	name, _, _ := MatchTailwind(c)
+	return name
+}
+
+// FormatTailwindLabel 返回带近似标识的 Tailwind 色阶展示文本（精确命中如 "sky-500"，近似如 "≈ sky-500"）。
+func FormatTailwindLabel(c color.NRGBA) string {
+	name, exact, _ := MatchTailwind(c)
+	if exact {
+		return name
 	}
-	return bestName
+	return "≈ " + name
+}
+
+// RelativeLuminance 按 WCAG 2.1 定义返回颜色的相对亮度（0..1）。
+func RelativeLuminance(c color.NRGBA) float64 {
+	return 0.2126*srgbLinear(c.R) + 0.7152*srgbLinear(c.G) + 0.0722*srgbLinear(c.B)
+}
+
+// ContrastRatio 计算两色间的 WCAG 2.1 对比度（1.0..21.0）。
+func ContrastRatio(a, b color.NRGBA) float64 {
+	la := RelativeLuminance(a)
+	lb := RelativeLuminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// WCAGGrade 返回给定对比度对应的 WCAG 等级（AAA / AA / AA Large / Fail）。
+func WCAGGrade(ratio float64) string {
+	switch {
+	case ratio >= 7.0:
+		return "AAA"
+	case ratio >= 4.5:
+		return "AA"
+	case ratio >= 3.0:
+		return "AA Large"
+	default:
+		return "Fail"
+	}
+}
+
+// FormatContrastSummary 返回两色对比度摘要文本（如 "4.61:1 · AA"）。
+func FormatContrastSummary(a, b color.NRGBA) string {
+	ratio := ContrastRatio(a, b)
+	return fmt.Sprintf("%.2f:1 · %s", ratio, WCAGGrade(ratio))
+}
+
+// FormatPaletteCSS 将多色板导出为可直接粘贴使用的 :root CSS 变量代码块。
+func FormatPaletteCSS(colors []color.NRGBA, f ColorFormat) string {
+	if len(colors) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(":root {\n")
+	used := make(map[string]int, len(colors))
+	for i, col := range colors {
+		if f == ColorTailwind {
+			tok := NearestTailwind(col)
+			used[tok]++
+			varName := tok
+			if used[tok] > 1 {
+				varName = fmt.Sprintf("%s-%d", tok, used[tok])
+			}
+			fmt.Fprintf(&b, "  --%s: %s;\n", varName, FormatColor(col, ColorHEX))
+			continue
+		}
+		fmt.Fprintf(&b, "  --color-%d: %s; /* %s */\n", i+1, FormatColor(col, f), NearestTailwind(col))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+const (
+	paletteCardPadDIP      = 16
+	paletteCardGapDIP      = 10
+	paletteCardWidthDIP    = 106
+	paletteSwatchHeightDIP = 66
+	paletteLabelHeightDIP  = 46
+	paletteContrastBarHDIP = 30
+	paletteMaxColors       = 8
+)
+
+// PaletteCardLayout 返回 n 个颜色（n∈[2,8]）多色卡的 1x DIP 宽高与每个色块列的可点击矩形。
+func PaletteCardLayout(n int) (dipW, dipH int, swatchRects []image.Rectangle) {
+	if n <= 0 {
+		return 0, 0, nil
+	}
+	if n > paletteMaxColors {
+		n = paletteMaxColors
+	}
+	if n == 1 {
+		dipW, dipH, _ = SwatchCardRowRects()
+		return dipW, dipH, nil
+	}
+	dipW = paletteCardPadDIP*2 + n*paletteCardWidthDIP + (n-1)*paletteCardGapDIP
+	dipH = paletteCardPadDIP*2 + paletteSwatchHeightDIP + paletteLabelHeightDIP
+	if n == 2 {
+		dipH += paletteContrastBarHDIP
+	}
+	swatchRects = make([]image.Rectangle, n)
+	colH := paletteSwatchHeightDIP + paletteLabelHeightDIP
+	for i := range n {
+		x0 := paletteCardPadDIP + i*(paletteCardWidthDIP+paletteCardGapDIP)
+		swatchRects[i] = image.Rect(x0, paletteCardPadDIP, x0+paletteCardWidthDIP, paletteCardPadDIP+colH)
+	}
+	return dipW, dipH, swatchRects
 }
 
 // RenderPaletteCard 将多色板采集列表渲染为横向高分屏设计师配色卡（单色时展示全部 4 种开发者格式）。
@@ -150,17 +458,18 @@ func RenderPaletteCard(colors []color.NRGBA, scale float64) *image.NRGBA {
 	if len(colors) == 1 {
 		return renderColorSwatchCard(colors[0], scale)
 	}
-	if len(colors) > 8 {
-		colors = colors[:8]
+	if len(colors) > paletteMaxColors {
+		colors = colors[:paletteMaxColors]
 	}
 
-	pad := int(math.Round(16 * scale))
-	gap := int(math.Round(10 * scale))
-	cardW := int(math.Round(106 * scale))
-	swatchH := int(math.Round(66 * scale))
-	labelH := int(math.Round(46 * scale))
-	w := pad*2 + len(colors)*cardW + (len(colors)-1)*gap
-	h := pad*2 + swatchH + labelH
+	dipW, dipH, _ := PaletteCardLayout(len(colors))
+	pad := int(math.Round(float64(paletteCardPadDIP) * scale))
+	gap := int(math.Round(float64(paletteCardGapDIP) * scale))
+	cardW := int(math.Round(float64(paletteCardWidthDIP) * scale))
+	swatchH := int(math.Round(float64(paletteSwatchHeightDIP) * scale))
+	labelH := int(math.Round(float64(paletteLabelHeightDIP) * scale))
+	w := int(math.Round(float64(dipW) * scale))
+	h := int(math.Round(float64(dipH) * scale))
 
 	out := image.NewNRGBA(image.Rect(0, 0, w, h))
 	fillSolid(out, color.NRGBA{R: 24, G: 25, B: 30, A: 255})
@@ -169,22 +478,7 @@ func RenderPaletteCard(colors []color.NRGBA, scale float64) *image.NRGBA {
 	for i, col := range colors {
 		x0 := pad + i*(cardW+gap)
 		y0 := pad
-		cx := float64(x0) + float64(cardW)*0.5
-		cy := float64(y0) + float64(swatchH)*0.5
-		hx := float64(cardW) * 0.5
-		hy := float64(swatchH) * 0.5
-		for y := y0; y < y0+swatchH; y++ {
-			for x := x0; x < x0+cardW; x++ {
-				d := roundedRectSDF(float64(x)+0.5-cx, float64(y)+0.5-cy, hx, hy, swRad)
-				if d < 0.5 {
-					cov := 1.0
-					if d > -0.5 {
-						cov = 0.5 - d
-					}
-					blendPixel(out, x, y, col, cov)
-				}
-			}
-		}
+		drawRoundedSwatch(out, x0, y0, cardW, swatchH, swRad, col, scale)
 
 		hexImg := textrender.Render(FormatColor(col, ColorHEX), textrender.Options{
 			FontSize:  12.5 * scale,
@@ -192,7 +486,7 @@ func RenderPaletteCard(colors []color.NRGBA, scale float64) *image.NRGBA {
 			Monospace: true,
 			Color:     color.NRGBA{R: 246, G: 247, B: 252, A: 255},
 		})
-		twImg := textrender.Render(NearestTailwind(col), textrender.Options{
+		twImg := textrender.Render(FormatTailwindLabel(col), textrender.Options{
 			FontSize:  10.5 * scale,
 			Weight:    0.2,
 			Monospace: true,
@@ -205,5 +499,44 @@ func RenderPaletteCard(colors []color.NRGBA, scale float64) *image.NRGBA {
 			stamp(out, twImg, x0+int(math.Round(2*scale)), y0+swatchH+int(math.Round(27*scale)))
 		}
 	}
+
+	if len(colors) == 2 {
+		divY := pad + swatchH + labelH + int(math.Round(2*scale))
+		divCol := color.NRGBA{R: 255, G: 255, B: 255, A: 24}
+		for y := divY; y < divY+max(1, int(math.Round(scale))); y++ {
+			for x := pad; x < w-pad; x++ {
+				blendPixel(out, x, y, divCol, float64(divCol.A)/255.0)
+			}
+		}
+		ratio := ContrastRatio(colors[0], colors[1])
+		grade := WCAGGrade(ratio)
+		gradeCol := color.NRGBA{R: 248, G: 113, B: 113, A: 255}
+		switch grade {
+		case "AAA", "AA":
+			gradeCol = color.NRGBA{R: 74, G: 222, B: 128, A: 255}
+		case "AA Large":
+			gradeCol = color.NRGBA{R: 251, G: 191, B: 36, A: 255}
+		}
+		labelY := divY + int(math.Round(9*scale))
+		lblImg := textrender.Render(fmt.Sprintf("WCAG 对比度  %.2f:1", ratio), textrender.Options{
+			FontSize:  10.5 * scale,
+			Weight:    0.3,
+			Monospace: true,
+			Color:     color.NRGBA{R: 186, G: 194, B: 210, A: 255},
+		})
+		gradeImg := textrender.Render(grade, textrender.Options{
+			FontSize:  10.5 * scale,
+			Weight:    0.5,
+			Monospace: true,
+			Color:     gradeCol,
+		})
+		if lblImg != nil {
+			stamp(out, lblImg, pad, labelY)
+		}
+		if gradeImg != nil {
+			stamp(out, gradeImg, w-pad-gradeImg.Bounds().Dx(), labelY)
+		}
+	}
+
 	return out
 }

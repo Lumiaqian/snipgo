@@ -3,6 +3,8 @@ package beautify
 import (
 	"image"
 	"image/color"
+	"math"
+	"strings"
 	"testing"
 )
 
@@ -44,14 +46,53 @@ func TestParseColorAndRenderTextPin(t *testing.T) {
 	if !ok2 || c2 != (color.NRGBA{R: 255, G: 59, B: 48, A: 255}) {
 		t.Fatalf("ParseColor rgb = %+v, %v", c2, ok2)
 	}
-	if _, bad := ParseColor("hello"); bad {
-		t.Fatal("ordinary word should not parse as color")
+	sky := color.NRGBA{R: 14, G: 165, B: 233, A: 255}
+	skyOKLCH := FormatColor(sky, ColorOKLCH)
+	c3, ok3 := ParseColor(skyOKLCH)
+	if !ok3 {
+		t.Fatalf("ParseColor(%q) failed", skyOKLCH)
+	}
+	if math.Abs(float64(c3.R)-float64(sky.R)) > 2 ||
+		math.Abs(float64(c3.G)-float64(sky.G)) > 2 ||
+		math.Abs(float64(c3.B)-float64(sky.B)) > 2 {
+		t.Fatalf("ParseColor(%q) roundtrip = %+v, want near %+v", skyOKLCH, c3, sky)
+	}
+	if c3a, ok3a := ParseColor("oklch(68.5% 0.169 237.3deg / 50%)"); !ok3a || c3a.A != 128 {
+		t.Fatalf("ParseColor oklch with units/alpha = %+v, %v", c3a, ok3a)
+	}
+	c4, ok4 := ParseColor("sky-500")
+	if !ok4 || c4 != sky {
+		t.Fatalf("ParseColor sky-500 = %+v, %v", c4, ok4)
+	}
+	if _, ok5 := ParseColor("neutral-500"); !ok5 {
+		t.Fatal("expected full Tailwind neutral-500 token to parse")
+	}
+	if _, ok6 := ParseColor("stone-900"); !ok6 {
+		t.Fatal("expected full Tailwind stone-900 token to parse")
+	}
+	for _, reject := range []string{"hello", "white", "black"} {
+		if _, bad := ParseColor(reject); bad {
+			t.Fatalf("ordinary word %q should not parse as color", reject)
+		}
 	}
 
 	swatch := RenderTextPin("#00A8FF", 2.0)
 	if swatch == nil || swatch.Bounds().Empty() {
 		t.Fatal("expected swatch card image")
 	}
+	dw, dh, rowRects := SwatchCardRowRects()
+	if dw <= 0 || dh <= 0 {
+		t.Fatalf("unexpected swatch card layout: %dx%d", dw, dh)
+	}
+	for i := range rowRects {
+		if rowRects[i].Empty() {
+			t.Fatalf("rowRects[%d] is empty", i)
+		}
+		if i > 0 && rowRects[i].Min.Y <= rowRects[i-1].Min.Y {
+			t.Fatalf("rowRects not strictly descending: %v", rowRects)
+		}
+	}
+
 	note := RenderTextPin("func main() {\n\tprintln(\"SnipGo\")\n}", 2.0)
 	if note == nil || note.Bounds().Empty() {
 		t.Fatal("expected code note card image")
@@ -63,23 +104,102 @@ func TestDeveloperColorFormatsAndPaletteCard(t *testing.T) {
 	if got := FormatColor(sky, ColorHEX); got != "#0EA5E9" {
 		t.Fatalf("HEX = %q, want #0EA5E9", got)
 	}
+	if got := FormatColorRaw(sky, ColorHEX); got != "0EA5E9" {
+		t.Fatalf("Raw HEX = %q, want 0EA5E9", got)
+	}
 	if got := FormatColor(sky, ColorRGB); got != "rgb(14, 165, 233)" {
 		t.Fatalf("RGB = %q", got)
+	}
+	if got := FormatColorRaw(sky, ColorRGB); got != "14, 165, 233" {
+		t.Fatalf("Raw RGB = %q", got)
 	}
 	oklch := FormatColor(sky, ColorOKLCH)
 	if len(oklch) < 10 || oklch[:6] != "oklch(" {
 		t.Fatalf("unexpected OKLCH: %q", oklch)
 	}
-	if tw := NearestTailwind(sky); tw != "sky-500" {
-		t.Fatalf("NearestTailwind = %q, want sky-500", tw)
+	rawOKLCH := FormatColorRaw(sky, ColorOKLCH)
+	if strings.HasPrefix(rawOKLCH, "oklch(") || strings.HasSuffix(rawOKLCH, ")") || len(rawOKLCH) < 5 {
+		t.Fatalf("unexpected Raw OKLCH: %q", rawOKLCH)
 	}
-	pal := RenderPaletteCard([]color.NRGBA{
-		{R: 14, G: 165, B: 233, A: 255},
+	if got := FormatColorRaw(sky, ColorTailwind); got != FormatColor(sky, ColorTailwind) {
+		t.Fatalf("Raw Tailwind = %q, formatted = %q", got, FormatColor(sky, ColorTailwind))
+	}
+
+	for _, fmtVal := range []ColorFormat{ColorHEX, ColorRGB, ColorOKLCH, ColorTailwind} {
+		if got := ParseColorFormat(ColorFormatKey(fmtVal)); got != fmtVal {
+			t.Fatalf("ColorFormat roundtrip %v -> %q -> %v", fmtVal, ColorFormatKey(fmtVal), got)
+		}
+	}
+
+	name, exact, _ := MatchTailwind(sky)
+	if name != "sky-500" || !exact {
+		t.Fatalf("MatchTailwind(sky) = (%q, %v), want (sky-500, true)", name, exact)
+	}
+	if lbl := FormatTailwindLabel(sky); lbl != "sky-500" {
+		t.Fatalf("FormatTailwindLabel(sky) = %q, want sky-500", lbl)
+	}
+	approxCol := color.NRGBA{R: 15, G: 166, B: 232, A: 255}
+	if _, exactApprox, _ := MatchTailwind(approxCol); exactApprox {
+		t.Fatal("expected non-exact Tailwind match for shifted color")
+	}
+	if lbl := FormatTailwindLabel(approxCol); !strings.HasPrefix(lbl, "≈ ") {
+		t.Fatalf("expected ≈ prefix for approximate match, got %q", lbl)
+	}
+
+	ratio := ContrastRatio(color.NRGBA{R: 255, G: 255, B: 255, A: 255}, color.NRGBA{R: 0, G: 0, B: 0, A: 255})
+	if math.Abs(ratio-21.0) > 0.05 {
+		t.Fatalf("white/black contrast = %.2f, want ~21.0", ratio)
+	}
+	if WCAGGrade(21.0) != "AAA" || WCAGGrade(4.5) != "AA" || WCAGGrade(3.0) != "AA Large" || WCAGGrade(2.0) != "Fail" {
+		t.Fatalf("unexpected WCAGGrade outputs")
+	}
+	if summary := FormatContrastSummary(color.NRGBA{R: 255, G: 255, B: 255, A: 255}, color.NRGBA{R: 0, G: 0, B: 0, A: 255}); !strings.Contains(summary, "21.00:1") || !strings.Contains(summary, "AAA") {
+		t.Fatalf("unexpected contrast summary: %q", summary)
+	}
+
+	cssHex := FormatPaletteCSS([]color.NRGBA{sky, sky}, ColorHEX)
+	if !strings.Contains(cssHex, ":root {") || !strings.Contains(cssHex, "--color-1: #0EA5E9;") || !strings.Contains(cssHex, "--color-2: #0EA5E9;") {
+		t.Fatalf("unexpected CSS hex export:\n%s", cssHex)
+	}
+	cssTW := FormatPaletteCSS([]color.NRGBA{sky, sky}, ColorTailwind)
+	if !strings.Contains(cssTW, "--sky-500: #0EA5E9;") || !strings.Contains(cssTW, "--sky-500-2: #0EA5E9;") {
+		t.Fatalf("unexpected CSS tailwind export:\n%s", cssTW)
+	}
+
+	pal2Colors := []color.NRGBA{
+		{R: 24, G: 24, B: 27, A: 255}, // #18181B dark swatch near card bg
+		{R: 255, G: 255, B: 255, A: 255},
+	}
+	dipW, dipH, swatchRects := PaletteCardLayout(len(pal2Colors))
+	if len(swatchRects) != 2 || dipW <= 0 || dipH <= 0 {
+		t.Fatalf("unexpected PaletteCardLayout(2): %dx%d rects=%d", dipW, dipH, len(swatchRects))
+	}
+	pal2 := RenderPaletteCard(pal2Colors, 2.0)
+	if pal2 == nil || pal2.Bounds().Dx() != int(math.Round(float64(dipW)*2.0)) || pal2.Bounds().Dy() != int(math.Round(float64(dipH)*2.0)) {
+		t.Fatalf("pal2 size = %v, want %dx%d", pal2.Bounds(), int(math.Round(float64(dipW)*2)), int(math.Round(float64(dipH)*2)))
+	}
+	// Verify dark swatch #18181B has a visible inner border above/along its top edge.
+	cx := (swatchRects[0].Min.X + swatchRects[0].Dx()/2) * 2
+	topY := swatchRects[0].Min.Y * 2
+	hasBorderHighlight := false
+	for y := topY; y <= topY+4; y++ {
+		px := color.NRGBAModel.Convert(pal2.At(cx, y)).(color.NRGBA)
+		if px.R > 35 {
+			hasBorderHighlight = true
+			break
+		}
+	}
+	if !hasBorderHighlight {
+		t.Fatalf("expected adaptive inner border highlight on dark swatch at x=%d y=%d..%d", cx, topY, topY+4)
+	}
+
+	pal3 := RenderPaletteCard([]color.NRGBA{
+		sky,
 		{R: 239, G: 68, B: 68, A: 255},
 		{R: 16, G: 185, B: 129, A: 255},
 	}, 2.0)
-	if pal == nil || pal.Bounds().Dx() < 600 || pal.Bounds().Dy() < 200 {
-		t.Fatalf("unexpected palette card size: %v", pal.Bounds())
+	if pal3 == nil || pal3.Bounds().Dx() < 600 || pal3.Bounds().Dy() < 200 {
+		t.Fatalf("unexpected palette card size: %v", pal3.Bounds())
 	}
 }
 
