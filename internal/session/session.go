@@ -147,36 +147,45 @@ type Session struct {
 	// Background 在后台执行冻结模式的后处理与编码（默认 go fn()，测试可替换为同步执行）。
 	Background func(func())
 
-	gen            int
-	phase          Phase
-	live           bool
-	autoOCR        bool
-	preferFront    bool
-	windowSnap     bool
-	windowOnly     bool
-	beautify       bool
-	beautifyPreset beautify.Preset
-	beautifyChrome bool
-	colorFmt       beautify.ColorFormat
-	pickedColors   []color.NRGBA
-	measureMode    bool
-	lastOCRRect    image.Rectangle
-	frames         []crop.Screen
-	windows        []image.Rectangle
-	winIDByRect    map[image.Rectangle]uint32
-	hoverWin       image.Rectangle
-	lockedWinRect  image.Rectangle
-	lockedWinID    uint32
-	sel            image.Rectangle
-	annot          *annotate.Canvas
-	drag           dragState
-	initX          float64
-	initY          float64
-	hasInit        bool
-	cursorX        float64
-	cursorY        float64
-	hasCursor      bool
-	status         string
+	gen             int
+	phase           Phase
+	live            bool
+	autoOCR         bool
+	preferFront     bool
+	windowSnap      bool
+	windowOnly      bool
+	beautify        bool
+	beautifyPreset  beautify.Preset
+	beautifyChrome  bool
+	colorFmt        beautify.ColorFormat
+	pickedColors    []color.NRGBA
+	colorPickerMode bool
+	preservePicked  bool
+
+	// OnColorFormatChanged 在用户在选区或色板栏切换取色格式时触发，便于上层持久化配置。
+	OnColorFormatChanged func(beautify.ColorFormat)
+	// OnColorCopied 在取色复制到剪贴板后触发（供轻提示浮层显示反馈）。
+	OnColorCopied func(text string, col color.NRGBA)
+	// OnPalettePinned 在贴出色板卡时触发；为空时回退到 UI.ShowPin。
+	OnPalettePinned func(colors []color.NRGBA, img *image.NRGBA, png []byte, at image.Point, dipW, dipH int)
+	measureMode     bool
+	lastOCRRect     image.Rectangle
+	frames          []crop.Screen
+	windows         []image.Rectangle
+	winIDByRect     map[image.Rectangle]uint32
+	hoverWin        image.Rectangle
+	lockedWinRect   image.Rectangle
+	lockedWinID     uint32
+	sel             image.Rectangle
+	annot           *annotate.Canvas
+	drag            dragState
+	initX           float64
+	initY           float64
+	hasInit         bool
+	cursorX         float64
+	cursorY         float64
+	hasCursor       bool
+	status          string
 
 	// pending 是当前后台采集对应的恢复快照；仅在采集失败时转为 aborted。
 	pending *abortedSelection
@@ -329,10 +338,47 @@ func (s *Session) ToggleBeautifyChrome() bool {
 // ColorFormat 返回当前取色格式（HEX / RGB / OKLCH / Tailwind）。
 func (s *Session) ColorFormat() beautify.ColorFormat { return s.colorFmt }
 
-// CycleColorFormat 循环切换取色输出格式。
-func (s *Session) CycleColorFormat() beautify.ColorFormat {
-	s.colorFmt = beautify.NextColorFormat(s.colorFmt)
+// SetColorFormat 设置初始/当前取色格式（不触发变更通知）。
+func (s *Session) SetColorFormat(f beautify.ColorFormat) {
+	if f < beautify.ColorHEX || f > beautify.ColorTailwind {
+		f = beautify.ColorHEX
+	}
+	s.colorFmt = f
+}
+
+// SelectColorFormat 切换取色格式并触发 OnColorFormatChanged 回调。
+func (s *Session) SelectColorFormat(f beautify.ColorFormat) beautify.ColorFormat {
+	s.SetColorFormat(f)
+	if s.OnColorFormatChanged != nil {
+		s.OnColorFormatChanged(s.colorFmt)
+	}
 	return s.colorFmt
+}
+
+// CycleColorFormat 循环切换取色输出格式，并通知上层持久化。
+func (s *Session) CycleColorFormat() beautify.ColorFormat {
+	return s.SelectColorFormat(beautify.NextColorFormat(s.colorFmt))
+}
+
+// ColorPickerMode 报告当前是否处于独立屏幕取色模式。
+func (s *Session) ColorPickerMode() bool { return s.colorPickerMode }
+
+// RemovePickedColor 从多色板中移除指定索引的颜色。
+func (s *Session) RemovePickedColor(idx int) bool {
+	if idx < 0 || idx >= len(s.pickedColors) {
+		return false
+	}
+	s.pickedColors = append(s.pickedColors[:idx], s.pickedColors[idx+1:]...)
+	return true
+}
+
+// PopPickedColor 移除多色板中最后采集的颜色。
+func (s *Session) PopPickedColor() bool {
+	if len(s.pickedColors) == 0 {
+		return false
+	}
+	s.pickedColors = s.pickedColors[:len(s.pickedColors)-1]
+	return true
 }
 
 // PickedColors 返回本轮取色已采集的多色板颜色副本。
@@ -350,20 +396,28 @@ func (s *Session) ClearPickedColors() {
 	s.pickedColors = nil
 }
 
-// SampleColorToPalette 在不退出选区的前提下采样当前光标色值并加入多色板（最多 8 色）。
-// 冻结模式同步采样；实时模式异步采样并在回调中通知刷新。
-func (s *Session) SampleColorToPalette(onAdded func(col color.NRGBA)) bool {
+// SampleColorToPaletteEx 在不退出选区的前提下采样当前光标色值并加入多色板（最多 8 色，RGB 去重）。
+// 冻结模式同步采样；实时模式异步采样并在回调中通知刷新与是否实际新增。
+func (s *Session) SampleColorToPaletteEx(onResult func(col color.NRGBA, added bool)) bool {
 	if !s.hasCursor {
 		return false
 	}
 	appendCol := func(c color.NRGBA) {
 		c.A = 255
+		for _, existing := range s.pickedColors {
+			if existing.R == c.R && existing.G == c.G && existing.B == c.B {
+				if onResult != nil {
+					onResult(c, false)
+				}
+				return
+			}
+		}
 		if len(s.pickedColors) >= 8 {
 			s.pickedColors = s.pickedColors[1:]
 		}
 		s.pickedColors = append(s.pickedColors, c)
-		if onAdded != nil {
-			onAdded(c)
+		if onResult != nil {
+			onResult(c, true)
 		}
 	}
 	if !s.live {
@@ -401,6 +455,16 @@ func (s *Session) SampleColorToPalette(onAdded func(col color.NRGBA)) bool {
 	return true
 }
 
+// SampleColorToPalette 在不退出选区的前提下采样当前光标色值并加入多色板（最多 8 色）。
+// 冻结模式同步采样；实时模式异步采样并在回调中通知刷新。
+func (s *Session) SampleColorToPalette(onAdded func(col color.NRGBA)) bool {
+	return s.SampleColorToPaletteEx(func(col color.NRGBA, added bool) {
+		if added && onAdded != nil {
+			onAdded(col)
+		}
+	})
+}
+
 // PinPickedPalette 将当前已采集的多色板渲染为高分屏配色卡，复制到剪贴板并原地贴图，同时结束选区。
 func (s *Session) PinPickedPalette() bool {
 	if len(s.pickedColors) == 0 {
@@ -433,7 +497,11 @@ func (s *Session) PinPickedPalette() bool {
 	if s.OnOutput != nil {
 		s.OnOutput(buf.Bytes(), card.Bounds().Dx(), card.Bounds().Dy(), scale)
 	}
-	s.UI.ShowPin(card, buf.Bytes(), at, dipW, dipH)
+	if s.OnPalettePinned != nil {
+		s.OnPalettePinned(colors, card, buf.Bytes(), at, dipW, dipH)
+	} else {
+		s.UI.ShowPin(card, buf.Bytes(), at, dipW, dipH)
+	}
 	return true
 }
 
@@ -542,21 +610,62 @@ func (s *Session) startLive(preferFront, autoOCR bool) {
 	}
 	s.live = true
 	s.autoOCR = autoOCR
+	s.colorPickerMode = false
+	s.preservePicked = false
 	s.preferFront = preferFront
 	s.enterSelecting(snap)
 }
 
 // StartFrozen 先冻结所有屏幕画面再弹出选区蒙层（适合定格瞬时弹窗/动画及逐像素取色、像素测量尺）。
 func (s *Session) StartFrozen() {
-	s.startFrozen(false)
+	s.startFrozen(false, false)
 }
 
 // StartFrozenFromMenu 从菜单栏点击启动冻结屏幕截图。
 func (s *Session) StartFrozenFromMenu() {
-	s.startFrozen(true)
+	s.startFrozen(true, false)
 }
 
-func (s *Session) startFrozen(preferFront bool) {
+// StartColorPicker 启动独立冻结屏幕取色模式（单击/C 复制色值，P 采集多色卡）。
+func (s *Session) StartColorPicker() {
+	s.startFrozen(false, true)
+}
+
+// StartColorPickerFromMenu 从菜单栏点击启动独立冻结屏幕取色模式。
+func (s *Session) StartColorPickerFromMenu() {
+	s.startFrozen(true, true)
+}
+
+// SwitchLiveToFrozenForColor 在实时选区阶段按 Tab 切入冻结取色模式，保留已采集色板与光标位置。
+func (s *Session) SwitchLiveToFrozenForColor() bool {
+	if !s.live || s.phase != PhaseSelecting {
+		return false
+	}
+	if s.Allowed != nil {
+		if ok, reason := s.Allowed(); !ok {
+			s.fail(reason)
+			return false
+		}
+	}
+	if s.Launch == nil && s.Capture == nil {
+		return false
+	}
+	s.gen++
+	gen := s.gen
+	s.preservePicked = true
+	s.colorPickerMode = true
+	s.live = false
+	s.autoOCR = false
+	s.preferFront = false
+	s.dropFrames()
+	s.drag = dragState{owner: -1}
+	s.phase = PhaseCapturing
+	s.UI.HideSelection()
+	s.kickFrozen(gen)
+	return true
+}
+
+func (s *Session) startFrozen(preferFront, colorPicker bool) {
 	if s.phase == PhaseCapturing {
 		return
 	}
@@ -573,6 +682,8 @@ func (s *Session) startFrozen(preferFront bool) {
 	}
 	s.live = false
 	s.autoOCR = false
+	s.colorPickerMode = colorPicker
+	s.preservePicked = false
 	s.preferFront = preferFront
 	s.phase = PhaseCapturing
 	s.kickFrozen(gen)
@@ -636,18 +747,23 @@ func (s *Session) enterSelecting(snap Snapshot) {
 		}
 	}
 
+	preservePicked := s.preservePicked
+	s.preservePicked = false
+
 	s.windowSnap = false
 	s.windowOnly = false
 	s.beautify = false
 	s.measureMode = false
-	s.pickedColors = nil
+	if !preservePicked {
+		s.pickedColors = nil
+		s.hasCursor = false
+	}
 	s.lockedWinID = 0
 	s.lockedWinRect = image.Rectangle{}
 	s.sel = image.Rectangle{}
 	s.Annotations().Reset()
 	s.drag = dragState{owner: -1}
 	s.hasInit = false
-	s.hasCursor = false
 	s.phase = PhaseSelecting
 	s.status = ""
 	s.UI.SetStatus("")
@@ -924,6 +1040,10 @@ func (s *Session) BeginDrag(owner int, x, y float64) {
 	}
 	switch s.phase {
 	case PhaseSelecting:
+		if s.colorPickerMode {
+			s.CopyColor(false)
+			return
+		}
 		if s.windowSnap {
 			s.hoverWin = detectWindow(s.windows, s.frames, x, y)
 		}
@@ -1444,15 +1564,15 @@ func (s *Session) applyOutput(act ConfirmAction, r image.Rectangle, img *image.N
 }
 
 // CopyColor 复制光标处像素色值到剪贴板并退出截图。
-// rgbFormat 为 true（Shift+C）固定输出 R, G, B；否则按当前取色格式（HEX / RGB / OKLCH / Tailwind）输出。
-func (s *Session) CopyColor(rgbFormat bool) bool {
+// rawFormat 为 true（Shift+C）输出去前缀纯色值；否则按当前取色格式（HEX / RGB / OKLCH / Tailwind）输出完整色值。
+func (s *Session) CopyColor(rawFormat bool) bool {
 	if s.Clip == nil || !s.hasCursor {
 		return false
 	}
 	colorFmt := s.colorFmt
 	formatPx := func(px color.NRGBA) string {
-		if rgbFormat {
-			return fmt.Sprintf("%d, %d, %d", px.R, px.G, px.B)
+		if rawFormat {
+			return beautify.FormatColorRaw(px, colorFmt)
 		}
 		return beautify.FormatColor(px, colorFmt)
 	}
@@ -1461,10 +1581,14 @@ func (s *Session) CopyColor(rgbFormat bool) bool {
 		if !ok {
 			return false
 		}
-		s.Clip.WriteText(formatPx(loupe.Center))
+		txt := formatPx(loupe.Center)
+		s.Clip.WriteText(txt)
 		s.status = ""
 		s.UI.SetStatus("")
 		s.clearSelection()
+		if s.OnColorCopied != nil {
+			s.OnColorCopied(txt, loupe.Center)
+		}
 		return true
 	}
 	if s.CaptureRect == nil {
@@ -1500,9 +1624,13 @@ func (s *Session) CopyColor(rgbFormat bool) bool {
 			}
 			b := img.Bounds()
 			px := img.NRGBAAt(b.Min.X+b.Dx()/2, b.Min.Y+b.Dy()/2)
-			s.Clip.WriteText(formatPx(px))
+			txt := formatPx(px)
+			s.Clip.WriteText(txt)
 			s.status = ""
 			s.UI.SetStatus("")
+			if s.OnColorCopied != nil {
+				s.OnColorCopied(txt, px)
+			}
 		})
 	}()
 	return true
@@ -1529,6 +1657,8 @@ func (s *Session) targetSelection() (image.Rectangle, uint32, bool) {
 func (s *Session) fail(msg string) {
 	s.phase = PhaseIdle
 	s.live = false
+	s.colorPickerMode = false
+	s.preservePicked = false
 	s.dropFrames()
 	s.drag = dragState{owner: -1}
 	s.status = msg
@@ -1541,6 +1671,8 @@ func (s *Session) clearSelection() {
 	s.live = false
 	s.autoOCR = false
 	s.measureMode = false
+	s.colorPickerMode = false
+	s.preservePicked = false
 	s.pickedColors = nil
 	s.dropFrames()
 	s.hoverWin = image.Rectangle{}

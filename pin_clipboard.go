@@ -104,7 +104,7 @@ func (a *app) PasteClipboardPin() {
 		}
 	}
 
-	nrgba, err := readClipboardContentAsNRGBA(scale)
+	nrgba, paletteColors, err := readClipboardContentAsNRGBA(scale)
 	if err != nil {
 		log.Printf("PasteClipboardPin: %v", err)
 		a.sessionStatus(err.Error())
@@ -123,10 +123,14 @@ func (a *app) PasteClipboardPin() {
 	dipW := max(16, int(math.Round(float64(b.Dx())/scale)))
 	dipH := max(16, int(math.Round(float64(b.Dy())/scale)))
 	at := image.Pt(cursor.X-dipW/2, cursor.Y-dipH/2)
+	if len(paletteColors) > 0 {
+		a.showPalettePin(paletteColors, nrgba, pngBuf.Bytes(), at, dipW, dipH)
+		return
+	}
 	a.ShowPin(nrgba, pngBuf.Bytes(), at, dipW, dipH)
 }
 
-func readClipboardContentAsNRGBA(scale float64) (*image.NRGBA, error) {
+func readClipboardContentAsNRGBA(scale float64) (*image.NRGBA, []color.NRGBA, error) {
 	// 1. 优先读取 Finder / 聊天软件复制的图片文件（避免读到 Finder 的通用文件图标 TIFF）。
 	files, _ := mygo.Clipboard.ReadFiles()
 	for _, p := range files {
@@ -136,10 +140,10 @@ func readClipboardContentAsNRGBA(scale float64) (*image.NRGBA, error) {
 			if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
 				img, decErr := decodeImageLimited(data)
 				if decErr == nil {
-					return toNRGBA(img), nil
+					return toNRGBA(img), nil, nil
 				}
 				if errors.Is(decErr, errImageTooLarge) {
-					return nil, decErr
+					return nil, nil, decErr
 				}
 			}
 		}
@@ -149,19 +153,22 @@ func readClipboardContentAsNRGBA(scale float64) (*image.NRGBA, error) {
 		decoded, err := decodeImageLimited(raw)
 		if err != nil {
 			if errors.Is(err, errImageTooLarge) {
-				return nil, err
+				return nil, nil, err
 			}
-			return nil, fmt.Errorf("无法解析剪贴板图像: %v", err)
+			return nil, nil, fmt.Errorf("无法解析剪贴板图像: %v", err)
 		}
-		return toNRGBA(decoded), nil
+		return toNRGBA(decoded), nil, nil
 	}
-	// 3. 剪贴板文本 / 代码片段 / #HEX 色号直接渲染为高分屏悬浮便签或色卡！
+	// 3. 剪贴板文本 / 代码片段 / #HEX、rgb()、oklch()、Tailwind 色值直接渲染为高分屏悬浮便签或色卡！
 	if txt := strings.TrimSpace(mygo.Clipboard.ReadText()); txt != "" {
 		if card := beautify.RenderTextPin(txt, scale); card != nil {
-			return card, nil
+			if col, isColor := beautify.ParseColor(txt); isColor {
+				return card, []color.NRGBA{col}, nil
+			}
+			return card, nil, nil
 		}
 	}
-	return nil, fmt.Errorf("剪贴板为空（支持图片、图片文件、文字、代码或 #HEX 色号贴图）")
+	return nil, nil, fmt.Errorf("剪贴板为空（支持图片、图片文件、文字、代码或 #HEX / rgb() / oklch() / Tailwind 色号贴图）")
 }
 
 var errImageTooLarge = errors.New("图片尺寸超限")

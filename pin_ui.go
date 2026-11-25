@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"snipgo/internal/beautify"
 	"snipgo/internal/pinops"
 
 	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
@@ -86,6 +87,9 @@ func (a *app) paintPinHoverBar(c *ui.Context, p *pinWin) {
 		}
 		if pinMiniIconBtn(c, iconCollapse, "折叠胶囊", "折叠为胶囊 (M)") {
 			go mygo.RunOnMain(func() { p.toggleCollapsed() })
+		}
+		if len(p.paletteColors) > 0 && pinMiniIconBtn(c, iconPalette, "复制 CSS", "复制色板 CSS 变量") {
+			a.copyPaletteCSS(p)
 		}
 		if len(p.png) > 0 && pinMiniIconBtn(c, iconCopy, "复制贴图", "复制图像 (⌘C)") {
 			pngCopy := p.exportPNG()
@@ -286,7 +290,37 @@ func (a *app) popupPinMenu(p *pinWin) {
 		},
 	}
 
-	items := []*mygo.MenuItem{
+	var items []*mygo.MenuItem
+	if len(p.paletteColors) > 0 {
+		fmtSub := make([]*mygo.MenuItem, 0, 4)
+		for _, f := range []beautify.ColorFormat{beautify.ColorHEX, beautify.ColorRGB, beautify.ColorOKLCH, beautify.ColorTailwind} {
+			f := f
+			fmtSub = append(fmtSub, &mygo.MenuItem{
+				Label:   beautify.ColorFormatName(f),
+				Type:    mygo.MenuItemCheckbox,
+				Checked: p.paletteFmt == f,
+				Click: func(*mygo.MenuItem, *mygo.Window) {
+					p.paletteFmt = f
+					p.setPaletteNotice("格式: " + beautify.ColorFormatName(f))
+				},
+			})
+		}
+		items = append(items,
+			&mygo.MenuItem{
+				Label: "复制色板 CSS 变量",
+				Click: func(*mygo.MenuItem, *mygo.Window) {
+					a.copyPaletteCSS(p)
+				},
+			},
+			&mygo.MenuItem{
+				Label:   "点击复制格式",
+				Submenu: fmtSub,
+			},
+			mygo.Separator(),
+		)
+	}
+
+	baseItems := []*mygo.MenuItem{
 		{
 			Label:       "复制图像",
 			Accelerator: "Cmd+C",
@@ -375,6 +409,7 @@ func (a *app) popupPinMenu(p *pinWin) {
 			},
 		},
 	}
+	items = append(items, baseItems...)
 	if len(a.pins) > 1 {
 		items = append(items,
 			mygo.Separator(),

@@ -39,35 +39,41 @@ const (
 
 // app 是菜单栏里的 SnipGo。关窗不退出，只从菜单退出。
 type app struct {
-	tray          *mygo.Tray
-	session       *session.Session
-	cfg           config.Settings
-	userDataDir   string
-	picturesDir   string
-	history       *store.HistoryStore
-	shortcutErr   error
-	ocrShortErr   error
-	freezeShortEr error
-	pinShortErr   error
-	histShortErr  error
-	delayShortErr error
-	permDenied    bool
-	alertShowing  atomic.Bool
-	redacting     bool
-	extraStatus   string
-	overlays      []*overlay
-	pins          []*pinWin
-	closedPins    []closedPinRecord
-	ocr           *ocrWindow
-	histWin       *historyWindow
-	setWin        *settingsWindow
-	tplWin        *templateWindow
-	lastTplOpts   beautify.TemplateOptions
-	hasTplOpts    bool
-	countdown     *countdownSession
-	scrollCap     *scrollCaptureSession
-	snappingPin   bool
-	upd           *updateManager
+	tray                *mygo.Tray
+	session             *session.Session
+	cfg                 config.Settings
+	userDataDir         string
+	picturesDir         string
+	history             *store.HistoryStore
+	shortcutErr         error
+	ocrShortErr         error
+	freezeShortEr       error
+	pinShortErr         error
+	histShortErr        error
+	delayShortErr       error
+	colorPickerShortErr error
+	permDenied          bool
+	alertShowing        atomic.Bool
+	redacting           bool
+	extraStatus         string
+	overlays            []*overlay
+	lastOverlayIdx      int
+	pins                []*pinWin
+	closedPins          []closedPinRecord
+	ocr                 *ocrWindow
+	histWin             *historyWindow
+	setWin              *settingsWindow
+	tplWin              *templateWindow
+	colorToast          *colorToastWin
+	paletteBarNotice    badgeState
+	paletteNoticeText   string
+	clipboardTextHook   func(string)
+	lastTplOpts         beautify.TemplateOptions
+	hasTplOpts          bool
+	countdown           *countdownSession
+	scrollCap           *scrollCaptureSession
+	snappingPin         bool
+	upd                 *updateManager
 
 	// 选区内文字批注临时编辑态
 	textEditing bool
@@ -110,6 +116,7 @@ func main() {
 		a.closeHistoryWindow()
 		a.closeSettingsWindow()
 		a.closeTemplateWindow()
+		a.closeColorToast()
 		a.closeAllPins()
 		cleanupAllDragTempFiles()
 		mygo.GlobalShortcut.UnregisterAll()
@@ -154,18 +161,39 @@ func (a *app) ready() {
 	}
 
 	a.session = &session.Session{
-		Allowed:       a.allowCapture,
-		Live:          a.liveSnapshot,
-		CaptureRect:   a.captureRect,
-		PreviewFrame:  a.previewFrame,
-		CaptureWindow: a.captureWindow,
-		Capture:       a.captureFrozen,
-		Clip:          sysClip{},
-		UI:            a,
-		OnOutput:      a.recordHistory,
-		OnCutout:      a.cutoutSelection,
-		OnTemplate:    a.openTemplateWindow,
-		OnMain:        mygo.RunOnMain,
+		Allowed:         a.allowCapture,
+		Live:            a.liveSnapshot,
+		CaptureRect:     a.captureRect,
+		PreviewFrame:    a.previewFrame,
+		CaptureWindow:   a.captureWindow,
+		Capture:         a.captureFrozen,
+		Clip:            sysClip{},
+		UI:              a,
+		OnOutput:        a.recordHistory,
+		OnCutout:        a.cutoutSelection,
+		OnTemplate:      a.openTemplateWindow,
+		OnColorCopied:   a.showColorToast,
+		OnPalettePinned: a.showPalettePin,
+		OnMain:          mygo.RunOnMain,
+	}
+	a.syncSessionColorFormat()
+	a.session.OnColorFormatChanged = func(f beautify.ColorFormat) {
+		key := beautify.ColorFormatKey(f)
+		if a.cfg.ColorFormat == key {
+			return
+		}
+		a.cfg.ColorFormat = key
+		if a.userDataDir != "" {
+			if err := config.Save(a.userDataDir, a.cfg); err != nil {
+				log.Printf("save settings (color format): %v", err)
+			}
+		}
+		if a.setWin != nil {
+			a.setWin.draft.ColorFormat = key
+			if a.setWin.win != nil && !a.setWin.win.IsDestroyed() {
+				a.setWin.win.Invalidate()
+			}
+		}
 	}
 	var err error
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
@@ -207,8 +235,18 @@ func (a *app) registerAllShortcuts() {
 	a.delayShortErr = mygo.GlobalShortcut.Register(a.cfg.DelayShortcut, func() {
 		a.startDelayedCapture(a.cfg.DelaySeconds)
 	})
+	a.colorPickerShortErr = mygo.GlobalShortcut.Register(a.cfg.ColorPickerShortcut, func() {
+		a.extraStatus = ""
+		a.session.StartColorPicker()
+	})
 	_ = mygo.GlobalShortcut.Register(restoreShortcut, a.RestoreLastPin)
 	_ = mygo.GlobalShortcut.Register(unghostShortcut, a.restorePassthroughPins)
+}
+
+func (a *app) syncSessionColorFormat() {
+	if a.session != nil {
+		a.session.SetColorFormat(beautify.ParseColorFormat(a.cfg.ColorFormat))
+	}
 }
 
 func (a *app) shortcutError(id string) error {
@@ -221,6 +259,8 @@ func (a *app) shortcutError(id string) error {
 		return a.freezeShortEr
 	case "delay":
 		return a.delayShortErr
+	case "colorpicker":
+		return a.colorPickerShortErr
 	case "pin":
 		return a.pinShortErr
 	case "history":
@@ -534,6 +574,10 @@ func (a *app) refreshMenu() {
 	if a.delayShortErr != nil {
 		delayAcc = ""
 	}
+	colorPickerAcc := a.cfg.ColorPickerShortcut
+	if a.colorPickerShortErr != nil {
+		colorPickerAcc = ""
+	}
 	delaySec := a.cfg.DelaySeconds
 	if delaySec <= 0 {
 		delaySec = 3
@@ -566,6 +610,14 @@ func (a *app) refreshMenu() {
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.extraStatus = ""
 				a.session.StartFrozenFromMenu()
+			},
+		},
+		{
+			Label:       "屏幕取色器",
+			Accelerator: colorPickerAcc,
+			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.extraStatus = ""
+				a.session.StartColorPickerFromMenu()
 			},
 		},
 		{

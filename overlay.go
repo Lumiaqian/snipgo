@@ -31,6 +31,8 @@ func (a *app) ShowSelection(frames []crop.Screen) {
 	a.HideSelection()
 	a.textEditing = false
 	a.textEditBuf = ""
+	a.lastOverlayIdx = -1
+	a.paletteBarNotice.Set("", nil, &a.paletteNoticeText)
 	cursor := mygo.Screen.CursorScreenPoint()
 	a.session.InitCursor(float64(cursor.X), float64(cursor.Y))
 	key := -1
@@ -181,7 +183,14 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 			}
 			return false
 		}
-		if a.session.Hover(gx, gy) {
+		hoverChanged := a.session.Hover(gx, gy)
+		if (len(a.session.PickedColors()) > 0 || a.session.ColorPickerMode()) && len(a.overlays) > 1 && o.index != a.lastOverlayIdx {
+			a.lastOverlayIdx = o.index
+			a.invalidateOthers(o)
+			return true
+		}
+		a.lastOverlayIdx = o.index
+		if hoverChanged {
 			a.invalidateOthers(o)
 			return true
 		}
@@ -225,6 +234,10 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 					return true
 				}
 			}
+		}
+		if ev.Button == 0 && ev.Mods&ui.Shift != 0 && a.session.ColorPickerMode() && a.session.Phase() == session.PhaseSelecting {
+			a.sampleColorToPaletteWithFeedback()
+			return true
 		}
 		a.session.BeginDrag(o.index, gx, gy)
 		a.invalidateOthers(o)

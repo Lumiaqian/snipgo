@@ -3,11 +3,35 @@ package main
 import (
 	"image/color"
 	"snipgo/internal/annotate"
+	"snipgo/internal/beautify"
 	"snipgo/internal/session"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
+
+func (a *app) sampleColorToPaletteWithFeedback() {
+	var noticeWin *mygo.Window
+	for _, ov := range a.overlays {
+		if a.ownsCursorDisplay(ov) {
+			noticeWin = ov.win
+			break
+		}
+	}
+	if noticeWin == nil && len(a.overlays) > 0 {
+		noticeWin = a.overlays[0].win
+	}
+	if a.session.SampleColorToPaletteEx(func(col color.NRGBA, added bool) {
+		if !added {
+			a.paletteBarNotice.Set(beautify.FormatColor(col, a.session.ColorFormat())+" 已在色板", noticeWin, &a.paletteNoticeText)
+		} else {
+			a.paletteBarNotice.Set("", noticeWin, &a.paletteNoticeText)
+		}
+		a.invalidateAll()
+	}) {
+		a.invalidateAll()
+	}
+}
 
 func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	esc := c.Shortcut(0, ui.KeyEscape)
@@ -115,7 +139,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		}
 		return false
 	case delKey:
-		if a.session.Annotations().DeleteSelected() {
+		if a.session.Annotations().DeleteSelected() || a.session.PopPickedColor() {
 			a.invalidateAll()
 		}
 		return false
@@ -137,6 +161,10 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		a.deferUI(a.session.Cutout)
 		return true
 	case tabKey:
+		if a.session.IsLive() && a.session.Phase() == session.PhaseSelecting {
+			a.deferUI(func() { a.session.SwitchLiveToFrozenForColor() })
+			return true
+		}
 		a.session.CycleColorFormat()
 		a.invalidateAll()
 		return false
@@ -147,9 +175,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		}
 		return false
 	case keyP:
-		if a.session.SampleColorToPalette(func(color.NRGBA) { a.invalidateAll() }) {
-			a.invalidateAll()
-		}
+		a.sampleColorToPaletteWithFeedback()
 		return false
 	case keyL && a.session.Phase() == session.PhaseAdjusting:
 		if sel, locked, ok := a.session.ActiveRect(); ok && locked {

@@ -450,14 +450,14 @@ func hslToNRGBA(h, s, l float64) color.NRGBA {
 
 var (
 	hexColorRe = regexp.MustCompile(`^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
-	rgbColorRe = regexp.MustCompile(`(?i)^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[0-9.]+)?\s*\)$`)
+	rgbColorRe = regexp.MustCompile(`(?i)^rgba?\(\s*(\d{1,3})\s*(?:,|\s)\s*(\d{1,3})\s*(?:,|\s)\s*(\d{1,3})(?:\s*(?:,|/)\s*[0-9.%]+)?\s*\)$`)
 )
 
-// ParseColor 尝试把剪贴板字符串解析为颜色值（支持 #RGB / #RRGGBB / rgb(...)）。
+// ParseColor 尝试把剪贴板字符串解析为颜色值（支持 #HEX / rgb(...) / oklch(...) / 标准 Tailwind 色阶名）。
 func ParseColor(s string) (color.NRGBA, bool) {
 	s = strings.TrimSpace(s)
 	if m := hexColorRe.FindStringSubmatch(s); m != nil {
-		// 仅当带 # 前缀或刚好 6 位十六进制且全为常见色值格式时视为色号（带 # 强制识别，不带 # 要求带 # 避免误判普通单词）。
+		// 仅当带 # 前缀时视为十六进制色号，避免误判普通英文或编号。
 		if !strings.HasPrefix(s, "#") {
 			return color.NRGBA{}, false
 		}
@@ -487,6 +487,12 @@ func ParseColor(s string) (color.NRGBA, bool) {
 			return color.NRGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}, true
 		}
 	}
+	if col, ok := parseOKLCH(s); ok {
+		return col, true
+	}
+	if col, ok := parseTailwindToken(s); ok {
+		return col, true
+	}
 	return color.NRGBA{}, false
 }
 
@@ -505,32 +511,41 @@ func RenderTextPin(raw string, scale float64) *image.NRGBA {
 	return renderNoteCard(raw, scale)
 }
 
+const (
+	swatchCardWidthDIP  = 308
+	swatchCardHeightDIP = 114
+	swatchCardPadDIP    = 16
+	swatchCardBoxDIP    = 82
+)
+
+// SwatchCardRowRects 返回单色卡 1x DIP 宽高与右侧 4 条格式行（HEX / RGB / OKLCH / Tailwind）的可点击矩形。
+func SwatchCardRowRects() (dipW, dipH int, rowRects [4]image.Rectangle) {
+	left := swatchCardPadDIP*2 + swatchCardBoxDIP - 4
+	right := swatchCardWidthDIP - 10
+	rowRects = [4]image.Rectangle{
+		image.Rect(left, 12, right, 37),
+		image.Rect(left, 39, right, 58),
+		image.Rect(left, 59, right, 78),
+		image.Rect(left, 79, right, 99),
+	}
+	return swatchCardWidthDIP, swatchCardHeightDIP, rowRects
+}
+
 func renderColorSwatchCard(col color.NRGBA, scale float64) *image.NRGBA {
-	w := int(math.Round(308 * scale))
-	h := int(math.Round(114 * scale))
+	w := int(math.Round(float64(swatchCardWidthDIP) * scale))
+	h := int(math.Round(float64(swatchCardHeightDIP) * scale))
 	out := image.NewNRGBA(image.Rect(0, 0, w, h))
 	bg := color.NRGBA{R: 26, G: 27, B: 32, A: 255}
 	fillSolid(out, bg)
 
-	swSize := int(math.Round(82 * scale))
-	pad := int(math.Round(16 * scale))
-	cx := float64(pad) + float64(swSize)*0.5
-	cy := float64(pad) + float64(swSize)*0.5
-	half := float64(swSize) * 0.5
-	swRad := 10.0 * scale
-	for y := pad; y < pad+swSize; y++ {
-		for x := pad; x < pad+swSize; x++ {
-			d := roundedRectSDF(float64(x)+0.5-cx, float64(y)+0.5-cy, half, half, swRad)
-			if d < 0.5 {
-				blendPixel(out, x, y, col, min(1, 0.5-d))
-			}
-		}
-	}
+	swSize := int(math.Round(float64(swatchCardBoxDIP) * scale))
+	pad := int(math.Round(float64(swatchCardPadDIP) * scale))
+	drawRoundedSwatch(out, pad, pad, swSize, swSize, 10.0*scale, col, scale)
 
 	hexStr := FormatColor(col, ColorHEX)
 	rgbStr := FormatColor(col, ColorRGB)
 	oklchStr := FormatColor(col, ColorOKLCH)
-	twStr := "Tailwind: " + NearestTailwind(col)
+	twStr := "Tailwind: " + FormatTailwindLabel(col)
 	title := textrender.Render(hexStr, textrender.Options{
 		FontSize:  17.5 * scale,
 		Weight:    0.4,
@@ -569,6 +584,42 @@ func renderColorSwatchCard(col color.NRGBA, scale float64) *image.NRGBA {
 		stamp(out, sub3, tx, int(math.Round(82*scale)))
 	}
 	return out
+}
+
+// drawRoundedSwatch 绘制带平滑圆角与自适应 1px 内描边的色块，防止深色色块融入深色卡片背景。
+func drawRoundedSwatch(dst *image.NRGBA, x0, y0, w, h int, rad float64, col color.NRGBA, scale float64) {
+	cx := float64(x0) + float64(w)*0.5
+	cy := float64(y0) + float64(h)*0.5
+	hx := float64(w) * 0.5
+	hy := float64(h) * 0.5
+
+	l, _, _ := ToOKLCH(col)
+	borderCol := color.NRGBA{R: 255, G: 255, B: 255, A: 56}
+	if l > 0.72 {
+		borderCol = color.NRGBA{R: 0, G: 0, B: 0, A: 46}
+	}
+	strokeW := max(1.0, scale)
+
+	for y := y0; y < y0+h; y++ {
+		for x := x0; x < x0+w; x++ {
+			d := roundedRectSDF(float64(x)+0.5-cx, float64(y)+0.5-cy, hx, hy, rad)
+			if d >= 0.5 {
+				continue
+			}
+			cov := min(1.0, 0.5-d)
+			px := col
+			if d > -strokeW {
+				sa := min(1.0, max(0.0, d+strokeW)) * (float64(borderCol.A) / 255.0)
+				px = color.NRGBA{
+					R: uint8(math.Round(float64(borderCol.R)*sa + float64(col.R)*(1-sa))),
+					G: uint8(math.Round(float64(borderCol.G)*sa + float64(col.G)*(1-sa))),
+					B: uint8(math.Round(float64(borderCol.B)*sa + float64(col.B)*(1-sa))),
+					A: 255,
+				}
+			}
+			blendPixel(dst, x, y, px, cov)
+		}
+	}
 }
 
 func renderNoteCard(raw string, scale float64) *image.NRGBA {

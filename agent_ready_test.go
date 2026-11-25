@@ -208,7 +208,7 @@ func TestAgentReadySettingsAllTabs(t *testing.T) {
 	tt.Frame()
 	tab1Opts := uitest.AuditOptions{
 		RequiredInteractive: []string{
-			"关闭设置", "重置区域截图快捷键", "录制区域截图", "录制截图识图 (OCR)", "恢复默认", "完成",
+			"关闭设置", "重置区域截图快捷键", "录制区域截图", "录制截图识图 (OCR)", "录制屏幕取色器", "恢复默认", "完成",
 		},
 		RequireFocusable: true,
 	}
@@ -234,7 +234,7 @@ func TestAgentReadySettingsAllTabs(t *testing.T) {
 			"保存 PNG 文件时自动同时复制图像到剪贴板",
 			"登录 macOS 时自动启动 SnipGo",
 			"保存最近截图历史（关闭后不再记录新的截图）",
-			"更改目录…", "3 秒", "5 秒", "10 秒",
+			"更改目录…", "3 秒", "5 秒", "10 秒", "HEX", "RGB", "OKLCH", "Tailwind",
 			"恢复默认", "完成",
 		},
 		RequireFocusable: true,

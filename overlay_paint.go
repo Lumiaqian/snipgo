@@ -9,7 +9,6 @@ import (
 	"snipgo/internal/session"
 
 	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -111,7 +110,30 @@ func (a *app) paintMask(c *ui.Context, o *overlay, canvasHovered bool) {
 				FontSize(12).FontWeight(500).NoWrap().TextColor(pal.Text)
 		})
 	}
-	if len(a.session.PickedColors()) > 0 && len(a.overlays) > 0 && o == a.overlays[0] {
+	if a.session.ColorPickerMode() && len(a.session.PickedColors()) == 0 && a.ownsCursorDisplay(o) {
+		ui.Row(c.Key("overlay-picker-banner-wrap")).Absolute().
+			Left(0).Right(0).Top(44).
+			Justify(ui.Center).
+			IgnoreInput(true).
+			ZIndex(6).
+			Children(func() {
+				liquidGlassCapsule(
+					c,
+					ui.Row(c.Key("overlay-picker-banner")).
+						Height(34).
+						Padding(0, 14).
+						Gap(7).
+						AlignItems(ui.Center),
+					17,
+					nativeGlass,
+				).Children(func() {
+					ui.Icon(c, iconPalette).FontSize(14).TextColor(pal.Accent)
+					ui.Text(c, "屏幕取色器 · 左键 / C 复制 · ⇧C 去前缀 · P / ⇧左键 采色 · Tab 切格式 · Esc 退出").
+						FontSize(12).FontWeight(500).NoWrap().TextColor(pal.Text)
+				})
+			})
+	}
+	if len(a.session.PickedColors()) > 0 && a.ownsCursorDisplay(o) {
 		a.paintPickedPaletteBar(c, o, win)
 	}
 	if a.session.MeasureMode() {
@@ -260,15 +282,18 @@ func (a *app) paintLoupe(c *ui.Context, o *overlay, win image.Rectangle) {
 		footerH  = 54
 	)
 	gridPx := loupe.Side * cellSize
-	boxW := max(gridPx+pad*2, 214)
+	boxW := max(gridPx+pad*2, 244)
 	boxH := gridPx + pad*2 + footerH
 	gridLeft := (boxW - gridPx) / 2
 	localCursor := image.Pt(pt.X-o.bounds.Min.X, pt.Y-o.bounds.Min.Y)
 	pos := loupePos(win, localCursor, boxW, boxH)
 	cFmt := a.session.ColorFormat()
 	colorText := beautify.FormatColor(loupe.Center, cFmt)
+	if cFmt == beautify.ColorTailwind {
+		colorText = beautify.FormatTailwindLabel(loupe.Center)
+	}
 	fmtTag := beautify.ColorFormatName(cFmt)
-	coordText := fmt.Sprintf("(%d,%d) · Tab 格式 · C 复制 · P 色板", loupe.DIP.X, loupe.DIP.Y)
+	coordText := fmt.Sprintf("(%d,%d) · Tab 格式 · C/⇧C 复制 · P 色板", loupe.DIP.X, loupe.DIP.Y)
 	pal := uiPalette(c)
 
 	liquidGlassCapsule(
@@ -320,16 +345,40 @@ func (a *app) paintLoupe(c *ui.Context, o *overlay, win image.Rectangle) {
 	})
 }
 
+func (a *app) ownsCursorDisplay(o *overlay) bool {
+	if o == nil {
+		return false
+	}
+	if gx, gy, ok := a.session.Cursor(); ok {
+		return a.ownsPoint(o, image.Pt(int(math.Floor(gx)), int(math.Floor(gy))))
+	}
+	return len(a.overlays) > 0 && o == a.overlays[0]
+}
+
 func (a *app) paintPickedPaletteBar(c *ui.Context, o *overlay, win image.Rectangle) {
 	colors := a.session.PickedColors()
 	if len(colors) == 0 {
 		return
 	}
 	pal := uiPalette(c)
+	cFmt := a.session.ColorFormat()
+	noticeTxt := a.paletteBarNotice.Text(a.paletteNoticeText)
+
+	estW := 260 + len(colors)*24
+	if len(colors) == 2 {
+		estW += 116
+	}
+	if noticeTxt != "" {
+		estW += 110
+	}
+
+	tb := behaviors.Toolbar(c.Key("overlay-palette-toolbar"), behaviors.ToolbarOptions{
+		Label: "已采集色板栏",
+	})
 	bar := liquidGlassCapsule(
 		c,
-		ui.Row(c.Key("overlay-picked-palette")).Absolute().
-			Left(float32(max(12, win.Dx()/2-210))).Top(14).
+		tb.Root.Absolute().
+			Left(float32(max(12, (win.Dx()-estW)/2))).Top(14).
 			Height(34).
 			Padding(0, 10).
 			Gap(6).
@@ -343,22 +392,77 @@ func (a *app) paintPickedPaletteBar(c *ui.Context, o *overlay, win image.Rectang
 		ui.Icon(c, iconPalette).FontSize(13.5).TextColor(pal.Accent)
 		ui.Text(c, fmt.Sprintf("色板 (%d)", len(colors))).FontSize(11.5).FontWeight(500).NoWrap().TextColor(pal.Text)
 		for i, col := range colors {
+			idx := i
 			col := col
-			tip := beautify.FormatColor(col, a.session.ColorFormat()) + " · " + beautify.NearestTailwind(col)
-			dot := ui.Box(c.Key(700+i)).Size(16, 16).Radius(8).Shrink(0).
+			formatted := beautify.FormatColor(col, cFmt)
+			tip := formatted + " · " + beautify.FormatTailwindLabel(col) + " · 左键复制 / 右键移除"
+			btn := ui.ButtonBase(c.Key(fmt.Sprintf("picked-swatch-%d", idx))).
+				Size(18, 18).
+				Radius(9).
+				Shrink(0).
+				Label(fmt.Sprintf("复制色点 %d (%s)", idx+1, formatted)).
 				Tooltip(tip).
 				Background(ui.RGB(col.R, col.G, col.B)).
-				Border(1.5, pal.SubtleBorder).
+				Border(1.5, swatchAdaptiveBorder(col)).
 				Cursor(ui.CursorPointer)
-			if dot.Clicked() {
-				mygo.Clipboard.WriteText(beautify.FormatColor(col, a.session.ColorFormat()))
+			if btn.Hovered() {
+				btn.Scale(1.12, 1.12).Border(2, pal.Accent)
+			}
+			btn.HandleInput(func(ev ui.InputEvent) bool {
+				if ev.Kind == ui.InputPointerDown && (ev.Button == 1 || (ev.Button == 0 && ev.Mods == ui.Ctrl)) {
+					if a.session.RemovePickedColor(idx) {
+						a.paletteBarNotice.Set("", o.win, &a.paletteNoticeText)
+						a.invalidateAll()
+					}
+					return true
+				}
+				return false
+			})
+			if btn.Clicked() {
+				a.copyTextToClipboard(formatted)
+				a.showColorToast(formatted, col)
+				a.paletteBarNotice.Set("已复制 "+formatted, o.win, &a.paletteNoticeText)
+				a.invalidateAll()
 			}
 		}
-		if miniPillBtn(c, iconPin, "贴色卡 (⇧P)", true) {
+		if miniPillBtnLabeled(c.Key("palette-fmt-btn"), nil, beautify.ColorFormatName(cFmt), "切换取色格式", false) {
+			a.session.CycleColorFormat()
+			a.invalidateAll()
+		}
+		if len(colors) == 2 {
+			ratio := beautify.ContrastRatio(colors[0], colors[1])
+			grade := beautify.WCAGGrade(ratio)
+			summary := beautify.FormatContrastSummary(colors[0], colors[1])
+			bg, bd, fg := pal.BadgeInfoBg, pal.BadgeInfoBd, pal.BadgeInfoFg
+			if grade != "Fail" {
+				bg, bd, fg = pal.BadgeSuccessBg, pal.BadgeSuccessBd, pal.BadgeSuccessFg
+			}
+			ui.Row(c.Key("palette-wcag-badge")).
+				Height(22).Padding(0, 8).Radius(11).Shrink(0).
+				AlignItems(ui.Center).
+				Tooltip("WCAG 2.1 双色对比度").
+				Background(bg).
+				Border(1, bd).
+				Children(func() {
+					ui.Text(c, summary).FontSize(10.5).FontWeight(600).FontFeatures("tnum").NoWrap().TextColor(fg)
+				})
+		}
+		if noticeTxt != "" {
+			statusBadgePill(c.Key("palette-bar-notice"), noticeTxt, true)
+		}
+		if miniPillBtnLabeled(c.Key("palette-copy-css"), iconCopy, "复制代码", "复制 CSS 变量", false) {
+			css := beautify.FormatPaletteCSS(colors, cFmt)
+			a.copyTextToClipboard(css)
+			a.showColorToast("CSS 变量", colors[0])
+			a.paletteBarNotice.Set("已复制 CSS", o.win, &a.paletteNoticeText)
+			a.invalidateAll()
+		}
+		if miniPillBtnLabeled(c.Key("palette-pin"), iconPin, "贴色卡 (⇧P)", "贴出多色卡", true) {
 			a.deferUI(func() { a.session.PinPickedPalette() })
 		}
-		if miniPillBtn(c, iconClose, "清空", false) {
+		if miniPillBtnLabeled(c.Key("palette-clear"), iconClose, "清空", "清空已采集色板", false) {
 			a.session.ClearPickedColors()
+			a.paletteBarNotice.Set("", o.win, &a.paletteNoticeText)
 			a.invalidateAll()
 		}
 	})
