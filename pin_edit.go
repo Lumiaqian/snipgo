@@ -31,17 +31,7 @@ func (p *pinWin) togglePinEdit() {
 }
 
 func (p *pinWin) commitOrClosePinTextEdit() {
-	if !p.textEditing {
-		return
-	}
-	if p.textEditIdx >= 0 {
-		p.annot.UpdateText(p.textEditIdx, p.textEditBuf)
-	} else if p.textEditBuf != "" {
-		p.annot.AddText(p.textEditX, p.textEditY, p.textEditBuf)
-	}
-	p.textEditing = false
-	p.textEditIdx = -1
-	p.textEditBuf = ""
+	commitCanvasTextEdit(p.annot, &p.textEditing, &p.textEditIdx, p.textEditX, p.textEditY, &p.textEditBuf)
 }
 
 func (p *pinWin) finishPinEdit() {

@@ -273,21 +273,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 
 		var pickedPinTool annotate.Tool = -1
 		if p.editMode && !typing {
-			for _, tk := range [...]struct {
-				key  ui.Key
-				tool annotate.Tool
-			}{
-				{ui.Key1, annotate.ToolRect},
-				{ui.Key2, annotate.ToolEllipse},
-				{ui.Key3, annotate.ToolArrow},
-				{ui.Key4, annotate.ToolPen},
-				{ui.Key5, annotate.ToolStep},
-				{ui.Key6, annotate.ToolMosaic},
-				{ui.Key7, annotate.ToolText},
-				{ui.Key8, annotate.ToolSpotlight},
-				{ui.Key9, annotate.ToolErase},
-				{ui.Key0, annotate.ToolLoupe},
-			} {
+			for _, tk := range annotToolShortcuts {
 				if c.Shortcut(0, tk.key) && pickedPinTool < 0 {
 					pickedPinTool = tk.tool
 				}
@@ -345,19 +331,22 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					}
 				}
 			}
-		}
-
-		if p.win != nil && !typing {
-			switch {
-			case pickedPinTool >= 0 && p.editMode:
+			if pickedPinTool >= 0 && p.editMode {
 				p.annot.ClearSelection()
 				if p.annot.Tool == pickedPinTool {
 					p.annot.Tool = annotate.ToolNone
 				} else {
 					p.annot.Tool = pickedPinTool
 				}
-				p.win.Invalidate()
-				return
+				if p.win != nil {
+					p.win.Invalidate()
+					return
+				}
+			}
+		}
+
+		if p.win != nil && !typing {
+			switch {
 			case esc:
 				if p.compareMode {
 					p.exitCompareMode()

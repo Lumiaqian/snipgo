@@ -276,18 +276,28 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 	return false
 }
 
-func (a *app) commitOrCloseTextEdit() {
-	if !a.textEditing {
+func commitCanvasTextEdit(ac *annotate.Canvas, editing *bool, idx *int, x, y float64, buf *string) {
+	if !*editing {
 		return
 	}
-	if a.textEditIdx >= 0 {
-		a.session.Annotations().UpdateText(a.textEditIdx, a.textEditBuf)
-	} else if a.textEditBuf != "" {
-		a.session.Annotations().AddText(a.textEditX, a.textEditY, a.textEditBuf)
+	if ac != nil {
+		if *idx >= 0 {
+			ac.UpdateText(*idx, *buf)
+		} else if *buf != "" {
+			ac.AddText(x, y, *buf)
+		}
 	}
-	a.textEditing = false
-	a.textEditIdx = -1
-	a.textEditBuf = ""
+	*editing = false
+	*idx = -1
+	*buf = ""
+}
+
+func (a *app) commitOrCloseTextEdit() {
+	var ac *annotate.Canvas
+	if a.session != nil {
+		ac = a.session.Annotations()
+	}
+	commitCanvasTextEdit(ac, &a.textEditing, &a.textEditIdx, a.textEditX, a.textEditY, &a.textEditBuf)
 }
 
 func (a *app) invalidateOthers(self *overlay) {

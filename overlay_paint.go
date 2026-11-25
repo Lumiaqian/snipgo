@@ -209,6 +209,7 @@ func paintAnnotTextEditor(
 	_ = box.Clicked()
 	box.Children(func() {
 		inp := baseTextInput(c.Key(inputID), buf).
+			Label("文字批注输入框").
 			Grow(1).
 			Placeholder("输入批注，回车确认").
 			AutoFocus().

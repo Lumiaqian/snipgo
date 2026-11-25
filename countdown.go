@@ -113,6 +113,9 @@ func (a *app) triggerCountdownNow() {
 	// 预留一帧让倒计时胶囊彻底从合成器消失后定格桌面。
 	go func() {
 		time.Sleep(45 * time.Millisecond)
+		if !mygo.App.IsReady() {
+			return
+		}
 		mygo.RunOnMain(func() {
 			if a.session != nil {
 				a.session.StartFrozen()
