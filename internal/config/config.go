@@ -13,12 +13,13 @@ import (
 
 // Settings 是用户可配置的全部偏好项。
 type Settings struct {
-	SnipShortcut    string `json:"snip_shortcut"`
-	OCRShortcut     string `json:"ocr_shortcut"`
-	FreezeShortcut  string `json:"freeze_shortcut"`
-	PinShortcut     string `json:"pin_shortcut"`
-	HistoryShortcut string `json:"history_shortcut"`
-	DelayShortcut   string `json:"delay_shortcut"`
+	SnipShortcut        string `json:"snip_shortcut"`
+	OCRShortcut         string `json:"ocr_shortcut"`
+	FreezeShortcut      string `json:"freeze_shortcut"`
+	PinShortcut         string `json:"pin_shortcut"`
+	HistoryShortcut     string `json:"history_shortcut"`
+	DelayShortcut       string `json:"delay_shortcut"`
+	ColorPickerShortcut string `json:"color_picker_shortcut,omitempty"`
 
 	QuickSave          bool   `json:"quick_save"`
 	QuickSaveDir       string `json:"quick_save_dir"`
@@ -33,6 +34,8 @@ type Settings struct {
 	AccentColor        string `json:"accent_color,omitempty"`
 	// DisableHistory 为 true 时不再保存最近截图历史；默认 false（保存历史）。
 	DisableHistory bool `json:"disable_history,omitempty"`
+	// ColorFormat 为默认开发者取色格式（"hex" / "rgb" / "oklch" / "tailwind"）。
+	ColorFormat string `json:"color_format,omitempty"`
 }
 
 // Default 返回带合理默认值的配置。
@@ -46,21 +49,23 @@ func Default(defaultPicturesDir string) Settings {
 		saveDir = filepath.Join(saveDir, "SnipGo")
 	}
 	return Settings{
-		SnipShortcut:     "Cmd+Shift+2",
-		OCRShortcut:      "Alt+Cmd+O",
-		FreezeShortcut:   "Ctrl+Cmd+2",
-		PinShortcut:      "Alt+Cmd+2",
-		HistoryShortcut:  "Cmd+Shift+H",
-		DelayShortcut:    "Ctrl+Shift+Cmd+2",
-		QuickSave:        true,
-		QuickSaveDir:     saveDir,
-		CopyOnSave:       true,
-		DelaySeconds:     3,
-		OpenAtLogin:      false,
-		AutoCheckUpdates: true,
-		ThemeAppearance:  "system",
-		GlassLevel:       "regular",
-		AccentColor:      "system",
+		SnipShortcut:        "Cmd+Shift+2",
+		OCRShortcut:         "Alt+Cmd+O",
+		FreezeShortcut:      "Ctrl+Cmd+2",
+		PinShortcut:         "Alt+Cmd+2",
+		HistoryShortcut:     "Cmd+Shift+H",
+		DelayShortcut:       "Ctrl+Shift+Cmd+2",
+		ColorPickerShortcut: "Ctrl+Cmd+C",
+		QuickSave:           true,
+		QuickSaveDir:        saveDir,
+		CopyOnSave:          true,
+		DelaySeconds:        3,
+		OpenAtLogin:         false,
+		AutoCheckUpdates:    true,
+		ThemeAppearance:     "system",
+		GlassLevel:          "regular",
+		AccentColor:         "system",
+		ColorFormat:         "hex",
 	}
 }
 
@@ -109,6 +114,17 @@ func (s *Settings) Normalize(defaultPicturesDir string) {
 		s.AccentColor = strings.ToLower(strings.TrimSpace(s.AccentColor))
 	default:
 		s.AccentColor = "system"
+	}
+	if strings.TrimSpace(s.ColorPickerShortcut) == "" {
+		s.ColorPickerShortcut = def.ColorPickerShortcut
+	} else {
+		s.ColorPickerShortcut = strings.TrimSpace(s.ColorPickerShortcut)
+	}
+	switch strings.ToLower(strings.TrimSpace(s.ColorFormat)) {
+	case "hex", "rgb", "oklch", "tailwind":
+		s.ColorFormat = strings.ToLower(strings.TrimSpace(s.ColorFormat))
+	default:
+		s.ColorFormat = "hex"
 	}
 }
 
