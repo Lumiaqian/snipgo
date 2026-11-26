@@ -29,3 +29,37 @@ func TestWriteUniqueFileNoOverwrite(t *testing.T) {
 		t.Fatalf("第二份内容错误: %q", b)
 	}
 }
+
+func TestPNGSaveOutcomes(t *testing.T) {
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "file")
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, dir, choice     string
+		dialog, quick, failed bool
+	}{
+		{"quick", dir, "", false, true, false},
+		{"dialog", dir, filepath.Join(dir, "chosen.png"), true, false, false},
+		{"fallback-cancel", blocked, "", false, false, false},
+		{"write-error", blocked, dir, false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			path, quick, err := writePNG([]byte("image"), tc.dir, "quick.png", tc.dialog, func(string) (string, error) { called = true; return tc.choice, nil })
+			if called == tc.quick || quick != tc.quick || (err != nil) != tc.failed {
+				t.Fatalf("dialog=%v quick=%v err=%v", called, quick, err)
+			}
+			if !tc.quick && path != tc.choice {
+				t.Fatalf("path %q", path)
+			}
+			if path != "" && err == nil {
+				data, err := os.ReadFile(path)
+				if err != nil || string(data) != "image" {
+					t.Fatalf("saved %q: %v", data, err)
+				}
+			}
+		})
+	}
+}

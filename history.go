@@ -211,14 +211,25 @@ func (a *app) historyPin(hw *historyWindow, e store.Entry) {
 }
 
 func (a *app) historySave(hw *historyWindow, e store.Entry) {
-	if raw, err := store.ReadPNG(e); err == nil && len(raw) > 0 {
-		a.SavePNG(raw)
-		if a.cfg.QuickSave {
-			hw.setStatusBadge("已保存 PNG")
-		} else {
-			hw.setStatusBadge("正在保存 PNG…")
-		}
+	raw, err := store.ReadPNG(e)
+	if err != nil {
+		hw.setStatusBadge("保存失败: " + err.Error())
+		return
 	}
+	hw.setStatusBadge("正在保存 PNG…")
+	a.savePNGWithMode(raw, !a.cfg.QuickSave, func(path string, err error) {
+		if hw.dead.Load() {
+			return
+		}
+		switch {
+		case err != nil:
+			hw.setStatusBadge("保存失败: " + err.Error())
+		case path == "":
+			hw.setStatusBadge("已取消保存")
+		default:
+			hw.setStatusBadge("已保存 PNG")
+		}
+	})
 }
 
 func (a *app) openHistoryWindow() {

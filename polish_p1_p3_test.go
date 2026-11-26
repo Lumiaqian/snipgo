@@ -409,7 +409,8 @@ func TestHistorySaveAndDigitQuickCopy(t *testing.T) {
 	a := &app{
 		cfg:     cfg,
 		history: st,
-		savePNGHook: func(data []byte, _ bool) {
+		savePNGHook: func(data []byte, _ bool, completed func(string, error)) {
+			completed("history.png", nil)
 			saved = append(saved, data)
 		},
 	}

@@ -68,7 +68,7 @@ type app struct {
 	paletteBarNotice    badgeState
 	paletteNoticeText   string
 	clipboardTextHook   func(string)
-	savePNGHook         func([]byte, bool)
+	savePNGHook         func([]byte, bool, func(string, error))
 	lastTplOpts         beautify.TemplateOptions
 	hasTplOpts          bool
 	countdown           *countdownSession
