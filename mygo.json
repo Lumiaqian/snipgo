@@ -2,7 +2,7 @@
   "name": "SnipGo",
   "slug": "snipgo",
   "identifier": "app.snipgo",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "out": "build",
   "macos": {
     "minimumSystemVersion": "14.0",
