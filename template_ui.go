@@ -81,6 +81,12 @@ func (a *app) persistTemplatePrefs(opts beautify.TemplateOptions) {
 	a.cfg.TemplateTheme = opts.Theme
 	a.cfg.TemplatePadding = padKey
 	a.cfg.TemplateHideDate = hideDate
+	if sw := a.setWin; sw != nil {
+		sw.draft.TemplateKind = kindKey
+		sw.draft.TemplateTheme = opts.Theme
+		sw.draft.TemplatePadding = padKey
+		sw.draft.TemplateHideDate = hideDate
+	}
 	if a.userDataDir != "" {
 		_ = config.Save(a.userDataDir, a.cfg)
 	}

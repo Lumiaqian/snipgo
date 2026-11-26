@@ -444,3 +444,18 @@ func TestHistorySaveAndDigitQuickCopy(t *testing.T) {
 		t.Fatalf("save statusBadge = %q, want 已保存 PNG", hw.statusBadge)
 	}
 }
+
+func TestSettingsDraftPreservesTemplateChanges(t *testing.T) {
+	dir := t.TempDir()
+	a := &app{cfg: config.Default(dir), userDataDir: dir}
+	a.setWin = &settingsWindow{draft: a.cfg}
+	opts := beautify.DefaultTemplateOptions()
+	opts.ShowDate = false
+	a.persistTemplatePrefs(opts)
+	a.setWin.draft.QuickSave = !a.cfg.QuickSave
+	a.applyAndSaveSettings(a.setWin.draft)
+	loaded := config.Load(dir, dir)
+	if !loaded.TemplateHideDate || loaded.QuickSave != a.setWin.draft.QuickSave {
+		t.Fatal("interleaved settings lost", loaded)
+	}
+}
