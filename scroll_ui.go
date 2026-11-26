@@ -34,15 +34,16 @@ type scrollCaptureSession struct {
 	ctrlWin  *mygo.Window
 	cancel   context.CancelFunc
 
-	mu      sync.Mutex
-	stitch  *scrollcap.Stitcher
-	preview *ui.Bitmap
-	pxW     int
-	pxH     int
-	frames  int
-	capped  bool // 已达最大长度，后续帧被拒绝
-	paused  bool
-	done    bool
+	mu         sync.Mutex
+	stitch     *scrollcap.Stitcher
+	preview    *ui.Bitmap
+	pxW        int
+	pxH        int
+	frames     int
+	capped     bool // 已达最大长度，后续帧被拒绝
+	generation uint64
+	paused     bool
+	done       bool
 
 	lastPreview time.Time // 上次生成预览的时间
 	previewDue  bool      // 有尚未体现在预览中的新帧（节流期间累积）
@@ -157,10 +158,23 @@ func (a *app) placeSidePanel(anchor image.Rectangle, w, h int) image.Point {
 	return image.Pt(x, y)
 }
 
+func (sc *scrollCaptureSession) togglePause() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.paused = !sc.paused
+	sc.generation++
+}
+
+// Caller holds sc.mu while checking and committing the frame.
+func (sc *scrollCaptureSession) acceptsFrame(generation uint64) bool {
+	return !sc.done && !sc.paused && sc.generation == generation
+}
+
 func (a *app) runScrollCaptureLoop(ctx context.Context, sc *scrollCaptureSession) {
 	captureOnce := func() {
 		sc.mu.Lock()
-		skip := sc.paused || sc.done
+		generation := sc.generation
+		skip := !sc.acceptsFrame(generation)
 		sc.mu.Unlock()
 		if skip {
 			return
@@ -172,7 +186,7 @@ func (a *app) runScrollCaptureLoop(ctx context.Context, sc *scrollCaptureSession
 			return
 		}
 		sc.mu.Lock()
-		if sc.done {
+		if !sc.acceptsFrame(generation) {
 			sc.mu.Unlock()
 			return
 		}
@@ -304,9 +318,7 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 		}
 		if !c.FocusTakesText() {
 			if c.Shortcut(0, ui.KeySpace) {
-				sc.mu.Lock()
-				sc.paused = !sc.paused
-				sc.mu.Unlock()
+				sc.togglePause()
 				if sc.ctrlWin != nil {
 					sc.ctrlWin.Invalidate()
 					return
@@ -415,9 +427,7 @@ func (a *app) paintScrollCtrlView(c *ui.Context, sc *scrollCaptureSession) {
 						pauseIc, pauseLabel, pauseTip = iconPlay, "继续拼接", "继续自动拼接 (Space)"
 					}
 					if iconToolBtn(c, pauseIc, pauseLabel, pauseTip, paused, false) {
-						sc.mu.Lock()
-						sc.paused = !sc.paused
-						sc.mu.Unlock()
+						sc.togglePause()
 						if sc.ctrlWin != nil {
 							sc.ctrlWin.Invalidate()
 						}

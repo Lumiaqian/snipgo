@@ -459,3 +459,16 @@ func TestSettingsDraftPreservesTemplateChanges(t *testing.T) {
 		t.Fatal("interleaved settings lost", loaded)
 	}
 }
+
+func TestScrollPauseInvalidatesInFlightFrame(t *testing.T) {
+	sc := &scrollCaptureSession{}
+	before := sc.generation
+	sc.togglePause()
+	if sc.acceptsFrame(before) {
+		t.Fatal("accepted frame while paused")
+	}
+	sc.togglePause()
+	if sc.acceptsFrame(before) || !sc.acceptsFrame(sc.generation) {
+		t.Fatal("resume must accept only new frames")
+	}
+}
