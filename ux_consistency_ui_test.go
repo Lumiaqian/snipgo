@@ -70,7 +70,7 @@ func TestRegularPinCopyFeedbackAndSaveAsShortcuts(t *testing.T) {
 	var saveModes []bool
 	a := &app{
 		cfg: config.Default(t.TempDir()),
-		savePNGHook: func(_ []byte, forceDialog bool) {
+		savePNGHook: func(_ []byte, forceDialog bool, _ func(string, error)) {
 			saveModes = append(saveModes, forceDialog)
 		},
 	}
@@ -126,7 +126,7 @@ func TestTemplateStudioSaveAndSaveAsShortcuts(t *testing.T) {
 	var saveModes []bool
 	a := &app{
 		cfg: config.Default(t.TempDir()),
-		savePNGHook: func(_ []byte, forceDialog bool) {
+		savePNGHook: func(_ []byte, forceDialog bool, _ func(string, error)) {
 			saveModes = append(saveModes, forceDialog)
 		},
 	}
@@ -165,7 +165,7 @@ func TestOverlayShiftCmdSSaveAsAndLiveKeyR(t *testing.T) {
 	var saveModes []bool
 	a := &app{
 		cfg: config.Default(t.TempDir()),
-		savePNGHook: func(_ []byte, forceDialog bool) {
+		savePNGHook: func(_ []byte, forceDialog bool, _ func(string, error)) {
 			saveModes = append(saveModes, forceDialog)
 		},
 	}

@@ -66,7 +66,7 @@ jobs:
           go tool mygo vet .
           GOOS=linux CGO_ENABLED=0 go vet ./...
 
-      - name: Configure optional Developer ID signing & notarization
+      - name: Configure required release signing and optional notarization
         id: signing
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -77,9 +77,8 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_SIGNING_IDENTITY" ]; then
-            echo "notarized=false" >> "$GITHUB_OUTPUT"
-            echo "No signing certificate configured; building ad-hoc signed packages."
-            exit 0
+            echo "::error::Release certificate and signing identity are required"
+            exit 1
           fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password="$(openssl rand -base64 24)"
@@ -89,6 +88,10 @@ jobs:
           echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
           security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
             -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # Pin verification to the leaf identity imported into this isolated keychain.
+          fingerprint="$(security find-identity -p codesigning "$keychain" | awk '$2 ~ /^[[:xdigit:]]{40}$/ {print $2}' | sort -u)"
+          [[ "$fingerprint" =~ ^[[:xdigit:]]{40}$ ]] || { echo "::error::Expected one release identity"; exit 1; }
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
           rm -f "$RUNNER_TEMP/certificate.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
           security list-keychains -d user -s "$keychain" login.keychain
@@ -152,23 +155,20 @@ jobs:
 
       - name: Verify code signature (designated requirement)
         env:
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          RELEASE_FINGERPRINT: ${{ steps.signing.outputs.fingerprint }}
         run: |
-          # 配置了签名证书时，发布包必须绑定证书（identifier + certificate），不能退回 cdhash，
-          # 否则用户每次更新都要重新授予屏幕录制权限。
-          for app in build/darwin-*/*.app; do
-            codesign --verify --deep --strict "$app"
-            dr="$(codesign -d -r- "$app" 2>&1 | grep 'designated =>' || true)"
-            echo "$app: $dr"
-            if [ -n "$MACOS_SIGNING_IDENTITY" ]; then
-              case "$dr" in
-                *cdhash*|"") echo "::error::$app is not signed with the release certificate"; exit 1 ;;
-              esac
-              case "$dr" in
-                *'identifier "app.snipgo"'*'certificate'*) ;;
-                *) echo "::error::$app has an unexpected designated requirement"; exit 1 ;;
-              esac
-            fi
+          [[ "$RELEASE_FINGERPRINT" =~ ^[[:xdigit:]]{40}$ ]]
+          for arch in arm64 amd64 universal; do
+            apps=(build/darwin-"$arch"/*.app)
+            [[ ${#apps[@]} -eq 1 && -d "${apps[0]}" ]]
+            app="${apps[0]}"
+            codesign --verify --deep --strict --all-architectures -R="identifier \"app.snipgo\" and certificate leaf = H\"$RELEASE_FINGERPRINT\"" "$app"
+            dr="$(codesign -d -r- "$app" 2>&1 | grep 'designated =>')"
+            case "$dr" in
+              *cdhash*) echo "::error::$app has an unstable designated requirement"; exit 1 ;;
+              *'identifier "app.snipgo"'*'certificate'*) ;;
+              *) echo "::error::$app has an unexpected designated requirement"; exit 1 ;;
+            esac
           done
 
       - name: Upload build artifacts

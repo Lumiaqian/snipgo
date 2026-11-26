@@ -27,6 +27,9 @@ import (
 )
 
 func TestVisualVerifyEveryFeature(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip heavy visual dump in -short mode")
+	}
 	dir := os.Getenv("SNIPGO_PREVIEW_DIR")
 	if dir == "" {
 		return

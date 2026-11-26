@@ -222,14 +222,29 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 		pt := image.Pt(int(math.Floor(gx)), int(math.Floor(gy)))
 		if a.session.Phase() == session.PhaseAdjusting {
 			if sel, locked, ok := a.session.ActiveRect(); ok && locked && pt.In(sel) {
-				if a.session.Annotations().Tool == annotate.ToolText {
+				ac := a.session.Annotations()
+				idx, part := ac.HitTest(gx, gy)
+				items := ac.Items()
+				hitText := part != annotate.EditNone && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolText
+				if ev.Clicks >= 2 && hitText {
+					a.session.CancelDrag()
 					a.textEditing = true
+					a.textEditIdx = idx
+					a.textEditX, a.textEditY = items[idx].P0.X, items[idx].P0.Y
+					a.textEditBuf = items[idx].Text
+					ac.Selected = idx
+					a.invalidateAll()
+					return true
+				}
+				if ac.Tool == annotate.ToolText && !hitText {
+					a.textEditing = true
+					a.textEditIdx = -1
 					a.textEditX, a.textEditY = gx, gy
 					a.textEditBuf = ""
 					a.invalidateAll()
 					return true
 				}
-				if ev.Clicks >= 2 && a.session.Annotations().Tool == annotate.ToolNone {
+				if ev.Clicks >= 2 && ac.Tool == annotate.ToolNone && !hitText {
 					a.deferUI(a.session.Copy)
 					return true
 				}
@@ -261,15 +276,28 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 	return false
 }
 
-func (a *app) commitOrCloseTextEdit() {
-	if !a.textEditing {
+func commitCanvasTextEdit(ac *annotate.Canvas, editing *bool, idx *int, x, y float64, buf *string) {
+	if !*editing {
 		return
 	}
-	if a.textEditBuf != "" {
-		a.session.Annotations().AddText(a.textEditX, a.textEditY, a.textEditBuf)
+	if ac != nil {
+		if *idx >= 0 {
+			ac.UpdateText(*idx, *buf)
+		} else if *buf != "" {
+			ac.AddText(x, y, *buf)
+		}
 	}
-	a.textEditing = false
-	a.textEditBuf = ""
+	*editing = false
+	*idx = -1
+	*buf = ""
+}
+
+func (a *app) commitOrCloseTextEdit() {
+	var ac *annotate.Canvas
+	if a.session != nil {
+		ac = a.session.Annotations()
+	}
+	commitCanvasTextEdit(ac, &a.textEditing, &a.textEditIdx, a.textEditX, a.textEditY, &a.textEditBuf)
 }
 
 func (a *app) invalidateOthers(self *overlay) {

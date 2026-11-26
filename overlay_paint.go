@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"snipgo/internal/annotate"
 	"snipgo/internal/beautify"
@@ -178,6 +179,47 @@ func subtractRects(bands []image.Rectangle, holes []image.Rectangle) []image.Rec
 	return bands
 }
 
+func paintAnnotTextEditor(
+	c *ui.Context,
+	boxID, inputID string,
+	anchorX, anchorY, areaW, areaH float32,
+	col color.NRGBA,
+	buf *string,
+	forceFallback bool,
+	onCommit func(),
+) {
+	maxW := max(float32(120), areaW-16)
+	targetW := 76 + float32(len([]rune(*buf)))*13
+	w := min(maxW, max(min(float32(220), maxW), targetW))
+	lx := max(8, min(anchorX, max(8, areaW-w-8)))
+	ly := max(8, min(anchorY, max(8, areaH-42)))
+
+	box := liquidGlassCapsule(
+		c,
+		ui.Row(c.Key(boxID)).Absolute().
+			Left(lx).Top(ly).
+			Width(w).
+			ZIndex(12).
+			Padding(4, 6).
+			Gap(6).
+			AlignItems(ui.Center),
+		12,
+		forceFallback,
+	).Border(1.5, ui.RGB(col.R, col.G, col.B))
+	_ = box.Clicked()
+	box.Children(func() {
+		inp := baseTextInput(c.Key(inputID), buf).
+			Label("文字批注输入框").
+			Grow(1).
+			Placeholder("输入批注，回车确认").
+			AutoFocus().
+			Radius(8)
+		if inp.Submitted() && onCommit != nil {
+			onCommit()
+		}
+	})
+}
+
 func (a *app) paintTextEditor(c *ui.Context, o *overlay) {
 	if !a.textEditing {
 		return
@@ -186,34 +228,22 @@ func (a *app) paintTextEditor(c *ui.Context, o *overlay) {
 	if !a.ownsPoint(o, pt) {
 		return
 	}
-	lx := max(8, min(pt.X-o.bounds.Min.X, o.bounds.Dx()-230))
-	ly := max(8, min(pt.Y-o.bounds.Min.Y, o.bounds.Dy()-42))
-	col := a.session.Annotations().Color
-
-	box := liquidGlassCapsule(
+	paintAnnotTextEditor(
 		c,
-		ui.Row(c.Key("overlay-text-editor")).Absolute().
-			Left(float32(lx)).Top(float32(ly)).
-			Width(220).
-			ZIndex(12).
-			Padding(4, 6).
-			Gap(6).
-			AlignItems(ui.Center),
-		12,
+		"overlay-text-editor",
+		"annot-text-input",
+		float32(pt.X-o.bounds.Min.X),
+		float32(pt.Y-o.bounds.Min.Y),
+		float32(o.bounds.Dx()),
+		float32(o.bounds.Dy()),
+		a.session.Annotations().Color,
+		&a.textEditBuf,
 		o.bitmap == nil,
-	).Border(1.5, ui.RGB(col.R, col.G, col.B))
-	_ = box.Clicked()
-	box.Children(func() {
-		inp := baseTextInput(c.Key("annot-text-input"), &a.textEditBuf).
-			Grow(1).
-			Placeholder("输入批注，回车确认").
-			AutoFocus().
-			Radius(8)
-		if inp.Submitted() {
+		func() {
 			a.commitOrCloseTextEdit()
 			a.invalidateAll()
-		}
-	})
+		},
+	)
 }
 
 func (a *app) paintRuler(c *ui.Context, o *overlay, win image.Rectangle) {

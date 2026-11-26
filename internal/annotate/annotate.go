@@ -599,6 +599,28 @@ func (c *Canvas) AddText(x, y float64, text string) bool {
 	return true
 }
 
+// UpdateText 修改已有文字批注的内容；若传入空串（全空白），则带撤销历史删除该条文字批注。
+func (c *Canvas) UpdateText(idx int, text string) bool {
+	if idx < 0 || idx >= len(c.items) || c.items[idx].Tool != ToolText {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		c.pushUndo()
+		c.items = append(c.items[:idx], c.items[idx+1:]...)
+		c.Selected = -1
+		return true
+	}
+	if text == c.items[idx].Text {
+		c.Selected = idx
+		return false
+	}
+	c.pushUndo()
+	c.items[idx].Text = text
+	c.Selected = idx
+	return true
+}
+
 // AddRedactions 批量添加无痕擦除或马赛克脱敏区域（合并为单步撤销，供「一键敏感信息脱敏」使用）。
 func (c *Canvas) AddRedactions(boxes []RectF, useErase bool) int {
 	if len(boxes) == 0 {

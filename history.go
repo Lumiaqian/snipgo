@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	historyWinW = 580
+	historyWinW = 620
 	historyWinH = 448
 )
 
@@ -39,6 +39,7 @@ type historyWindow struct {
 	statusBadge string
 	badge       badgeState
 	enter       panelEnterState
+	onCopyPNG   func([]byte) error
 }
 
 func (hw *historyWindow) setStatusBadge(msg string) {
@@ -187,10 +188,15 @@ func (a *app) historyDecodeAsync(hw *historyWindow, e store.Entry, use func(img 
 
 // historyCopy 只读 PNG 字节复制到剪贴板，不解码。
 func (hw *historyWindow) historyCopy(e store.Entry) {
-	if raw, err := store.ReadPNG(e); err == nil {
-		_ = mygo.Clipboard.WriteImage(raw)
-		hw.setStatusBadge("已复制到剪贴板")
+	raw, err := store.ReadPNG(e)
+	if err == nil {
+		write := hw.onCopyPNG
+		if write == nil {
+			write = mygo.Clipboard.WriteImage
+		}
+		err = write(raw)
 	}
+	hw.setStatusBadge(copyResultMessage(err, "已复制到剪贴板"))
 }
 
 // historyPin 后台解码后转为悬浮贴图；落点在点击时（主线程）确定。
@@ -202,6 +208,28 @@ func (a *app) historyPin(hw *historyWindow, e store.Entry) {
 	a.historyDecodeAsync(hw, e, func(img *image.NRGBA, raw []byte) {
 		a.ShowPin(img, raw, at, dipW, dipH)
 		hw.setStatusBadge("已转为悬浮贴图")
+	})
+}
+
+func (a *app) historySave(hw *historyWindow, e store.Entry) {
+	raw, err := store.ReadPNG(e)
+	if err != nil {
+		hw.setStatusBadge("保存失败: " + err.Error())
+		return
+	}
+	hw.setStatusBadge("正在保存 PNG…")
+	a.savePNGWithMode(raw, !a.cfg.QuickSave, func(path string, err error) {
+		if hw.dead.Load() {
+			return
+		}
+		switch {
+		case err != nil:
+			hw.setStatusBadge("保存失败: " + err.Error())
+		case path == "":
+			hw.setStatusBadge("已取消保存")
+		default:
+			hw.setStatusBadge("已保存 PNG")
+		}
 	})
 }
 
@@ -229,7 +257,7 @@ func (a *app) openHistoryWindow() {
 		AlwaysOnTop:     true,
 		DisableMinimize: true,
 		DisableMaximize: true,
-		MinWidth:        500,
+		MinWidth:        540,
 		MinHeight:       320,
 		Content: ui.View(func(c *ui.Context) {
 			a.paintHistoryView(c, hw)
@@ -275,6 +303,15 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 		if handlePanelWindowShortcuts(c, func() { a.closeHistoryWindow() }) {
 			return
 		}
+		if len(hw.entries) > 0 && !c.FocusTakesText() {
+			digits := [...]ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9}
+			for i, k := range digits {
+				if i < len(hw.entries) && c.Shortcut(0, k) {
+					hw.historyCopy(hw.entries[i])
+					break
+				}
+			}
+		}
 
 		p := uiPalette(c)
 		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &hw.enter)
@@ -306,7 +343,7 @@ func (a *app) paintHistoryView(c *ui.Context, hw *historyWindow) {
 				})
 			} else {
 				ui.Row(c).Height(22).Padding(0, 18, 4, 18).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "按住缩略图可拖出 PNG · 单击复制 · 双击贴图").FontSize(11).TextColor(p.TextMuted)
+					ui.Text(c, "按住缩略图可拖出 PNG · 单击复制 · 双击贴图 · 按 1~9 快拷").FontSize(11).TextColor(p.TextMuted)
 				})
 				scrollWrap := ui.Box(c).Grow(1).FillWidth().Clip()
 				scrollWrap.Children(func() {
@@ -406,6 +443,9 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, idx int, e stor
 			if pinMiniIconBtn(c, iconPin, fmt.Sprintf("贴图历史 %d", idx), "转为悬浮贴图") {
 				a.historyPin(hw, e)
 			}
+			if pinMiniIconBtn(c, iconSave, fmt.Sprintf("保存历史 %d", idx), "保存为 PNG") {
+				a.historySave(hw, e)
+			}
 			if pinMiniIconBtn(c, iconTemplate, fmt.Sprintf("套模板历史 %d", idx), "套模板（便签 / 拍立得 / 浏览器…）") {
 				a.historyDecodeAsync(hw, e, func(img *image.NRGBA, _ []byte) {
 					a.openTemplateWindow(img, image.Rectangle{})
@@ -425,4 +465,11 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, idx int, e stor
 			}
 		})
 	})
+}
+
+func copyResultMessage(err error, success string) string {
+	if err != nil {
+		return "复制失败: " + err.Error()
+	}
+	return success
 }

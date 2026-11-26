@@ -29,6 +29,7 @@ jobs:
 
       - name: Run unit tests, visual render checks, and vet
         run: |
+          ruby scripts/test-release-signing.rb
           SNIPGO_PREVIEW_DIR="$(mktemp -d)" CGO_ENABLED=0 go test -count=1 ./...
           go test -race -count=1 ./...
           go tool mygo vet .

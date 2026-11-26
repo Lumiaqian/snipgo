@@ -60,6 +60,11 @@ type pinWin struct {
 	compareDrag          bool
 	annotDrag            bool
 	annotEditDrg         bool
+	textEditing          bool
+	textEditIdx          int
+	textEditX            float64
+	textEditY            float64
+	textEditBuf          string
 	hoverX               float64
 	hoverY               float64
 	hasHover             bool
@@ -119,6 +124,7 @@ func (a *app) showPinFull(img *image.NRGBA, pngBytes []byte, at image.Point, dip
 		bmp:           baseBmp,
 		png:           append([]byte(nil), pngBytes...),
 		annot:         annotate.NewCanvas(),
+		textEditIdx:   -1,
 		origW:         dipW,
 		origH:         dipH,
 		curW:          curW,
@@ -234,6 +240,9 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 		cmdC := c.Shortcut(ui.Cmd, ui.KeyC)
 		cmdShiftS := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyS)
 		cmdS := c.Shortcut(ui.Cmd, ui.KeyS)
+		cmd0 := c.Shortcut(ui.Cmd, ui.Key0)
+		cmdPlus := c.Shortcut(ui.Cmd, ui.KeyEqual) || c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEqual)
+		cmdMinus := c.Shortcut(ui.Cmd, ui.KeyMinus)
 		cmdZ := c.Shortcut(ui.Cmd, ui.KeyZ)
 		cmdShiftZ := c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ)
 		delKey := c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)
@@ -252,38 +261,91 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 			return
 		}
 
-		if tabKey && len(p.paletteColors) > 0 && !p.collapsed && !p.editMode && !p.rulerMode && !p.compareMode {
-			p.paletteFmt = beautify.NextColorFormat(p.paletteFmt)
-			p.setPinNotice("格式: " + beautify.ColorFormatName(p.paletteFmt))
-			return
-		}
-		if cmdC {
-			if p.compareMode {
-				a.copyCompareComposite(p)
-				return
+		typing := (p.editMode && p.textEditing) || c.FocusTakesText()
+		if p.editMode && p.textEditing {
+			if esc && p.win != nil {
+				p.textEditing = false
+				p.textEditIdx = -1
+				p.textEditBuf = ""
+				p.win.Invalidate()
 			}
-			if pngCopy := p.exportPNG(); len(pngCopy) > 0 {
-				if mygo.App.IsReady() {
-					go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
-				}
-				p.setPinNotice("已复制图像")
-			}
-			return
-		}
-		if cmdShiftS {
-			if data := p.exportPNG(); len(data) > 0 {
-				a.SavePNGAs(data)
-			}
-			return
-		}
-		if cmdS {
-			if data := p.exportPNG(); len(data) > 0 {
-				a.SavePNG(data)
-			}
-			return
 		}
 
-		if p.win != nil {
+		var pickedPinTool annotate.Tool = -1
+		if p.editMode && !typing {
+			for _, tk := range annotToolShortcuts {
+				if c.Shortcut(0, tk.key) && pickedPinTool < 0 {
+					pickedPinTool = tk.tool
+				}
+			}
+		}
+
+		if !typing {
+			if tabKey && len(p.paletteColors) > 0 && !p.collapsed && !p.editMode && !p.rulerMode && !p.compareMode {
+				p.paletteFmt = beautify.NextColorFormat(p.paletteFmt)
+				p.setPinNotice("格式: " + beautify.ColorFormatName(p.paletteFmt))
+				return
+			}
+			if cmdC {
+				if p.compareMode {
+					a.copyCompareComposite(p)
+					return
+				}
+				if pngCopy := p.exportPNG(); len(pngCopy) > 0 {
+					if mygo.App.IsReady() {
+						go mygo.RunOnMain(func() { _ = mygo.Clipboard.WriteImage(pngCopy) })
+					}
+					p.setPinNotice("已复制图像")
+				}
+				return
+			}
+			if cmdShiftS {
+				if data := p.exportPNG(); len(data) > 0 {
+					a.SavePNGAs(data)
+				}
+				return
+			}
+			if cmdS {
+				if data := p.exportPNG(); len(data) > 0 {
+					a.SavePNG(data)
+				}
+				return
+			}
+			if !p.collapsed {
+				zoomTarget := 0.0
+				switch {
+				case cmd0:
+					zoomTarget = 1.0
+				case cmdPlus:
+					zoomTarget = p.zoom * 1.15
+				case cmdMinus:
+					zoomTarget = p.zoom / 1.15
+				}
+				if zoomTarget > 0 {
+					ax, ay := float64(p.curW)/2, float64(p.curH)/2
+					if p.win == nil {
+						p.applyZoom(zoomTarget, ax, ay)
+					} else {
+						go mygo.RunOnMain(func() { p.applyZoom(zoomTarget, ax, ay) })
+						return
+					}
+				}
+			}
+			if pickedPinTool >= 0 && p.editMode {
+				p.annot.ClearSelection()
+				if p.annot.Tool == pickedPinTool {
+					p.annot.Tool = annotate.ToolNone
+				} else {
+					p.annot.Tool = pickedPinTool
+				}
+				if p.win != nil {
+					p.win.Invalidate()
+					return
+				}
+			}
+		}
+
+		if p.win != nil && !typing {
 			switch {
 			case esc:
 				if p.compareMode {
@@ -409,6 +471,10 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 				return p.rulerMode || (p.editMode && p.annot.Tool == annotate.ToolLoupe)
 			case ui.InputPointerDown:
 				if ev.Button == 1 || (ev.Button == 0 && ev.Mods == ui.Ctrl) {
+					if p.editMode && p.textEditing {
+						p.commitOrClosePinTextEdit()
+						return true
+					}
 					if p.editMode && p.annot.Tool != annotate.ToolNone {
 						p.annot.CancelPointer()
 						p.annot.Tool = annotate.ToolNone
@@ -423,11 +489,34 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					return true
 				}
 				if ev.Button == 0 && p.editMode {
+					if p.textEditing {
+						p.commitOrClosePinTextEdit()
+					}
 					ox, oy := toOrig(ev)
-					if idx, part := p.annot.HitTest(ox, oy); part != annotate.EditNone {
-						items := p.annot.Items()
+					idx, part := p.annot.HitTest(ox, oy)
+					items := p.annot.Items()
+					hitText := part != annotate.EditNone && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolText
+					if ev.Clicks >= 2 && hitText {
+						p.annotEditDrg = false
+						p.annotDrag = false
+						p.textEditing = true
+						p.textEditIdx = idx
+						p.textEditX, p.textEditY = items[idx].P0.X, items[idx].P0.Y
+						p.textEditBuf = items[idx].Text
+						p.annot.Selected = idx
+						return true
+					}
+					if p.annot.Tool == annotate.ToolText && !hitText {
+						p.textEditing = true
+						p.textEditIdx = -1
+						p.textEditX, p.textEditY = ox, oy
+						p.textEditBuf = ""
+						return true
+					}
+					if part != annotate.EditNone {
 						hitExistingLoupe := p.annot.Tool == annotate.ToolLoupe && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolLoupe
-						if p.annot.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1 || hitExistingLoupe {
+						hitExistingText := p.annot.Tool == annotate.ToolText && hitText
+						if p.annot.Tool == annotate.ToolNone || part == annotate.EditP0 || part == annotate.EditP1 || hitExistingLoupe || hitExistingText {
 							if p.annot.BeginEdit(ox, oy) {
 								p.annotEditDrg = true
 								return true
@@ -486,6 +575,7 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 							if p.win != nil && !p.win.IsDestroyed() {
 								p.win.SetOpacity(float64(next) / 100)
 							}
+							p.setPinNotice(fmt.Sprintf("不透明度 %d%%", next))
 						}
 					})
 					return true

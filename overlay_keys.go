@@ -33,11 +33,28 @@ func (a *app) sampleColorToPaletteWithFeedback() {
 	}
 }
 
+var annotToolShortcuts = [...]struct {
+	key  ui.Key
+	tool annotate.Tool
+}{
+	{ui.Key1, annotate.ToolRect},
+	{ui.Key2, annotate.ToolEllipse},
+	{ui.Key3, annotate.ToolArrow},
+	{ui.Key4, annotate.ToolPen},
+	{ui.Key5, annotate.ToolStep},
+	{ui.Key6, annotate.ToolMosaic},
+	{ui.Key7, annotate.ToolText},
+	{ui.Key8, annotate.ToolSpotlight},
+	{ui.Key9, annotate.ToolErase},
+	{ui.Key0, annotate.ToolLoupe},
+}
+
 func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	esc := c.Shortcut(0, ui.KeyEscape)
 	if a.textEditing {
 		if esc {
 			a.textEditing = false
+			a.textEditIdx = -1
 			a.textEditBuf = ""
 			a.invalidateAll()
 		}
@@ -69,21 +86,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	shiftC := c.Shortcut(ui.Shift, ui.KeyC)
 	delKey := c.Shortcut(0, ui.KeyBackspace) || c.Shortcut(0, ui.KeyDelete)
 
-	toolKeys := [...]struct {
-		key  ui.Key
-		tool annotate.Tool
-	}{
-		{ui.Key1, annotate.ToolRect},
-		{ui.Key2, annotate.ToolEllipse},
-		{ui.Key3, annotate.ToolArrow},
-		{ui.Key4, annotate.ToolPen},
-		{ui.Key5, annotate.ToolStep},
-		{ui.Key6, annotate.ToolMosaic},
-		{ui.Key7, annotate.ToolText},
-		{ui.Key8, annotate.ToolSpotlight},
-		{ui.Key9, annotate.ToolErase},
-		{ui.Key0, annotate.ToolLoupe},
-	}
+	toolKeys := annotToolShortcuts
 	var pickedTool annotate.Tool = -1
 	for _, tk := range toolKeys {
 		if c.Shortcut(0, tk.key) && pickedTool < 0 {

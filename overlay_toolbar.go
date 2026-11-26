@@ -181,88 +181,120 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 			_ = sub.Clicked()
 			sub.Children(func() {
 				if showStyleControls {
-					uiPal := uiPalette(c)
-					curCol := ac.Color
-					curStroke := ac.Stroke
-					if selIt, ok := ac.SelectedItem(); ok {
-						curCol = selIt.Color
-						curStroke = selIt.Stroke
-					}
-					for i, pal := range annotate.Palette {
-						pal := pal
-						active := curCol == pal
-						dot := subTB.RadioItem(
-							c.Key(fmt.Sprintf("palette-%d", i)),
-							fmt.Sprintf("颜色 %d", i+1),
-							active,
-							behaviors.ToolbarItemOptions{
-								Tooltip: fmt.Sprintf("颜色 #%02X%02X%02X", pal.R, pal.G, pal.B),
-							},
-						).
-							Size(18, 18).Radius(9).
-							Shrink(0).
-							Background(ui.RGB(pal.R, pal.G, pal.B)).
-							Cursor(ui.CursorPointer)
-						if dot.Pressed() {
-							dot.Scale(0.92, 0.92)
-						}
-						if active {
-							dot.Border(2, uiPal.Accent).
-								InsetShadow(0, 0, 0, 1.5, ui.RGB(255, 255, 255))
-						} else {
-							dot.Border(1, uiPal.SubtleBorder)
-						}
-						if dot.Clicked() {
-							ac.SetColor(pal)
-							a.invalidateAll()
-						}
-					}
-					toolbarDivider(c)
-					for i, st := range [...]struct {
-						label string
-						tip   string
-						w     float64
-						dotR  float32
-					}{
-						{"细", "细笔画", 2.0, 2.0},
-						{"中", "中笔画", 3.0, 3.5},
-						{"粗", "粗笔画", 6.0, 5.2},
-					} {
-						if strokeDotBtn(c.Key(200+i), st.label, st.tip, st.dotR, math.Abs(curStroke-st.w) < 0.4) {
-							ac.SetStroke(st.w)
-							a.invalidateAll()
-						}
-					}
-					if hasSelected {
-						toolbarDivider(c)
-						if iconToolBtn(c, iconTrash, "删除标注", "删除当前选中的标注 (⌫)", false, false) {
-							ac.DeleteSelected()
-							a.invalidateAll()
-						}
-					}
-					selIt, hasSelIt := ac.SelectedItem()
-					if ac.Tool == annotate.ToolLoupe || (hasSelIt && selIt.Tool == annotate.ToolLoupe) {
-						toolbarDivider(c)
-						curZoom := ac.LoupeZoom
-						if hasSelIt && selIt.Tool == annotate.ToolLoupe && selIt.Zoom > 0 {
-							curZoom = selIt.Zoom
-						}
-						zoomVals := [...]float64{2.0, 2.5, 3.0, 4.0}
-						zoomSel := 0
-						for i, z := range zoomVals {
-							if math.Abs(curZoom-z) < 0.15 {
-								zoomSel = i
-								break
-							}
-						}
-						if picked := compactSegmented(c, "loupe-zoom", zoomSel, []string{"2×", "2.5×", "3×", "4×"}); picked >= 0 && picked != zoomSel {
-							ac.SetLoupeZoom(zoomVals[picked])
-							a.invalidateAll()
-						}
-					}
+					paintAnnotStyleControls(
+						c,
+						subTB,
+						ac,
+						hasSelected,
+						"palette",
+						200,
+						"删除标注",
+						"loupe-zoom",
+						a.invalidateAll,
+					)
 				}
 			})
 		}
 	})
 	return chosen
+}
+
+func paintAnnotStyleControls(
+	c *ui.Context,
+	tb behaviors.ToolbarParts,
+	ac *annotate.Canvas,
+	hasSelected bool,
+	palettePrefix string,
+	strokeKeyBase int,
+	delLabel string,
+	loupeKey string,
+	onChange func(),
+) {
+	uiPal := uiPalette(c)
+	curCol := ac.Color
+	curStroke := ac.Stroke
+	if selIt, ok := ac.SelectedItem(); ok {
+		curCol = selIt.Color
+		curStroke = selIt.Stroke
+	}
+	for i, pal := range annotate.Palette {
+		pal := pal
+		active := curCol == pal
+		dot := tb.RadioItem(
+			c.Key(fmt.Sprintf("%s-%d", palettePrefix, i)),
+			fmt.Sprintf("颜色 %d", i+1),
+			active,
+			behaviors.ToolbarItemOptions{
+				Tooltip: fmt.Sprintf("颜色 #%02X%02X%02X", pal.R, pal.G, pal.B),
+			},
+		).
+			Size(18, 18).Radius(9).
+			Shrink(0).
+			Background(ui.RGB(pal.R, pal.G, pal.B)).
+			Cursor(ui.CursorPointer)
+		if dot.Pressed() {
+			dot.Scale(0.92, 0.92)
+		}
+		if active {
+			dot.Border(2, uiPal.Accent).
+				InsetShadow(0, 0, 0, 1.5, ui.RGB(255, 255, 255))
+		} else {
+			dot.Border(1, uiPal.SubtleBorder)
+		}
+		if dot.Clicked() {
+			ac.SetColor(pal)
+			if onChange != nil {
+				onChange()
+			}
+		}
+	}
+	toolbarDivider(c)
+	for i, st := range [...]struct {
+		label string
+		tip   string
+		w     float64
+		dotR  float32
+	}{
+		{"细", "细笔画", 2.0, 2.0},
+		{"中", "中笔画", 3.0, 3.5},
+		{"粗", "粗笔画", 6.0, 5.2},
+	} {
+		if strokeDotBtn(c.Key(strokeKeyBase+i), st.label, st.tip, st.dotR, math.Abs(curStroke-st.w) < 0.4) {
+			ac.SetStroke(st.w)
+			if onChange != nil {
+				onChange()
+			}
+		}
+	}
+	if hasSelected {
+		toolbarDivider(c)
+		if iconToolBtn(c, iconTrash, delLabel, "删除当前选中的标注 (⌫)", false, false) {
+			ac.DeleteSelected()
+			if onChange != nil {
+				onChange()
+			}
+		}
+	}
+	selIt, hasSelIt := ac.SelectedItem()
+	if ac.Tool == annotate.ToolLoupe || (hasSelIt && selIt.Tool == annotate.ToolLoupe) {
+		toolbarDivider(c)
+		curZoom := ac.LoupeZoom
+		if hasSelIt && selIt.Tool == annotate.ToolLoupe && selIt.Zoom > 0 {
+			curZoom = selIt.Zoom
+		}
+		zoomVals := [...]float64{2.0, 2.5, 3.0, 4.0}
+		zoomSel := 0
+		for i, z := range zoomVals {
+			if math.Abs(curZoom-z) < 0.15 {
+				zoomSel = i
+				break
+			}
+		}
+		if picked := compactSegmented(c, loupeKey, zoomSel, []string{"2×", "2.5×", "3×", "4×"}); picked >= 0 && picked != zoomSel {
+			ac.SetLoupeZoom(zoomVals[picked])
+			if onChange != nil {
+				onChange()
+			}
+		}
+	}
 }

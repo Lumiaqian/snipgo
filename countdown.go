@@ -36,11 +36,11 @@ func (a *app) startDelayedCapture(seconds int) {
 	}
 	a.countdown = cd
 
-	pos := a.placeTopCenterPill(246, 42)
+	pos := a.placeTopCenterPill(countdownWinW, countdownWinH)
 	cd.win = mygo.NewWindow(mygo.WindowOptions{
 		Title:           overlayTitle,
-		Width:           246,
-		Height:          42,
+		Width:           countdownWinW,
+		Height:          countdownWinH,
 		X:               pos.X,
 		Y:               pos.Y,
 		Frameless:       true,
@@ -73,16 +73,7 @@ func (a *app) startDelayedCapture(seconds int) {
 					}
 					cd.remaining--
 					if cd.remaining <= 0 {
-						a.stopCountdown()
-						// 预留一帧让倒计时胶囊彻底从合成器消失后定格桌面。
-						go func() {
-							time.Sleep(45 * time.Millisecond)
-							mygo.RunOnMain(func() {
-								if a.session != nil {
-									a.session.StartFrozen()
-								}
-							})
-						}()
+						a.triggerCountdownNow()
 						return
 					}
 					if cd.win != nil && !cd.win.IsDestroyed() {
@@ -112,6 +103,27 @@ func (a *app) placeTopCenterPill(w, h int) image.Point {
 	return image.Pt(wa.X+(wa.Width-w)/2, wa.Y+18)
 }
 
+const (
+	countdownWinW = 308
+	countdownWinH = 42
+)
+
+func (a *app) triggerCountdownNow() {
+	a.stopCountdown()
+	// 预留一帧让倒计时胶囊彻底从合成器消失后定格桌面。
+	go func() {
+		time.Sleep(45 * time.Millisecond)
+		if !mygo.App.IsReady() {
+			return
+		}
+		mygo.RunOnMain(func() {
+			if a.session != nil {
+				a.session.StartFrozen()
+			}
+		})
+	}()
+}
+
 func (a *app) stopCountdown() {
 	cd := a.countdown
 	if cd == nil {
@@ -131,6 +143,13 @@ func (a *app) paintCountdownView(c *ui.Context, cd *countdownSession) {
 	withAppTheme(c, func() {
 		if handlePanelWindowShortcuts(c, func() { a.stopCountdown() }) {
 			return
+		}
+		if !c.FocusTakesText() && (c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace)) {
+			if cd.win != nil {
+				go mygo.RunOnMain(func() { a.triggerCountdownNow() })
+				return
+			}
+			a.triggerCountdownNow()
 		}
 		p := uiPalette(c)
 		pill := ui.Row(c).
@@ -157,6 +176,9 @@ func (a *app) paintCountdownView(c *ui.Context, cd *countdownSession) {
 					FontSize(12.5).FontWeight(600).NoWrap().TextColor(p.Text)
 			})
 			ui.Spacer(c)
+			if miniPillBtnLabeled(c.Key("cd-now"), nil, "立即", "立即定格", true) {
+				go mygo.RunOnMain(func() { a.triggerCountdownNow() })
+			}
 			if miniPillBtn(c, nil, "取消", false) {
 				go mygo.RunOnMain(func() { a.stopCountdown() })
 			}

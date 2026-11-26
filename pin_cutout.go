@@ -33,11 +33,13 @@ func (a *app) cutoutSelection(img *image.NRGBA, r image.Rectangle) {
 		scale = max(1.0, float64(img.Bounds().Dx())/float64(r.Dx()))
 	}
 	a.sessionStatus("正在离线 AI 抠取主体…")
+	a.showActionToast("正在离线 AI 抠图…")
 	go func() {
 		cut, err := vision.Cutout(img)
 		if err != nil {
 			mygo.RunOnMain(func() {
 				a.sessionStatus("抠图失败: " + err.Error())
+				a.showActionToast("抠图失败")
 				go a.showErrorAlert("主体抠图未检测到清晰主体", err.Error())
 			})
 			return
@@ -51,7 +53,10 @@ func (a *app) cutoutSelection(img *image.NRGBA, r image.Rectangle) {
 func (a *app) finishCutoutSelection(cut *image.NRGBA, r image.Rectangle, scale float64) {
 	data, err := cutoutEncode(cut)
 	if err != nil {
-		runOnMain(func() { a.sessionStatus(cutoutEncodeFailedStatus) })
+		runOnMain(func() {
+			a.sessionStatus(cutoutEncodeFailedStatus)
+			a.showActionToast("抠图失败")
+		})
 		return
 	}
 	dipW := max(24, int(math.Round(float64(cut.Bounds().Dx())/scale)))
@@ -61,6 +66,7 @@ func (a *app) finishCutoutSelection(cut *image.NRGBA, r image.Rectangle, scale f
 		_ = mygo.Clipboard.WriteImage(data)
 		a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy(), scale)
 		a.sessionStatus("主体抠图已复制并贴为透明贴纸")
+		a.showActionToast("已抠出透明主体并复制")
 		a.showPinWithState(cut, data, at, dipW, dipH, 1.0, 100, true)
 	})
 }
@@ -74,12 +80,14 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 	src := p.img
 	scale := max(1.0, float64(src.Bounds().Dx())/float64(max(1, p.origW)))
 	a.sessionStatus("正在抠取贴图主体…")
+	p.setPinNotice("正在抠图…")
 	go func() {
 		cut, err := vision.Cutout(src)
 		if err != nil {
 			mygo.RunOnMain(func() {
 				p.cutting = false
 				a.sessionStatus("抠图失败: " + err.Error())
+				p.setPinNotice("抠图失败")
 				go a.showErrorAlert("主体抠图失败", err.Error())
 			})
 			return
@@ -89,6 +97,7 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 			runOnMain(func() {
 				p.cutting = false
 				a.sessionStatus(cutoutEncodeFailedStatus)
+				p.setPinNotice("抠图失败")
 			})
 			return
 		}
@@ -122,6 +131,7 @@ func (a *app) cutoutPinInPlace(p *pinWin) {
 			_ = mygo.Clipboard.WriteImage(data)
 			a.recordHistory(data, cut.Bounds().Dx(), cut.Bounds().Dy(), scale)
 			a.sessionStatus("贴图已抠出透明主体并复制")
+			p.setPinNotice("已抠出并复制")
 		})
 	}()
 }

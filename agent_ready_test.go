@@ -316,8 +316,8 @@ func TestAgentReadyHistoryPanel(t *testing.T) {
 		opts := uitest.AuditOptions{
 			RequiredInteractive: []string{
 				"关闭历史", "清空全部",
-				"历史截图 1", "复制历史 1", "贴图历史 1", "套模板历史 1", "识图历史 1", "删除历史 1",
-				"历史截图 2", "复制历史 2", "贴图历史 2", "套模板历史 2", "识图历史 2", "删除历史 2",
+				"历史截图 1", "复制历史 1", "贴图历史 1", "保存历史 1", "套模板历史 1", "识图历史 1", "删除历史 1",
+				"历史截图 2", "复制历史 2", "贴图历史 2", "保存历史 2", "套模板历史 2", "识图历史 2", "删除历史 2",
 			},
 			RequireFocusable: true,
 		}
@@ -500,7 +500,7 @@ func TestAgentReadyScrollUpdateCountdown(t *testing.T) {
 			a.paintScrollCtrlView(c, sc)
 		}, scrollCtrlW, scrollCtrlH)
 		opts := uitest.AuditOptions{
-			RequiredInteractive: []string{"取消长截图", "长图贴图", "保存长图", "完成复制"},
+			RequiredInteractive: []string{"取消长截图", "暂停拼接", "长图贴图", "保存长图", "完成复制"},
 			RequireFocusable:    true,
 		}
 		uitest.AssertAgentReady(t, tt, opts)
@@ -556,9 +556,9 @@ func TestAgentReadyScrollUpdateCountdown(t *testing.T) {
 		cd := &countdownSession{remaining: 3}
 		tt := ui.NewTester(func(c *ui.Context) {
 			a.paintCountdownView(c, cd)
-		}, 246, 42)
+		}, countdownWinW, countdownWinH)
 		opts := uitest.AuditOptions{
-			RequiredInteractive: []string{"取消"},
+			RequiredInteractive: []string{"立即定格", "取消"},
 			RequireFocusable:    true,
 		}
 		uitest.AssertAgentReady(t, tt, opts)

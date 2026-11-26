@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,19 +15,22 @@ import (
 
 // SavePNG 根据偏好设置执行免弹窗一键快存（或弹出另存为对话框），并可选自动同时复制到剪贴板。
 func (a *app) SavePNG(data []byte) {
-	a.savePNGWithMode(data, !a.cfg.QuickSave)
+	a.savePNGWithMode(data, !a.cfg.QuickSave, nil)
 }
 
 func (a *app) SavePNGAs(data []byte) {
-	a.savePNGWithMode(data, true)
+	a.savePNGWithMode(data, true, nil)
 }
 
-func (a *app) savePNGWithMode(data []byte, forceDialog bool) {
+func (a *app) savePNGWithMode(data []byte, forceDialog bool, completed func(string, error)) {
 	if len(data) == 0 {
+		if completed != nil {
+			completed("", errors.New("截图为空"))
+		}
 		return
 	}
 	if a.savePNGHook != nil {
-		a.savePNGHook(data, forceDialog)
+		a.savePNGHook(data, forceDialog, completed)
 		return
 	}
 	if a.cfg.CopyOnSave {
@@ -41,26 +44,36 @@ func (a *app) savePNGWithMode(data []byte, forceDialog bool) {
 		}
 	}
 
-	if !forceDialog && targetDir != "" {
-		go func() {
-			if err := os.MkdirAll(targetDir, 0o755); err != nil {
-				a.savePNGDialog(data, filepath.Join(targetDir, name))
-				return
+	go func() {
+		path, quick, err := writePNG(data, targetDir, name, forceDialog, choosePNGPath)
+		runOnMain(func() {
+			if completed != nil {
+				completed(path, err)
 			}
-			full, err := writeUniqueFile(targetDir, name, data)
 			if err != nil {
-				a.savePNGDialog(data, filepath.Join(targetDir, name))
-				return
-			}
-			saved := filepath.Base(full)
-			mygo.RunOnMain(func() {
+				a.sessionStatus("保存失败: " + err.Error())
+			} else if quick {
+				saved := filepath.Base(path)
 				a.sessionStatus("已快存: " + saved)
 				a.showActionToast("已快存 " + saved)
-			})
-		}()
-		return
+			}
+		})
+	}()
+}
+
+func writePNG(data []byte, dir, name string, forceDialog bool, choose func(string) (string, error)) (path string, quick bool, err error) {
+	if !forceDialog && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err == nil {
+			if path, err := writeUniqueFile(dir, name, data); err == nil {
+				return path, true, nil
+			}
+		}
 	}
-	go a.savePNGDialog(data, filepath.Join(targetDir, name))
+	path, err = choose(filepath.Join(dir, name))
+	if err != nil || path == "" {
+		return "", false, err
+	}
+	return path, false, os.WriteFile(path, data, 0644)
 }
 
 // writeUniqueFile 以 O_EXCL 写入 dir/name，重名时在扩展名前追加 -1、-2… 后缀，返回实际路径。
@@ -94,9 +107,9 @@ func writeUniqueFile(dir, name string, data []byte) (string, error) {
 	return "", fmt.Errorf("文件名冲突过多: %s", name)
 }
 
-func (a *app) savePNGDialog(data []byte, defaultPath string) {
+func choosePNGPath(defaultPath string) (string, error) {
 	mygo.App.Focus()
-	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+	return mygo.Dialog.Save(mygo.SaveDialogOptions{
 		Title:             "保存截图",
 		DefaultPath:       defaultPath,
 		CreateDirectories: true,
@@ -104,15 +117,4 @@ func (a *app) savePNGDialog(data []byte, defaultPath string) {
 			{Name: "PNG 图像", Extensions: []string{"png"}},
 		},
 	})
-	if err != nil {
-		log.Printf("保存对话框失败: %v", err)
-		return
-	}
-	if path == "" {
-		return
-	}
-	// 用户在系统对话框中已确认覆盖，这里允许直接写入
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		mygo.RunOnMain(func() { a.sessionStatus("保存失败: " + err.Error()) })
-	}
 }

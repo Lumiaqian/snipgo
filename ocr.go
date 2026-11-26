@@ -30,26 +30,27 @@ const (
 )
 
 type ocrWindow struct {
-	win         *mygo.Window
-	thumb       *ui.Bitmap
-	srcImg      *image.NRGBA
-	loading     bool
-	errMsg      string
-	text        string
-	plainText   string
-	mdText      string
-	mdReady     bool
-	tsvText     string
-	tsvReady    bool
-	table       vision.Table
-	hasTable    bool
-	mode        ocrViewMode
-	showRaw     bool
-	links       []string
-	copiedBadge string
-	badge       badgeState
-	enter       panelEnterState
-	onCopyText  func(string)
+	win          *mygo.Window
+	thumb        *ui.Bitmap
+	srcImg       *image.NRGBA
+	loading      bool
+	errMsg       string
+	text         string
+	plainText    string
+	mdText       string
+	mdReady      bool
+	tsvText      string
+	tsvReady     bool
+	table        vision.Table
+	hasTable     bool
+	mode         ocrViewMode
+	showRaw      bool
+	links        []string
+	showAllLinks bool
+	copiedBadge  string
+	badge        badgeState
+	enter        panelEnterState
+	onCopyText   func(string)
 }
 
 func (ow *ocrWindow) setCopiedBadge(msg string) {
@@ -343,6 +344,25 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 		if handlePanelWindowShortcuts(c, func() { a.closeOCRWindow() }) {
 			return
 		}
+		typing := c.FocusTakesText()
+		hasReadyText := !ow.loading && ow.errMsg == "" && strings.TrimSpace(ow.text) != ""
+		if !typing && hasReadyText && c.Shortcut(ui.Cmd, ui.KeyC) {
+			ow.copyText(ow.text)
+			_, _, copiedMsg := ocrPrimaryActionCopy(ow)
+			ow.setCopiedBadge(copiedMsg)
+		}
+		if !typing && !ow.loading && ow.hasTable && c.Shortcut(0, ui.KeyTab) {
+			nextMode := (ow.mode + 1) % 3
+			ow.switchMode(nextMode)
+			switch nextMode {
+			case ocrModeMarkdown:
+				ow.setCopiedBadge("视图: Markdown")
+			case ocrModeTSV:
+				ow.setCopiedBadge("视图: 表格 TSV")
+			default:
+				ow.setCopiedBadge("视图: 纯文本")
+			}
+		}
 
 		p := uiPalette(c)
 		card := liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &ow.enter)
@@ -412,10 +432,11 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 						Background(p.BadgeInfoBg).
 						Border(1, p.BadgeInfoBd)
 					linkCard.Children(func() {
-						for i, lk := range ow.links {
-							if i >= 2 {
-								break
-							}
+						limit := len(ow.links)
+						if !ow.showAllLinks && limit > 2 {
+							limit = 2
+						}
+						for i, lk := range ow.links[:limit] {
 							lk := lk
 							isURL := strings.HasPrefix(lk, "http://") || strings.HasPrefix(lk, "https://")
 							row := ui.Row(c.Key(500 + i)).Height(24).Gap(6).AlignItems(ui.Center)
@@ -449,6 +470,19 @@ func (a *app) paintOCRView(c *ui.Context, ow *ocrWindow) {
 								if miniPillBtnLabeled(c.Key("ocr-copy"), iconCopy, "复制", copyLabel, false) {
 									ow.copyText(lk)
 									ow.setCopiedBadge("已复制链接")
+								}
+							})
+						}
+						if len(ow.links) > 2 {
+							ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
+								btnText := fmt.Sprintf("展开全部 %d 条", len(ow.links))
+								btnLabel := "展开全部链接"
+								if ow.showAllLinks {
+									btnText = "收起链接"
+									btnLabel = "收起多余链接"
+								}
+								if miniPillBtnLabeled(c.Key("ocr-links-toggle"), nil, btnText, btnLabel, false) {
+									ow.showAllLinks = !ow.showAllLinks
 								}
 							})
 						}

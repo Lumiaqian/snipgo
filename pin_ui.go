@@ -218,27 +218,34 @@ func (a *app) openPinTemplate(p *pinWin) {
 }
 
 func (p *pinWin) applyZoom(targetZoom, anchorX, anchorY float64) {
-	if p.win == nil || p.win.IsDestroyed() || p.collapsed {
+	if p == nil || p.collapsed || p.origW <= 0 || p.origH <= 0 {
 		return
 	}
 	// 长图贴图初始缩放可能低于 0.2，下限取当前值以免滚轮时跳变
 	nextZoom := max(min(0.2, p.zoom), min(5.0, targetZoom))
 	newW := max(24, int(math.Round(float64(p.origW)*nextZoom)))
 	newH := max(24, int(math.Round(float64(p.origH)*nextZoom)))
-	if newW == p.curW && newH == p.curH {
-		return
+	changed := newW != p.curW || newH != p.curH || math.Abs(nextZoom-p.zoom) > 1e-4
+	if p.win != nil && !p.win.IsDestroyed() && (newW != p.curW || newH != p.curH) {
+		b := p.win.Bounds()
+		rx := anchorX / float64(max(1, p.curW))
+		ry := anchorY / float64(max(1, p.curH))
+		newX := b.X + int(math.Round(anchorX-rx*float64(newW)))
+		newY := b.Y + int(math.Round(anchorY-ry*float64(newH)))
+		p.zoom = nextZoom
+		p.curW = newW
+		p.curH = newH
+		p.win.SetBounds(mygo.Rectangle{X: newX, Y: newY, Width: newW, Height: newH})
+		p.win.Invalidate()
+		p.refreshShadowSoon()
+	} else {
+		p.zoom = nextZoom
+		p.curW = newW
+		p.curH = newH
 	}
-	b := p.win.Bounds()
-	rx := anchorX / float64(max(1, p.curW))
-	ry := anchorY / float64(max(1, p.curH))
-	newX := b.X + int(math.Round(anchorX-rx*float64(newW)))
-	newY := b.Y + int(math.Round(anchorY-ry*float64(newH)))
-	p.zoom = nextZoom
-	p.curW = newW
-	p.curH = newH
-	p.win.SetBounds(mygo.Rectangle{X: newX, Y: newY, Width: newW, Height: newH})
-	p.win.Invalidate()
-	p.refreshShadowSoon()
+	if changed || math.Abs(nextZoom-1.0) < 1e-4 {
+		p.setPinNotice(fmt.Sprintf("%d%%", int(math.Round(nextZoom*100))))
+	}
 }
 
 func (a *app) popupPinMenu(p *pinWin) {
@@ -253,10 +260,11 @@ func (a *app) popupPinMenu(p *pinWin) {
 			Type:    mygo.MenuItemCheckbox,
 			Checked: p.opacity == pct,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
+				p.opacity = pct
 				if p.win != nil && !p.win.IsDestroyed() {
-					p.opacity = pct
 					p.win.SetOpacity(float64(pct) / 100)
 				}
+				p.setPinNotice(fmt.Sprintf("不透明度 %d%%", pct))
 			},
 		})
 	}
@@ -284,9 +292,10 @@ func (a *app) popupPinMenu(p *pinWin) {
 			},
 		},
 		{
-			Label:    "恢复原始尺寸 (100%)",
-			Badge:    fmt.Sprintf("%d%%", zoomPct),
-			Disabled: zoomPct == 100 || p.collapsed,
+			Label:       "恢复原始尺寸 (100%)",
+			Accelerator: "Cmd+0",
+			Badge:       fmt.Sprintf("%d%%", zoomPct),
+			Disabled:    zoomPct == 100 || p.collapsed,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				p.applyZoom(1.0, float64(p.curW)/2, float64(p.curH)/2)
 			},

@@ -30,7 +30,12 @@ func (p *pinWin) togglePinEdit() {
 	}
 }
 
+func (p *pinWin) commitOrClosePinTextEdit() {
+	commitCanvasTextEdit(p.annot, &p.textEditing, &p.textEditIdx, p.textEditX, p.textEditY, &p.textEditBuf)
+}
+
 func (p *pinWin) finishPinEdit() {
+	p.commitOrClosePinTextEdit()
 	p.editMode = false
 	p.annotDrag = false
 	p.annotEditDrg = false
@@ -111,6 +116,63 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32, hovered bool) {
 			})
 	}
 
+	if p.textEditing {
+		paintAnnotTextEditor(
+			c,
+			"pin-text-editor",
+			"pin-annot-text-input",
+			float32(p.textEditX*float64(z)),
+			float32(p.textEditY*float64(z)),
+			w,
+			h,
+			p.annot.Color,
+			&p.textEditBuf,
+			false,
+			func() {
+				p.commitOrClosePinTextEdit()
+				if p.win != nil {
+					p.win.Invalidate()
+				}
+			},
+		)
+	}
+
+	if p.annot.Tool != annotate.ToolNone || p.annot.Selected >= 0 {
+		subTB := behaviors.Toolbar(c.Key("pin-edit-style-toolbar"), behaviors.ToolbarOptions{
+			Label: "贴图样式栏",
+		})
+		sub := liquidGlassCapsule(
+			c,
+			subTB.Root.Absolute().
+				Right(8).Bottom(50).
+				Height(32).
+				Padding(0, 8).
+				Gap(6).
+				AlignItems(ui.Center).
+				ZIndex(8),
+			16,
+			false,
+		)
+		_ = sub.Clicked()
+		sub.Children(func() {
+			paintAnnotStyleControls(
+				c,
+				subTB,
+				p.annot,
+				p.annot.Selected >= 0,
+				"pin-palette",
+				920,
+				"删除贴图标注",
+				"pin-loupe-zoom",
+				func() {
+					if p.win != nil {
+						p.win.Invalidate()
+					}
+				},
+			)
+		})
+	}
+
 	// 底部内嵌紧凑标注工具栏
 	tb := behaviors.Toolbar(c.Key("pin-edit-toolbar"), behaviors.ToolbarOptions{
 		Label: "贴图标注栏",
@@ -130,26 +192,31 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32, hovered bool) {
 	_ = bar.Clicked()
 	bar.Children(func() {
 		for i, t := range [...]struct {
-			ic   *ui.SVG
-			tip  string
-			tool annotate.Tool
+			ic    *ui.SVG
+			label string
+			tip   string
+			tool  annotate.Tool
 		}{
-			{iconRect, "矩形", annotate.ToolRect},
-			{iconEllipse, "椭圆", annotate.ToolEllipse},
-			{iconArrow, "箭头", annotate.ToolArrow},
-			{iconHighlighter, "荧光笔", annotate.ToolPen},
-			{iconStep, "序号", annotate.ToolStep},
-			{iconMosaic, "马赛克", annotate.ToolMosaic},
-			{iconErase, "无痕擦除", annotate.ToolErase},
-			{iconLoupe, "放大镜特写", annotate.ToolLoupe},
+			{iconRect, "矩形", "矩形 (1)", annotate.ToolRect},
+			{iconEllipse, "椭圆", "椭圆 (2)", annotate.ToolEllipse},
+			{iconArrow, "箭头", "箭头 (3)", annotate.ToolArrow},
+			{iconHighlighter, "荧光笔", "荧光笔 (4)", annotate.ToolPen},
+			{iconStep, "序号", "序号 (5)", annotate.ToolStep},
+			{iconMosaic, "马赛克", "马赛克 (6)", annotate.ToolMosaic},
+			{iconText, "文字", "文字批注 (7)", annotate.ToolText},
+			{iconSpotlight, "聚光", "聚光灯高亮 (8)", annotate.ToolSpotlight},
+			{iconErase, "无痕擦除", "无痕擦除 (9)", annotate.ToolErase},
+			{iconLoupe, "放大镜特写", "放大镜特写 (0)", annotate.ToolLoupe},
 		} {
 			active := p.annot.Tool == t.tool
-			if iconToolBtn(c.Key(900+i), t.ic, t.tip, t.tip, active, false) {
+			if iconToolBtn(c.Key(900+i), t.ic, t.label, t.tip, active, false) {
+				p.commitOrClosePinTextEdit()
 				if active {
 					p.annot.Tool = annotate.ToolNone
 				} else {
 					p.annot.Tool = t.tool
 				}
+				p.annot.ClearSelection()
 				if p.win != nil {
 					p.win.Invalidate()
 				}
@@ -157,6 +224,7 @@ func (p *pinWin) paintPinEditLayer(c *ui.Context, w, h float32, hovered bool) {
 		}
 		canUndo := p.annot.CanUndo()
 		if iconToolBtn(c, iconUndo, "撤销贴图标注", "撤销 (⌘Z)", false, !canUndo) && canUndo {
+			p.commitOrClosePinTextEdit()
 			p.annot.Undo()
 			if p.win != nil {
 				p.win.Invalidate()

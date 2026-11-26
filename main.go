@@ -68,7 +68,7 @@ type app struct {
 	paletteBarNotice    badgeState
 	paletteNoticeText   string
 	clipboardTextHook   func(string)
-	savePNGHook         func([]byte, bool)
+	savePNGHook         func([]byte, bool, func(string, error))
 	lastTplOpts         beautify.TemplateOptions
 	hasTplOpts          bool
 	countdown           *countdownSession
@@ -78,6 +78,7 @@ type app struct {
 
 	// 选区内文字批注临时编辑态
 	textEditing bool
+	textEditIdx int
 	textEditX   float64
 	textEditY   float64
 	textEditBuf string
