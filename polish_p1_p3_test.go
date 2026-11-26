@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"image"
 	"strings"
 	"testing"
@@ -418,8 +419,9 @@ func TestHistorySaveAndDigitQuickCopy(t *testing.T) {
 	hw := &historyWindow{
 		entries: st.List(),
 		thumbs:  map[string]*ui.Bitmap{},
-		onCopyPNG: func(raw []byte) {
+		onCopyPNG: func(raw []byte) error {
 			copiedPNG = append(copiedPNG, raw)
+			return nil
 		},
 	}
 
@@ -432,6 +434,12 @@ func TestHistorySaveAndDigitQuickCopy(t *testing.T) {
 	tt.Frame()
 	if len(copiedPNG) != 1 || hw.statusBadge != "已复制到剪贴板" {
 		t.Fatalf("Key2 copied=%d statusBadge=%q, want 1 copy and 已复制到剪贴板", len(copiedPNG), hw.statusBadge)
+	}
+
+	hw.onCopyPNG = func([]byte) error { return errors.New("clipboard unavailable") }
+	hw.historyCopy(hw.entries[0])
+	if hw.statusBadge != "复制失败: clipboard unavailable" {
+		t.Fatal(hw.statusBadge)
 	}
 
 	if err := tt.Click("保存历史 1"); err != nil {

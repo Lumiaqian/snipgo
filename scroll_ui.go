@@ -265,9 +265,10 @@ func (a *app) finishScrollCapture(mode string) {
 		mygo.RunOnMain(func() {
 			switch mode {
 			case "copy":
-				_ = mygo.Clipboard.WriteImage(pngBytes)
-				a.sessionStatus(fmt.Sprintf("长截图已复制（%d×%d px）", res.Bounds().Dx(), res.Bounds().Dy()))
-				a.showActionToast(fmt.Sprintf("已复制长截图（%d×%d px）", res.Bounds().Dx(), res.Bounds().Dy()))
+				err := mygo.Clipboard.WriteImage(pngBytes)
+				msg := copyResultMessage(err, fmt.Sprintf("长截图已复制（%d×%d px）", res.Bounds().Dx(), res.Bounds().Dy()))
+				a.sessionStatus(msg)
+				a.showActionToast(msg)
 			case "pin":
 				dipW, dipH, zoom := longPinGeometry(res.Bounds().Dx(), res.Bounds().Dy(), sel.Dx())
 				a.showPinWithState(res, pngBytes, sel.Min, dipW, dipH, zoom, 100, false)

@@ -39,7 +39,7 @@ type historyWindow struct {
 	statusBadge string
 	badge       badgeState
 	enter       panelEnterState
-	onCopyPNG   func([]byte)
+	onCopyPNG   func([]byte) error
 }
 
 func (hw *historyWindow) setStatusBadge(msg string) {
@@ -188,14 +188,15 @@ func (a *app) historyDecodeAsync(hw *historyWindow, e store.Entry, use func(img 
 
 // historyCopy 只读 PNG 字节复制到剪贴板，不解码。
 func (hw *historyWindow) historyCopy(e store.Entry) {
-	if raw, err := store.ReadPNG(e); err == nil {
-		if hw.onCopyPNG != nil {
-			hw.onCopyPNG(raw)
-		} else if mygo.App.IsReady() {
-			_ = mygo.Clipboard.WriteImage(raw)
+	raw, err := store.ReadPNG(e)
+	if err == nil {
+		write := hw.onCopyPNG
+		if write == nil {
+			write = mygo.Clipboard.WriteImage
 		}
-		hw.setStatusBadge("已复制到剪贴板")
+		err = write(raw)
 	}
+	hw.setStatusBadge(copyResultMessage(err, "已复制到剪贴板"))
 }
 
 // historyPin 后台解码后转为悬浮贴图；落点在点击时（主线程）确定。
@@ -464,4 +465,11 @@ func (a *app) paintHistoryCard(c *ui.Context, hw *historyWindow, idx int, e stor
 			}
 		})
 	})
+}
+
+func copyResultMessage(err error, success string) string {
+	if err != nil {
+		return "复制失败: " + err.Error()
+	}
+	return success
 }
