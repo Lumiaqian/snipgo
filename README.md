@@ -13,6 +13,8 @@
 [![Release](https://img.shields.io/github/v/release/Lumiaqian/snipgo?style=flat-square&label=Release)](https://github.com/Lumiaqian/snipgo/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=flat-square)](LICENSE)
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/snipgo)
+
 0ms 透明取景 · 10 种矢量标注 · 套模板工作台 · 离线 AI 抠图与表格识图 · 滚动长截图 · 拉帘对比贴图
 
 [下载最新版](https://github.com/Lumiaqian/snipgo/releases) · [核心功能](#-核心功能一览) · [快捷键速查](#-快捷键速查表) · [下载与安装](#-下载与安装) · [项目架构](#-项目架构) · [开发与发版](#-本地开发与自动化发版)
