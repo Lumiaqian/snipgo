@@ -455,10 +455,6 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 			switch ev.Kind {
 			case ui.InputPointerMove:
 				p.hoverX, p.hoverY, p.hasHover = float64(ev.X), float64(ev.Y), true
-				if p.compareMode && !p.compareDiff && p.compareDrag && p.curW > 0 {
-					p.compareSplit = max(0.02, min(0.98, float64(ev.X)/float64(p.curW)))
-					return true
-				}
 				if p.editMode && (p.annotDrag || p.annotEditDrg) {
 					ox, oy := toOrig(ev)
 					if p.annotEditDrg {
@@ -481,11 +477,6 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 						return true
 					}
 					go mygo.RunOnMain(func() { a.popupPinMenu(p) })
-					return true
-				}
-				if ev.Button == 0 && p.compareMode && !p.compareDiff && p.curW > 0 {
-					p.compareDrag = true
-					p.compareSplit = max(0.02, min(0.98, float64(ev.X)/float64(p.curW)))
 					return true
 				}
 				if ev.Button == 0 && p.editMode {
@@ -546,10 +537,6 @@ func (a *app) pinView(c *ui.Context, p *pinWin) {
 					return true
 				}
 			case ui.InputPointerUp:
-				if ev.Button == 0 && p.compareDrag {
-					p.compareDrag = false
-					return true
-				}
 				if ev.Button == 0 && p.editMode && (p.annotDrag || p.annotEditDrg) {
 					ox, oy := toOrig(ev)
 					if p.annotEditDrg {
