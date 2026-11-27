@@ -19,7 +19,7 @@ public struct AudioTimeline {
     private var pending: [Source: [Block]] = [:]
     public private(set) var position: Int64 = 0
 
-    public init() {}
+    public init(startFrame: Int64 = 0) { position = startFrame }
 
     public mutating func insert(_ samples: [Float], from source: Source, at start: Int64) {
         guard !samples.isEmpty, samples.count.isMultiple(of: 2),

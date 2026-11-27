@@ -3,7 +3,7 @@ import OSLog
 
 /// All sample access stays on the supplied serial queue. The receiver owns the copied PCM.
 final class Microphone: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
-    private let logger = Logger(subsystem: "local.lumiaqian.reelgo", category: "microphone")
+    private let logger = Logger(subsystem: "app.snipgo", category: "microphone")
     private let queue: DispatchQueue
     private let deviceName: String
     private var received = 0

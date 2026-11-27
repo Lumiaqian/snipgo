@@ -6,5 +6,6 @@ let package = Package(
     products: [.library(name: "Videocap", type: .dynamic, targets: ["Videocap"])],
     dependencies: [.package(path: "../../recordaudio")],
     targets: [.target(name: "Videocap", dependencies: [.product(name: "CaptureAudio", package: "recordaudio")],
-                      swiftSettings: [.swiftLanguageMode(.v5), .enableExperimentalFeature("StrictConcurrency")])]
+                      swiftSettings: [.swiftLanguageMode(.v5), .enableExperimentalFeature("StrictConcurrency")]),
+              .testTarget(name: "VideocapTests", dependencies: ["Videocap"])]
 )

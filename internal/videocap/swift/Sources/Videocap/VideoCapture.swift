@@ -1,8 +1,17 @@
 import AVFoundation
 import ScreenCaptureKit
 
+final class StreamEvents: NSObject, SCStreamDelegate {
+    private let lock = NSLock()
+    private var ended = false
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        lock.withLock { ended = true }
+    }
+    var interrupted: Bool { lock.withLock { ended } }
+}
+
 func videoStream(display: SCDisplay, excluding ownApp: SCRunningApplication, rect: CGRect,
-                 scale: CGFloat, systemAudio: Bool, cursor: Bool) throws -> SCStream {
+                 scale: CGFloat, events: StreamEvents) throws -> (SCStream, SCStreamConfiguration) {
     let filter = SCContentFilter(display: display, excludingApplications: [ownApp], exceptingWindows: [])
     let configuration = SCStreamConfiguration()
     configuration.sourceRect = rect
@@ -12,10 +21,10 @@ func videoStream(display: SCDisplay, excluding ownApp: SCRunningApplication, rec
         throw CocoaError(.validationMissingMandatoryProperty)
     }
     configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
-    configuration.showsCursor = cursor
+    configuration.showsCursor = true
     configuration.sampleRate = 48_000
     configuration.channelCount = 2
-    configuration.capturesAudio = systemAudio
+    configuration.capturesAudio = false
     configuration.excludesCurrentProcessAudio = true
-    return SCStream(filter: filter, configuration: configuration, delegate: nil)
+    return (SCStream(filter: filter, configuration: configuration, delegate: events), configuration)
 }

@@ -17,12 +17,13 @@ final class VideoWriter: NSObject, SCStreamOutput {
         return peak
     }
 
-    private var audio: AACTrack?
+    private let audio: AACTrack
     private var timeline = AudioTimeline()
+    private var receivedAudio = false
     private var origin: CMTime?
     private var lastVideo = CMTime.zero
 
-    init(url: URL, width: Int, height: Int, withAudio: Bool) throws {
+    init(url: URL, width: Int, height: Int) throws {
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -34,7 +35,7 @@ final class VideoWriter: NSObject, SCStreamOutput {
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else { throw CocoaError(.featureUnsupported) }
         writer.add(input)
-        if withAudio { audio = try AACTrack(writer: writer) }
+        audio = try AACTrack(writer: writer)
     }
 
     func setPaused(_ paused: Bool, at hostTime: CMTime) {
@@ -49,12 +50,13 @@ final class VideoWriter: NSObject, SCStreamOutput {
     func receive(_ samples: [Float], from source: AudioTimeline.Source, at time: CMTime) {
         guard pauseStart == nil, let origin,
               let frame = framePosition(hostTime: time, origin: origin, paused: removed) else { return }
+        if !receivedAudio { timeline = AudioTimeline(startFrame: max(0, frame)); receivedAudio = true }
         for i in stride(from: 0, to: samples.count, by: 16) { peak = max(peak, abs(samples[i])) }
         timeline.insert(samples, from: source, at: frame)
     }
 
     private func drain(to time: CMTime) throws {
-        guard let audio, let origin,
+        guard receivedAudio, let origin,
               let end = framePosition(hostTime: time, origin: origin, paused: .zero) else { return }
         while timeline.position < end, audio.input.isReadyForMoreMediaData {
             let start = timeline.position
@@ -68,11 +70,11 @@ final class VideoWriter: NSObject, SCStreamOutput {
         guard writer.status == .writing else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         let end = max(lastVideo, (pauseStart ?? time) - removed)
         try drain(to: end)
-        if audio != nil, let origin,
+        if receivedAudio, let origin,
            let expected = framePosition(hostTime: end, origin: origin, paused: .zero),
            timeline.position < expected { throw CocoaError(.fileWriteUnknown) }
         writer.endSession(atSourceTime: end)
-        audio?.input.markAsFinished()
+        audio.input.markAsFinished()
         input.markAsFinished()
         let finished = DispatchSemaphore(value: 0)
         writer.finishWriting { finished.signal() }
@@ -105,6 +107,10 @@ final class VideoWriter: NSObject, SCStreamOutput {
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
                 as? [[SCStreamFrameInfo: Any]],
               attachments.first?[.status] as? Int == SCFrameStatus.complete.rawValue else { return }
+        appendVideo(sampleBuffer)
+    }
+
+    func appendVideo(_ sampleBuffer: CMSampleBuffer) {
         let pts = sampleBuffer.presentationTimeStamp - removed
         if writer.status == .unknown {
             guard writer.startWriting() else { failure = writer.error ?? CocoaError(.fileWriteUnknown); return }

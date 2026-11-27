@@ -31,6 +31,8 @@ jobs:
         run: |
           go tool mygo native check ./internal/videocap
           swift test --package-path internal/recordaudio --scratch-path "$RUNNER_TEMP/audio-tests"
+          swift test --package-path internal/videocap/swift --scratch-path "$RUNNER_TEMP/video-tests"
+          export SNIPGO_RGB_FIXTURE="$(go list -m -f '{{.Dir}}' github.com/egoist/mygo)/ui/video/testdata/rgb.mp4"
           ruby scripts/test-release-signing.rb
           SNIPGO_PREVIEW_DIR="$(mktemp -d)" CGO_ENABLED=0 go test -count=1 ./...
           go test -race -count=1 ./...

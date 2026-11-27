@@ -20,9 +20,10 @@ final class RecordingStudio: Studio {
       let out = composition.addMutableTrack(
         withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
     {
-      try out.insertTimeRange(
-        CMTimeRangeGetIntersection(range, otherRange: try await audio.load(.timeRange)), of: audio,
-        at: .zero)
+      let overlap = CMTimeRangeGetIntersection(range, otherRange: try await audio.load(.timeRange))
+      if !overlap.isEmpty {
+        try out.insertTimeRange(overlap, of: audio, at: overlap.start - range.start)
+      }
     }
     let size = try await video.load(.naturalSize)
     let factor = width > 0 ? min(1, Double(width) / size.width, 1080 / size.height) : 1

@@ -23,6 +23,9 @@ type Frames interface {
 //mygo:native
 type Recorder interface {
 	Start(ctx context.Context, path string, displayID int64, x int64, y int64, width int64, height int64, scale float64) error
+	SetSystem(ctx context.Context, enabled bool) error
+	SetMic(ctx context.Context, enabled bool) error
+	Level(ctx context.Context) (float64, error)
 	Pause(ctx context.Context, paused bool) error
 	Stop(ctx context.Context) error
 }

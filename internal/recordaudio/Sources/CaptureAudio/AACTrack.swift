@@ -15,10 +15,11 @@ public final class AACTrack {
             formatDescriptionOut: &description)
         guard status == noErr, let description else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
         format = description
+        // A PCM sourceFormatHint can produce an AAC priming track even with zero samples.
         input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
             AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000,
             AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 160_000
-        ], sourceFormatHint: description)
+        ])
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else { throw CocoaError(.featureUnsupported) }
         writer.add(input)
