@@ -53,6 +53,7 @@ var (
 
 	iconTrash = svgIcon(`<path d="M4.5 6.5h15"/><path d="M9.5 6.5V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2"/><path d="M6.5 6.5l1 13a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-13"/><path d="M10 10.5v6M14 10.5v6"/>`)
 
+	iconRecord    = svgIcon(`<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="#ff453a"/>`)
 	iconScrollCap = svgIcon(`<rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M12 7.5v8.5"/><path d="M9 13.5l3 3 3-3"/><path d="M9 7.5h6"/>`)
 
 	iconEdit = svgIcon(`<path d="M12 20h9"/><path d="M16.5 3.8a2.1 2.1 0 0 1 3 3L7 19.3 3 20.5l1.2-4L16.5 3.8z"/>`)
@@ -99,7 +100,9 @@ var (
 
 	iconUpdate = svgIcon(`<circle cx="12" cy="12" r="9"/><path d="M12 8v7.5"/><path d="M8.8 12.8L12 16l3.2-3.2"/>`)
 
-	iconPause = svgIcon(`<path d="M9 5.5v13M15 5.5v13"/>`)
+	iconSystemSound = svgIcon(`<path d="M4 9h4l5-4v14l-5-4H4zM16 8q5 4 0 8"/>`)
+	iconMicrophone  = svgIcon(`<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4m-4 0h8"/>`)
+	iconPause       = svgIcon(`<path d="M9 5.5v13M15 5.5v13"/>`)
 
 	iconPlay = svgIcon(`<polygon points="7.5,5.5 18.5,12 7.5,18.5"/>`)
 )

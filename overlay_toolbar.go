@@ -32,7 +32,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 	const (
 		mainBarH = 40
 		subBarH  = 38
-		estBarW  = 740
+		estBarW  = 774
 		edgeGap  = 8
 	)
 	totalH := mainBarH
@@ -129,7 +129,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 				chosen = a.session.Template
 			}
 			if !a.session.IsLive() {
-				if iconToolBtn(c, iconRuler, "标尺", "像素间距测量尺 (R)", a.session.MeasureMode(), false) {
+				if iconToolBtn(c, iconRuler, "标尺", "像素间距测量尺", a.session.MeasureMode(), false) {
 					a.session.ToggleMeasure()
 					a.invalidateAll()
 				}
@@ -138,6 +138,10 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 				a.commitOrCloseTextEdit()
 				selCopy := sel
 				chosen = func() { a.startScrollCapture(selCopy) }
+			}
+			if iconToolBtn(c, iconRecord, "录屏", "录制当前选区为 MP4 / GIF (R)", false, false) {
+				a.commitOrCloseTextEdit()
+				chosen = func() { a.startRecording(sel) }
 			}
 
 			toolbarDivider(c)

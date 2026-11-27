@@ -1,8 +1,6 @@
 package main
 
 import (
-	_ "snipgo/internal/videocap" // Register the recording bridge for MyGo packaging.
-
 	"bytes"
 	"context"
 	"errors"
@@ -75,6 +73,7 @@ type app struct {
 	hasTplOpts          bool
 	countdown           *countdownSession
 	scrollCap           *scrollCaptureSession
+	recording           *regionRecording
 	snappingPin         bool
 	upd                 *updateManager
 
@@ -108,7 +107,12 @@ func main() {
 	configureAppLocale()
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnWindowAllClosed(func() {})
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if a.recording != nil && !e.SessionEnding {
+			e.PreventDefault()
+			a.endRecording(false)
+			return
+		}
 		a.quitting = true
 		if a.session != nil {
 			a.session.Cancel()
@@ -137,6 +141,7 @@ func main() {
 }
 
 func (a *app) ready() {
+	go pruneOldRecordings()
 	if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
 		a.userDataDir = dir
 	} else if home, err := os.UserHomeDir(); err == nil {
@@ -225,6 +230,10 @@ func (a *app) registerAllShortcuts() {
 	}
 	mygo.GlobalShortcut.UnregisterAll()
 	a.shortcutErr = mygo.GlobalShortcut.Register(a.cfg.SnipShortcut, func() {
+		if a.recording != nil {
+			a.endRecording(false)
+			return
+		}
 		a.extraStatus = ""
 		a.session.StartLive()
 	})
@@ -739,6 +748,9 @@ func (a *app) refreshMenu() {
 		},
 		&mygo.MenuItem{Label: "退出", Role: mygo.RoleQuit},
 	)
+	if r := a.recording; r != nil {
+		items = append(r.menu(a), items...)
+	}
 	a.tray.SetMenu(mygo.NewMenu(items))
 }
 
