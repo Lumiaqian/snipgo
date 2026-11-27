@@ -137,7 +137,30 @@ func (a *app) paintPinCompareLayer(c *ui.Context, p *pinWin, w, h float32) {
 			})
 		}
 		// 垂直拉帘分割线与中央抓手圆钮
-		ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).ZIndex(4).IgnoreInput(true).
+		ui.Box(c).Absolute().Left(0).Top(0).Size(w, h).ZIndex(4).
+			HandleInput(func(ev ui.InputEvent) bool {
+				switch ev.Kind {
+				case ui.InputPointerDown:
+					if ev.Button != 0 || ev.Mods == ui.Ctrl || w <= 0 {
+						return false
+					}
+					p.compareDrag = true
+				case ui.InputPointerMove:
+					if !p.compareDrag {
+						return false
+					}
+				case ui.InputPointerUp:
+					if ev.Button != 0 || !p.compareDrag {
+						return false
+					}
+					p.compareDrag = false
+					return true
+				default:
+					return false
+				}
+				p.compareSplit = max(0.02, min(0.98, float64(ev.X)/float64(w)))
+				return true
+			}).
 			Draw(func(pt *ui.Painter, r ui.Rect) {
 				sx := r.X + splitX
 				pt.Line(sx, r.Y, sx, r.Y+r.H, 2, ui.RGBA(255, 255, 255, 0.95))

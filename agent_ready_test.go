@@ -413,7 +413,8 @@ func TestAgentReadyPinModes(t *testing.T) {
 		opacity: 100,
 		annot:   annotate.NewCanvas(),
 	}
-	peer := &pinWin{img: img, bmp: bmp, curW: 480, curH: 320}
+	peerImg := makeTestSampleImage(480, 320)
+	peer := &pinWin{img: peerImg, bmp: ui.NewBitmap(peerImg), curW: 480, curH: 320}
 	a := &app{
 		cfg:  config.Default(t.TempDir()),
 		pins: []*pinWin{p, peer},
@@ -469,6 +470,43 @@ func TestAgentReadyPinModes(t *testing.T) {
 		}
 		uitest.AssertAgentReady(t, tt, opts)
 		uitest.AssertThemeParity(t, tt, opts)
+		p.win = &mygo.Window{}
+		defer func() { p.win = nil }()
+		tt.Press(120, 100)
+		tt.Move(360, 100)
+		tt.Release(360, 100)
+		if p.compareSplit != 0.75 || p.compareDrag {
+			t.Fatalf("split drag ended at %v, dragging=%v", p.compareSplit, p.compareDrag)
+		}
+		for _, diff := range []bool{false, true} {
+			p.compareMode, p.compareDiff = true, diff
+			p.comparePeer, p.comparePeerBmp = peer.img, peer.bmp
+			p.compareDiffBmp = bmp
+			tt.Frame()
+			tt.Key(0, ui.KeyX)
+			tt.Frame()
+			if !p.compareMode {
+				t.Fatal("X unexpectedly exited comparison")
+			}
+			for _, key := range []ui.Key{ui.KeyEscape, ui.KeyD} {
+				tt.Key(0, key)
+				tt.Frame()
+				if p.compareMode || p.compareDiff || len(a.pins) != 2 {
+					t.Fatalf("key %v failed to exit diff=%v", key, diff)
+				}
+				p.compareMode, p.compareDiff = true, diff
+				p.comparePeer, p.comparePeerBmp = peer.img, peer.bmp
+				p.compareDiffBmp = bmp
+				tt.Frame()
+			}
+			if err := tt.Click("退出"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Frame()
+			if p.compareMode || p.compareDrag || p.comparePeer != nil || len(a.pins) != 2 || p.img != img || peer.img != peerImg {
+				t.Fatalf("exit failed in diff=%v: mode=%v drag=%v", diff, p.compareMode, p.compareDrag)
+			}
+		}
 	})
 
 	t.Run("collapsed_pill", func(t *testing.T) {
