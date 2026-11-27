@@ -4,6 +4,7 @@ import (
 	"github.com/Lumiaqian/mygo-ui-sdk/uitest"
 	"github.com/egoist/mygo/ui"
 	"testing"
+	"time"
 )
 
 func TestRecordingViewsAcrossThemesAndDirections(t *testing.T) {
@@ -47,5 +48,45 @@ func TestRecordStudioDragRequiresCurrentOutput(t *testing.T) {
 	s.dirty()
 	if s.output != s.source {
 		t.Fatal("reset should immediately restore original file")
+	}
+}
+
+func TestRecordCountdownFirstActionWins(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action func(*ui.Tester, *recordCountdown)
+		want   bool
+	}{
+		{"enter", func(tt *ui.Tester, _ *recordCountdown) { tt.Key(0, ui.KeyEnter) }, true},
+		{"space", func(tt *ui.Tester, _ *recordCountdown) { tt.Key(0, ui.KeySpace) }, true},
+		{"button", func(tt *ui.Tester, _ *recordCountdown) {
+			if err := tt.Click("立即开始"); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"escape", func(tt *ui.Tester, _ *recordCountdown) { tt.Key(0, ui.KeyEscape) }, false},
+		{"cancelButton", func(tt *ui.Tester, _ *recordCountdown) {
+			if err := tt.Click("取消"); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"timeout", func(_ *ui.Tester, cd *recordCountdown) { cd.resolve(true) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var results []bool
+			cd := &recordCountdown{deadline: time.Now().Add(3 * time.Second), finish: func(start bool) { results = append(results, start) }}
+			tt := ui.NewTester(func(c *ui.Context) { paintRecordCountdown(c, cd) }, 370, 44)
+			tt.Frame()
+			tc.action(tt, cd)
+			tt.Frame()
+			if len(results) != 1 || results[0] != tc.want {
+				t.Fatalf("first action %v", results)
+			}
+			cd.resolve(true)
+			cd.resolve(false)
+			if len(results) != 1 {
+				t.Fatalf("queued action fired again: %v", results)
+			}
+		})
 	}
 }

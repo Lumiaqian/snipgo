@@ -21,6 +21,7 @@ import (
 )
 
 type regionRecording struct {
+	countdown                              *recordCountdown
 	region                                 recordsess.Region
 	stream                                 videocap.Recorder
 	frame, ctrl                            *mygo.Window
@@ -63,6 +64,9 @@ func (r *regionRecording) discardLabel() string {
 }
 
 func (r *regionRecording) menu(a *app) []*mygo.MenuItem {
+	if cd := r.countdown; cd != nil {
+		return []*mygo.MenuItem{{Label: "立即开始录屏", Click: func(*mygo.MenuItem, *mygo.Window) { cd.resolve(true) }}, {Label: "取消录屏倒计时", Click: func(*mygo.MenuItem, *mygo.Window) { cd.resolve(false) }}}
+	}
 	return []*mygo.MenuItem{{Label: "停止录制（" + r.clock() + "）", Click: func(*mygo.MenuItem, *mygo.Window) { a.endRecording(false) }}, {Label: r.pauseLabel() + "录制", Click: func(*mygo.MenuItem, *mygo.Window) { a.changeRecording("pause") }}, {Label: r.discardLabel() + "录制", Click: func(*mygo.MenuItem, *mygo.Window) { a.endRecording(true) }}}
 }
 
@@ -104,24 +108,69 @@ func (a *app) startRecording(sel image.Rectangle) {
 	r := &regionRecording{region: region, stream: stream, path: filepath.Join(dir, "SnipGo.mp4"), busy: true}
 	a.recording = r
 	a.session.Cancel()
+	if a.cfg.RecordCountdown {
+		r.countdown = &recordCountdown{deadline: time.Now().Add(3 * time.Second)}
+		r.countdown.finish = func(start bool) {
+			a.deferUI(func() {
+				r.ctrl.Hide()
+				r.countdown = nil
+				if !start {
+					a.closeRecording(r)
+					os.RemoveAll(dir)
+					return
+				}
+				a.beginRegionStream(r)
+			})
+		}
+	}
 	a.openRecordingControls(r)
 	if region.Global != sel {
-		a.showActionToast("已录制选区覆盖面积最大的显示器")
+		a.showActionToast("将录制选区覆盖面积最大的显示器")
 	}
+	if cd := r.countdown; cd != nil {
+		cd.timer = time.AfterFunc(time.Until(cd.deadline), func() { runOnMain(func() { cd.resolve(true) }) })
+		r.ctrl.Focus()
+		return
+	}
+	a.beginRegionStream(r)
+}
+
+type recordCountdown struct {
+	deadline time.Time
+	timer    *time.Timer
+	finish   func(bool)
+}
+
+// Timer and input events resolve on the main thread. A queued event may outlive its window.
+func (cd *recordCountdown) resolve(start bool) {
+	if cd.finish == nil {
+		return
+	}
+	finish := cd.finish
+	cd.finish = nil
+	if cd.timer != nil {
+		cd.timer.Stop()
+	}
+	finish(start)
+}
+
+func (a *app) beginRegionStream(r *regionRecording) {
+	region := r.region
 	go func() {
 		l := region.Local
-		err := stream.Start(context.Background(), r.path, region.Display.ID, int64(l.Min.X), int64(l.Min.Y), int64(l.Dx()), int64(l.Dy()), region.Display.Scale)
+		err := r.stream.Start(context.Background(), r.path, region.Display.ID, int64(l.Min.X), int64(l.Min.Y), int64(l.Dx()), int64(l.Dy()), region.Display.Scale)
 		runOnMain(func() {
 			r.busy = false
 			if err != nil {
 				a.closeRecording(r)
-				os.RemoveAll(dir)
+				os.RemoveAll(filepath.Dir(r.path))
 				a.showActionToast(err.Error())
 				return
 			}
 			r.started = time.Now()
 			a.updateRecordingStatus(r)
 			r.ctrl.Invalidate()
+			r.ctrl.ShowInactive()
 			a.refreshMenu()
 		})
 	}()
@@ -179,7 +228,14 @@ func (a *app) openRecordingControls(r *regionRecording) {
 		Transparent:   true,
 		Vibrancy:      vibrancyForGlassLevel(a.cfg.GlassLevel),
 		CornerRadius:  22,
-		Content:       ui.View(func(c *ui.Context) { a.paintRecording(c, r) }),
+		Hidden:        true,
+		Content: ui.View(func(c *ui.Context) {
+			if cd := r.countdown; cd != nil {
+				paintRecordCountdown(c, cd)
+				return
+			}
+			a.paintRecording(c, r)
+		}),
 	})
 	r.ctrl.OnClose(func(e *mygo.CloseEvent) {
 		if a.recording == r {
@@ -194,6 +250,23 @@ func (a *app) openRecordingControls(r *regionRecording) {
 		a.tray.SetTitle("🔴")
 		a.refreshMenu()
 	}
+}
+
+func paintRecordCountdown(c *ui.Context, cd *recordCountdown) {
+	remaining := max(1, int(math.Ceil(time.Until(cd.deadline).Seconds())))
+	c.After(100 * time.Millisecond)
+	liquidGlassCapsule(c, ui.Row(c).Height(44).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).PaddingX(12), 22, c.Vibrancy()).Children(func() {
+		ui.Text(c, fmt.Sprintf("%d 秒后开始录屏", remaining))
+		start := ui.Button(c, "立即开始").Clicked()
+		cancel := ui.Button(c, "取消").Clicked()
+		if cancel || c.Shortcut(0, ui.KeyEscape) {
+			cd.resolve(false)
+			return
+		}
+		if start || c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace) {
+			cd.resolve(true)
+		}
+	})
 }
 
 func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
@@ -302,6 +375,10 @@ func (a *app) closeRecording(r *regionRecording) {
 
 func (a *app) endRecording(discard bool) {
 	r := a.recording
+	if r != nil && r.countdown != nil {
+		r.countdown.resolve(false)
+		return
+	}
 	if r == nil || r.busy {
 		return
 	}

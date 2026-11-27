@@ -15,6 +15,7 @@ import (
 
 // Settings 是用户可配置的全部偏好项。
 type Settings struct {
+	RecordCountdown     bool   `json:"record_countdown"`
 	RecordFormat        int    `json:"record_format,omitempty"`
 	RecordWidth         int    `json:"record_width"`
 	RecordRate          int    `json:"record_rate"`
@@ -59,7 +60,7 @@ func Default(defaultPicturesDir string) Settings {
 		saveDir = filepath.Join(saveDir, "SnipGo")
 	}
 	return Settings{
-		RecordWidth: 1, RecordRate: 1,
+		RecordCountdown: true, RecordWidth: 1, RecordRate: 1,
 		SnipShortcut:        "Cmd+Shift+2",
 		OCRShortcut:         "Alt+Cmd+O",
 		FreezeShortcut:      "Ctrl+Cmd+2",
