@@ -1,4 +1,5 @@
 import AVFoundation
+import VideoToolbox
 import ScreenCaptureKit
 import CaptureAudio
 
