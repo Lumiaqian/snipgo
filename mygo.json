@@ -8,6 +8,7 @@
     "minimumSystemVersion": "14.0",
     "infoPlist": {
       "LSUIElement": true,
+      "NSMicrophoneUsageDescription": "仅当你开启麦克风时，SnipGo 才会将麦克风声音录入当前选区视频。",
       "LSApplicationCategoryType": "public.app-category.utilities",
       "CFBundleDevelopmentRegion": "zh-Hans",
       "CFBundleLocalizations": [

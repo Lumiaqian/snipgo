@@ -29,6 +29,8 @@ jobs:
 
       - name: Run unit tests, visual render checks, and vet
         run: |
+          go tool mygo native check ./internal/videocap
+          swift test --package-path internal/recordaudio --scratch-path "$RUNNER_TEMP/audio-tests"
           ruby scripts/test-release-signing.rb
           SNIPGO_PREVIEW_DIR="$(mktemp -d)" CGO_ENABLED=0 go test -count=1 ./...
           go test -race -count=1 ./...
@@ -90,7 +92,7 @@ jobs:
           # 配置了签名证书时，发布包必须绑定证书（identifier + certificate），不能退回 cdhash，
           # 否则用户每次更新都要重新授予屏幕录制权限。
           for app in build/darwin-*/*.app; do
-            codesign --verify --deep --strict "$app"
+            codesign --verify --deep --strict --all-architectures "$app"
             dr="$(codesign -d -r- "$app" 2>&1 | grep 'designated =>' || true)"
             echo "$app: $dr"
             if [ -n "$MACOS_SIGNING_IDENTITY" ]; then

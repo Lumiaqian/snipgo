@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "snipgo/internal/videocap" // Register the recording bridge for MyGo packaging.
+
 	"bytes"
 	"context"
 	"errors"
