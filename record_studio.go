@@ -92,11 +92,19 @@ func (a *app) openRecordStudio(r *regionRecording) {
 
 func (s *recordStudio) dirty() {
 	s.output = ""
-	s.status = "已修改参数 · 待生成"
+	s.status = ""
 	if s.format == 0 && s.start == 0 && s.end == s.duration && s.size == 0 && !s.mute {
 		s.output = s.source
 		s.status = ""
 	}
+}
+
+// compactSegmented reports -1 on a frame without a selection change.
+func recordingSegment(c *ui.Context, name string, selected int, labels []string) int {
+	if next := compactSegmented(c, name, selected, labels); next >= 0 {
+		return next
+	}
+	return selected
 }
 
 func (s *recordStudio) playPause() {
@@ -112,23 +120,26 @@ func (s *recordStudio) playPause() {
 
 func (a *app) paintRecordStudio(c *ui.Context, s *recordStudio) {
 	busy := s.cancel != nil
+	ext := "MP4"
+	if s.format == 1 {
+		ext = "GIF"
+	}
 	liquidPanelEnter(liquidGlassPanel(c, ui.Column(c)), &s.enter).Padding(16).Gap(8).Children(func() {
 		paintPanelHeader(c, iconRecord, "SnipGo 录屏", "关闭录屏预览", "关闭 (Esc)", func() { s.win.Close() }, func() {
 			label := s.status
 			if busy {
-				label = fmt.Sprintf("正在编码 · %d%%", s.progress)
+				label = fmt.Sprintf("正在生成 %s · %d%%", ext, s.progress)
 			} else if label == "" && s.output != "" {
-				label = "MP4 就绪"
-				if s.format == 1 {
-					label = "GIF 就绪"
-				}
-				if s.player != nil && s.player.Ready() {
+				label = ext + " 就绪 · 可直接拖出"
+				if s.output == s.source && s.player != nil && s.player.Ready() {
 					w, h := s.player.Size()
 					label += fmt.Sprintf(" · %d×%d", w, h)
 				}
 				if info, err := os.Stat(s.output); err == nil {
 					label += fmt.Sprintf(" · %.1fs · %.1f MB", s.end-s.start, float64(info.Size())/1e6)
 				}
+			} else if label == "" {
+				label = "待生成 " + ext
 			}
 			ui.Text(c, label)
 		})
@@ -181,12 +192,12 @@ func (a *app) paintRecordStudio(c *ui.Context, s *recordStudio) {
 		if !busy {
 			ui.Row(c).Gap(8).Children(func() {
 				oldFormat, oldWidth, oldRate, oldSize := s.format, s.width, s.rate, s.size
-				s.format = compactSegmented(c, "录屏格式", s.format, []string{"MP4", "GIF"})
+				s.format = recordingSegment(c, "录屏格式", s.format, []string{"MP4", "GIF"})
 				if s.format == 1 {
-					s.width = compactSegmented(c, "GIF 宽度", s.width, []string{"640", "960", "1280"})
-					s.rate = compactSegmented(c, "GIF 帧率", s.rate, []string{"10", "15", "24", "30"})
+					s.width = recordingSegment(c, "GIF 宽度", s.width, []string{"640 px", "960 px", "1280 px"})
+					s.rate = recordingSegment(c, "GIF 帧率", s.rate, []string{"10 fps", "15 fps", "24 fps", "30 fps"})
 				} else {
-					s.size = compactSegmented(c, "MP4 尺寸", s.size, []string{"原始", "1080p"})
+					s.size = recordingSegment(c, "MP4 尺寸", s.size, []string{"原始", "1080p"})
 					if s.hadAudio && liquidSwitch(c, "mute-export", &s.mute, "静音导出") {
 						s.dirty()
 					}
@@ -200,10 +211,6 @@ func (a *app) paintRecordStudio(c *ui.Context, s *recordStudio) {
 			})
 		}
 		ui.Row(c).Gap(8).Children(func() {
-			ext := "MP4"
-			if s.format == 1 {
-				ext = "GIF"
-			}
 			drag := ui.Button(c, "拖出 "+ext).Disabled(s.output == "")
 			if s.output != "" {
 				if data, e := transfer.FileData(s.output); e == nil {

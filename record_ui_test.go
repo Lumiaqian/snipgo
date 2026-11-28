@@ -90,3 +90,36 @@ func TestRecordCountdownFirstActionWins(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordStudioSelectionsSurviveIdleFrames(t *testing.T) {
+	a := &app{}
+	s := &recordStudio{source: "original.mp4", output: "original.mp4", end: 8.37, duration: 8.37, width: 1, rate: 1}
+	tt := ui.NewTester(func(c *ui.Context) { a.paintRecordStudio(c, s) }, 680, 500)
+	tt.Frame()
+	tt.Frame()
+	if s.output != s.source || s.format != 0 || s.size != 0 {
+		t.Fatalf("untouched MP4 lost drag output: %+v", s)
+	}
+	if err := tt.Click("GIF"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Frame()
+	if s.output != "" || s.format != 1 || s.width != 1 || s.rate != 1 {
+		t.Fatalf("pending GIF settings: %+v", s)
+	}
+	if err := tt.Click("24 fps"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.rate != 2 {
+		t.Fatalf("GIF frame rate index = %d", s.rate)
+	}
+	if err := tt.Click("MP4"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.output != s.source {
+		t.Fatal("returning to original settings must restore direct drag")
+	}
+}
