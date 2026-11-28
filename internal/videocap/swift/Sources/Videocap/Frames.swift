@@ -13,11 +13,13 @@ final class MovieFrames {
   func open(path: String, start: Double, end: Double, width: Int64, fps: Int64) async throws
     -> [Int64]
   {
-    guard start >= 0, end > start, width > 0, fps > 0 else {
+    let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+    let duration = try await asset.load(.duration).seconds
+    let end = end == 0 ? duration : min(end, duration)
+    guard end.isFinite, start >= 0, end > start, width > 0, fps > 0 else {
       throw CocoaError(.validationNumberTooSmall)
     }
     reader?.cancelReading()
-    let asset = AVURLAsset(url: URL(fileURLWithPath: path))
     guard let track = try await asset.loadTracks(withMediaType: .video).first else {
       throw CocoaError(.fileReadCorruptFile)
     }
