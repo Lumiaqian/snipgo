@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 
 	"snipgo/internal/beautify"
 	"snipgo/internal/capture"
+	"snipgo/internal/cli"
 	"snipgo/internal/config"
 	"snipgo/internal/crop"
 	"snipgo/internal/session"
@@ -104,6 +106,16 @@ func configureAppLocale() {
 }
 
 func main() {
+	if len(os.Args) > 1 && cli.Known(os.Args[1]) {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		version := buildVersion
+		if version == "" {
+			version = defaultAppVersion
+		}
+		code := cli.Run(ctx, os.Args[1:], version, exportAgentGIF, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--check-recorder" {
 		helperArch, err := videocap.CheckRecorder()
 		if err != nil {

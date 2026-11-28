@@ -90,3 +90,7 @@ func writeGIF(ctx context.Context, path string, o exportOptions, progress func(i
 	}
 	return closeErr
 }
+
+func exportAgentGIF(ctx context.Context, source, dest string, start, end float64, width, fps int) error {
+	return exportMovie(ctx, nil, exportOptions{source: source, destination: dest, start: start, end: end, width: width, fps: fps, gif: true}, func(int) {})
+}
