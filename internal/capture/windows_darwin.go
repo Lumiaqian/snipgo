@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -34,6 +35,7 @@ type cgRect struct {
 var (
 	winLoadOnce sync.Once
 	winLoadOK   bool
+	popupLayer  int32
 
 	cgWindowListCopyWindowInfo             func(uint32, uint32) uintptr
 	cfArrayGetCount                        func(uintptr) int
@@ -80,6 +82,9 @@ func initWindowSymbols() bool {
 		purego.RegisterLibFunc(&cfStringCreateWithCString, purego.RTLD_DEFAULT, "CFStringCreateWithCString")
 		purego.RegisterLibFunc(&cgRectMakeWithDictionaryRepresentation, purego.RTLD_DEFAULT, "CGRectMakeWithDictionaryRepresentation")
 
+		var levelForKey func(int32) int32
+		purego.RegisterLibFunc(&levelForKey, purego.RTLD_DEFAULT, "CGWindowLevelForKey")
+		popupLayer = levelForKey(11) // kCGPopUpMenuWindowLevelKey
 		keyWindowOwnerPID = cfStringCreateWithCString(0, "kCGWindowOwnerPID", cfStringEncodingUTF8)
 		keyWindowNumber = cfStringCreateWithCString(0, "kCGWindowNumber", cfStringEncodingUTF8)
 		keyWindowLayer = cfStringCreateWithCString(0, "kCGWindowLayer", cfStringEncodingUTF8)
@@ -154,17 +159,20 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 		if !ok {
 			continue
 		}
-		if onScreen, hasOn := dictBool(dict, keyWindowIsOnscr); hasOn && !onScreen {
+		onScreen, _ := dictBool(dict, keyWindowIsOnscr)
+		if !onScreen {
 			continue
 		}
 		if store, hasStore := dictInt32(dict, keyWindowStoreType); hasStore && store == 0 {
 			continue
 		}
-		if alpha, ok := dictFloat64(dict, keyWindowAlpha); ok && alpha <= 0.05 {
+		alpha, _ := dictFloat64(dict, keyWindowAlpha)
+		if alpha <= 0.05 {
 			continue
 		}
 
 		pid, _ := dictInt32(dict, keyWindowOwnerPID)
+		menu := layer == popupLayer && pid > 0 && pid != myPID
 		if pid == myPID {
 			if layer != 3 {
 				continue
@@ -172,7 +180,7 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 			if excludeTitle != "" && dictString(dict, keyWindowName) == excludeTitle {
 				continue
 			}
-		} else if layer < 0 || layer >= maxSelectableWindowLayer {
+		} else if layer < 0 || (layer >= maxSelectableWindowLayer && !menu) {
 			continue
 		}
 
@@ -184,7 +192,11 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 		if !cgRectMakeWithDictionaryRepresentation(boundsDict, &r) {
 			continue
 		}
-		if r.W < minDetectWindowDIP || r.H < minDetectWindowDIP {
+		minSize := minDetectWindowDIP
+		if menu {
+			minSize = 16
+		}
+		if r.W < float64(minSize) || r.H < float64(minSize) {
 			continue
 		}
 		rect := image.Rect(
@@ -193,7 +205,7 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 			int(math.Round(r.X+r.W)),
 			int(math.Round(r.Y+r.H)),
 		).Canon()
-		if rect.Dx() < minDetectWindowDIP || rect.Dy() < minDetectWindowDIP {
+		if menu && !selectableMenu(nsRunningAppCls.Send(selRunningAppWithPID, pid), rect, displays) {
 			continue
 		}
 
@@ -210,7 +222,7 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 		}
 
 		wid, _ := dictInt32(dict, keyWindowNumber)
-		info := WindowInfo{ID: uint32(wid), Bounds: rect}
+		info := WindowInfo{ID: uint32(wid), Bounds: rect, PopupMenu: menu}
 		windows = append(windows, info)
 		if frontPID > 0 && pid == frontPID {
 			if frontFallback.Bounds.Empty() {
@@ -228,6 +240,26 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 		front = windows[0]
 	}
 	return front, windows
+}
+
+func selectableMenu(app objc.ID, rect image.Rectangle, displays []Display) bool {
+	if app == 0 || isFullDisplayOverlay(rect, displays) {
+		return false
+	}
+	path := cstrings.NSStringToString(app.Send(objc.RegisterName("bundleURL")).Send(objc.RegisterName("path")))
+	return menuOwnerOnDisplay(path, rect, displays)
+}
+
+func menuOwnerOnDisplay(path string, rect image.Rectangle, displays []Display) bool {
+	if path == "" || strings.Contains(path, "/Input Methods/") || (strings.HasPrefix(path, "/System/Library/CoreServices/") && path != "/System/Library/CoreServices/Finder.app") {
+		return false
+	}
+	for _, d := range displays {
+		if rect.Overlaps(d.Bounds) {
+			return true
+		}
+	}
+	return false
 }
 
 func isFullDisplayOverlay(rect image.Rectangle, displays []Display) bool {

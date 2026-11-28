@@ -337,12 +337,20 @@ func (a *app) liveSnapshot() (session.Snapshot, error) {
 	cur := mygo.Screen.CursorScreenPoint()
 	frontInfo, winInfos := capture.VisibleWindowInfos(image.Pt(cur.X, cur.Y), displays, overlayTitle)
 	rects, targets := toWinTargets(winInfos)
+	hasMenu := false
+	for _, w := range winInfos {
+		if w.PopupMenu {
+			hasMenu = true
+			break
+		}
+	}
 	return session.Snapshot{
-		Frames:      frames,
-		FrontWindow: frontInfo.Bounds,
-		FrontWinID:  frontInfo.ID,
-		Windows:     rects,
-		WindowInfos: targets,
+		HasPopupMenu: hasMenu,
+		Frames:       frames,
+		FrontWindow:  frontInfo.Bounds,
+		FrontWinID:   frontInfo.ID,
+		Windows:      rects,
+		WindowInfos:  targets,
 	}, nil
 }
 
