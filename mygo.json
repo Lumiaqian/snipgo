@@ -6,6 +6,7 @@
   "out": "build",
   "buildCommand": "scripts/build-video-helper.sh arm64 x86_64",
   "macos": {
+    "entitlements": "SnipGo.entitlements",
     "minimumSystemVersion": "14.0",
     "infoPlist": {
       "LSUIElement": true,

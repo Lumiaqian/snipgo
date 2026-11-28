@@ -107,10 +107,9 @@ jobs:
                 codesign -d -r- "$code"
                 details=$(codesign -dvv "$code" 2>&1)
                 [[ "$details" == *"(runtime)"* ]]
-                entitlements=$(codesign -d --entitlements - "$code" 2>/dev/null)
-                [[ "$entitlements" != *"com.apple.security.cs.disable-library-validation"* ]]
               done
             fi
+            python3 scripts/check-recording-entitlements.py "$app"
             dr="$(codesign -d -r- "$app" 2>&1 | grep 'designated =>' || true)"
             echo "$app: $dr"
             if [ -n "$MACOS_SIGNING_IDENTITY" ]; then
