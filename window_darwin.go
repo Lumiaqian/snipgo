@@ -12,10 +12,8 @@ import (
 	"github.com/egoist/mygo"
 )
 
-// kCGStatusWindowLevel(25)+2 高于菜单栏（24）、状态栏（25）、Dock（20）和浮动贴图（3），
-// 同时低于系统输入法候选词浮窗（kCGPopUpMenuWindowLevel=101），确保文字批注输入中文时候选词框不被遮挡。
 const (
-	nsOverlayWindowLevel    = 27
+	nsOverlayWindowLevel    = 102
 	styleNonactivatingPanel = 1 << 7
 )
 
@@ -96,6 +94,19 @@ func makeBorderlessUnconstrained(w *mygo.Window) objc.ID {
 func prepareOverlayWindow(w *mygo.Window) {
 	if win := makeBorderlessUnconstrained(w); win != 0 {
 		win.Send(selSetLevel, uintptr(nsOverlayWindowLevel))
+	}
+}
+
+func overlayLevel(editing bool) uintptr {
+	if editing {
+		return 27
+	}
+	return nsOverlayWindowLevel
+}
+
+func setOverlayEditing(w *mygo.Window, editing bool) {
+	if w != nil && !w.IsDestroyed() && w.NativeHandle() != 0 {
+		objc.ID(w.NativeHandle()).Send(selSetLevel, overlayLevel(editing))
 	}
 }
 

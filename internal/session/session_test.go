@@ -967,3 +967,20 @@ func TestFrozenEncodeFailureReportsAndStaleGenDropped(t *testing.T) {
 		t.Fatalf("status %q phase %v", ui.status, s.Phase())
 	}
 }
+
+func TestStartLiveWithPopupMenu(t *testing.T) {
+	menu := image.Rect(12, 15, 89, 49)
+	snap := Snapshot{HasPopupMenu: true, Frames: []crop.Screen{{Bounds: image.Rect(0, 0, 200, 120), Scale: 1}}, Windows: []image.Rectangle{menu}}
+	s := &Session{UI: &fakeUI{}, Live: func() (Snapshot, error) { return snap, nil }}
+	launches := 0
+	s.Launch = func(gen int) { launches++; s.Deliver(gen, snap, nil) }
+	s.StartLive()
+	if launches != 1 || s.live {
+		t.Fatal("menu must freeze before selection")
+	}
+	s.BeginDrag(0, 20, 20)
+	s.EndDrag()
+	if r, locked, ok := s.ActiveRect(); !ok || !locked || r != menu {
+		t.Fatalf("menu selection %v, locked=%v", r, locked)
+	}
+}

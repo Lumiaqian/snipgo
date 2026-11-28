@@ -52,11 +52,12 @@ type WinTarget struct {
 
 // Snapshot 是一次屏幕几何（或冻结画面）、当前前台应用窗口与可见窗口列表的快照。
 type Snapshot struct {
-	Frames      []crop.Screen
-	FrontWindow image.Rectangle
-	FrontWinID  uint32
-	Windows     []image.Rectangle
-	WindowInfos []WinTarget
+	HasPopupMenu bool
+	Frames       []crop.Screen
+	FrontWindow  image.Rectangle
+	FrontWinID   uint32
+	Windows      []image.Rectangle
+	WindowInfos  []WinTarget
 }
 
 // RulerReading 是一次像素测量尺读数（全局 DIP 边界 + 物理像素宽高）。
@@ -442,6 +443,10 @@ func (s *Session) startLive(preferFront, autoOCR bool) {
 		s.fail("没有检测到显示器")
 		return
 	}
+	if snap.HasPopupMenu && !preferFront && !autoOCR && (s.Launch != nil || s.Capture != nil) {
+		s.beginFrozen(false, false)
+		return
+	}
 	s.live = true
 	s.autoOCR = autoOCR
 	s.colorPickerMode = false
@@ -518,13 +523,16 @@ func (s *Session) startFrozen(preferFront, colorPicker bool) {
 		s.clearSelection()
 	}
 	s.gen++
-	gen := s.gen
 	if s.Allowed != nil {
 		if ok, reason := s.Allowed(); !ok {
 			s.fail(reason)
 			return
 		}
 	}
+	s.beginFrozen(preferFront, colorPicker)
+}
+
+func (s *Session) beginFrozen(preferFront, colorPicker bool) {
 	s.live = false
 	s.autoOCR = false
 	s.colorPickerMode = colorPicker
@@ -532,7 +540,7 @@ func (s *Session) startFrozen(preferFront, colorPicker bool) {
 	s.enterMeasureOnDeliver = false
 	s.preferFront = preferFront
 	s.phase = PhaseCapturing
-	s.kickFrozen(gen)
+	s.kickFrozen(s.gen)
 }
 
 func (s *Session) kickFrozen(gen int) {
