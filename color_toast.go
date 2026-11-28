@@ -113,17 +113,23 @@ func (a *app) showColorToast(text string, col color.NRGBA) {
 	if text == "" {
 		return
 	}
-	a.showToastWindow(text, true, col)
+	a.showToastWindow(text, true, col, nil)
 }
 
 func (a *app) showActionToast(text string) {
 	if text == "" {
 		return
 	}
-	a.showToastWindow(text, false, color.NRGBA{})
+	a.showToastWindow(text, false, color.NRGBA{}, nil)
 }
 
-func (a *app) showToastWindow(text string, hasColor bool, col color.NRGBA) {
+func (a *app) showMicrophoneSettingsToast() {
+	a.showToastWindow("麦克风未开启", false, color.NRGBA{}, func() {
+		go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+	})
+}
+
+func (a *app) showToastWindow(text string, hasColor bool, col color.NRGBA, settings func()) {
 	if text == "" || !mygo.App.IsReady() {
 		return
 	}
@@ -138,6 +144,11 @@ func (a *app) showToastWindow(text string, hasColor bool, col color.NRGBA) {
 		displayText = "已复制 " + text
 	}
 	w := toastWidthForText(displayText)
+	lifetime := 1400 * time.Millisecond
+	if settings != nil {
+		w += 90
+		lifetime = 8 * time.Second
+	}
 	h := 36
 	pt := mygo.Screen.CursorScreenPoint()
 	x, y := pt.X+16, pt.Y+18
@@ -173,7 +184,15 @@ func (a *app) showToastWindow(text string, hasColor bool, col color.NRGBA) {
 		DisableResize:   true,
 		DisableMaximize: true,
 		Content: ui.View(func(c *ui.Context) {
-			if toast.hasColor {
+			if settings != nil {
+				liquidGlassCapsule(c, ui.Row(c).Fill().PaddingX(10).AlignItems(ui.Center).Gap(8), 18, false).Children(func() {
+					ui.Text(c, toast.text).FontSize(12)
+					ui.Spacer(c)
+					if miniPillBtn(c, nil, "打开设置", false) {
+						settings()
+					}
+				})
+			} else if toast.hasColor {
 				paintColorToast(c, toast.text, toast.col)
 			} else {
 				paintActionToast(c, toast.text)
@@ -184,10 +203,13 @@ func (a *app) showToastWindow(text string, hasColor bool, col color.NRGBA) {
 	a.colorToast = toast
 	preparePinWindow(win)
 	applyWindowAppearance(win, a.cfg.ThemeAppearance)
-	win.SetIgnoreMouseEvents(true)
+	win.SetIgnoreMouseEvents(settings == nil)
+	if settings != nil {
+		win.SetContentProtection(true)
+	}
 	win.ShowInactive()
 
-	time.AfterFunc(1400*time.Millisecond, func() {
+	time.AfterFunc(lifetime, func() {
 		mygo.RunOnMain(func() {
 			if a.quitting || a.colorToast == nil || a.colorToast.gen != gen {
 				return

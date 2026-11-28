@@ -777,6 +777,9 @@ func (sysClip) WriteText(s string) {
 func (a *app) applyThemeLive(cfg config.Settings) {
 	st := themeStateFromConfig(cfg)
 	setActiveTheme(st)
+	if a.recording != nil {
+		applyWindowTheme(a.recording.ctrl, st)
+	}
 	if a.tplWin != nil {
 		applyWindowTheme(a.tplWin.win, st)
 	}

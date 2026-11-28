@@ -24,6 +24,7 @@ type regionRecording struct {
 	stream                                 videocap.Recorder
 	frame, ctrl                            *mygo.Window
 	path                                   string
+	controlBounds                          mygo.Rectangle
 	level                                  float64
 	pendingAudio                           string
 	interrupted                            bool
@@ -137,6 +138,7 @@ func (a *app) startRecording(sel image.Rectangle) {
 					os.RemoveAll(dir)
 					return
 				}
+				r.ctrl.SetBounds(r.controlBounds)
 				a.beginRegionStream(r)
 			})
 		}
@@ -227,13 +229,25 @@ func (a *app) openRecordingControls(r *regionRecording) {
 			break
 		}
 	}
-	pos := behaviors.PlaceFloating(work, r.region.Global, image.Pt(370, 44), behaviors.PlacementOptions{PreferredSide: behaviors.SideBottom, Align: behaviors.AlignCenter, Gap: 10}).Point
+	boundsFor := func(width, height int) mygo.Rectangle {
+		pos := behaviors.PlaceFloating(work, r.region.Global, image.Pt(width, height), behaviors.PlacementOptions{PreferredSide: behaviors.SideBottom, Align: behaviors.AlignCenter, Gap: 10}).Point
+		return mygo.Rectangle{X: pos.X, Y: pos.Y, Width: width, Height: height}
+	}
+	r.controlBounds = boundsFor(360, 44)
+	bounds := r.controlBounds
+	if cd := r.countdown; cd != nil {
+		width := 328
+		if cd.fromFrozen {
+			width = 364
+		}
+		bounds = boundsFor(width, 42)
+	}
 	r.ctrl = mygo.NewWindow(mygo.WindowOptions{
 		Title:         "SnipGo 录制控制",
-		Width:         370,
-		Height:        44,
-		X:             pos.X,
-		Y:             pos.Y,
+		Width:         bounds.Width,
+		Height:        bounds.Height,
+		X:             bounds.X,
+		Y:             bounds.Y,
 		Frameless:     true,
 		Panel:         true,
 		AlwaysOnTop:   true,
@@ -265,71 +279,116 @@ func (a *app) openRecordingControls(r *regionRecording) {
 	}
 }
 
+func recordingCapsule(c *ui.Context, row ui.Element, radius float32) ui.Element {
+	if !c.Vibrancy() {
+		return liquidGlassCapsule(c, row, radius, false)
+	}
+	p := uiPalette(c)
+	return row.Radius(radius).Border(1, p.ActiveBorder).Background(panelSurfaceWash(getActiveTheme().GlassLevel, p.Dark))
+}
+
 func paintRecordCountdown(c *ui.Context, cd *recordCountdown) {
-	remaining := max(1, int(math.Ceil(time.Until(cd.deadline).Seconds())))
-	c.After(100 * time.Millisecond)
-	liquidGlassCapsule(c, ui.Row(c).Height(44).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).PaddingX(12), 22, c.Vibrancy()).Children(func() {
-		label := fmt.Sprintf("%d 秒后开始录屏", remaining)
-		if cd.fromFrozen {
-			label = "已切回实时 · " + label
-		}
-		ui.Text(c, label).NoWrap()
-		start := ui.Button(c, "立即开始").Clicked()
-		cancel := ui.Button(c, "取消").Clicked()
-		if cancel || c.Shortcut(0, ui.KeyEscape) {
-			cd.resolve(false)
-			return
-		}
-		if start || c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace) {
-			cd.resolve(true)
-		}
+	c.Root().Background(ui.Transparent)
+	withAppTheme(c, func() {
+		remaining := max(1, int(math.Ceil(time.Until(cd.deadline).Seconds())))
+		c.After(100 * time.Millisecond)
+		recordingCapsule(c, ui.Row(c).Fill().PaddingX(12).Gap(5).AlignItems(ui.Center), 21).Children(func() {
+			ui.Icon(c, iconRecord).FontSize(15).TextColor(ui.RGB(236, 64, 56))
+			ui.Text(c, fmt.Sprint(remaining)).FontWeight(700).FontFeatures("tnum").ContentTransition(ui.ContentTransition{Numeric: true, Down: true})
+			label := "秒后开始录屏"
+			if cd.fromFrozen {
+				label += " · 已切回实时"
+			}
+			ui.Text(c, label).FontSize(12).NoWrap()
+			ui.Spacer(c)
+			start := miniPillBtnLabeled(c.Key("record-now"), nil, "立即开始", "立即开始", true)
+			cancel := miniPillBtnLabeled(c.Key("record-cancel"), iconClose, "", "取消", false)
+			if cancel || c.Shortcut(0, ui.KeyEscape) {
+				cd.resolve(false)
+				return
+			}
+			if start || c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeySpace) {
+				cd.resolve(true)
+			}
+		})
 	})
 }
 
 func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
-	c.After(time.Second)
-	bar := behaviors.Toolbar(c.Key("record-controls"), behaviors.ToolbarOptions{Label: "录制控制"})
-	liquidGlassCapsule(c, bar.Root.Height(44).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).PaddingX(8), 22, c.Vibrancy()).Children(func() {
-		col := ui.RGB(255, 69, 58)
-		label := r.clock()
-		if !r.pausedAt.IsZero() {
-			col = ui.RGB(255, 159, 10)
-			label = "已暂停"
-		}
-		alpha := float32(1)
-		if r.pausedAt.IsZero() {
-			alpha = float32(.8 + .2*math.Sin(float64(time.Now().UnixMilli()%1600)*2*math.Pi/1600))
-			c.After(80 * time.Millisecond)
-		}
-		ui.Column(c).DragWindow().Children(func() {
-			ui.Text(c, "● "+label).FontSize(12).FontWeight(600).TextColor(col).Opacity(alpha)
-			ui.Text(c, r.audioLabel()).FontSize(11).TextColor(uiPalette(c).TextSecondary).NoWrap()
+	c.Root().Background(ui.Transparent)
+	withAppTheme(c, func() {
+		c.After(time.Second)
+		bar := behaviors.Toolbar(c.Key("record-controls"), behaviors.ToolbarOptions{Label: "录制控制"})
+		recordingCapsule(c, bar.Root.Fill().PaddingX(12).AlignItems(ui.Center).Justify(ui.SpaceBetween), 22).Children(func() {
+			paused := !r.pausedAt.IsZero()
+			red := ui.RGB(207, 50, 44)
+			dot := ui.RGB(255, 69, 58)
+			alpha := float32(1)
+			if paused {
+				dot = ui.RGB(255, 159, 10)
+				alpha = .75
+			} else {
+				alpha = float32(.8 + .2*math.Sin(float64(time.Now().UnixMilli()%1600)*2*math.Pi/1600))
+				c.After(80 * time.Millisecond)
+			}
+			ui.Row(c).Width(65).Gap(5).AlignItems(ui.Center).DragWindow().Tooltip(r.audioLabel()).Children(func() {
+				ui.Box(c).Size(7, 7).Radius(4).Background(dot).Opacity(alpha)
+				ui.Text(c, r.clock()).FontSize(13).FontWeight(600).FontFeatures("tnum").NoWrap()
+			})
+			toolbarDivider(c)
+			pauseIcon := iconPause
+			if paused {
+				pauseIcon = iconPlay
+			}
+			pause := toolIconControl(c, pauseIcon, r.pauseLabel(), r.pauseLabel()+"录制（聚焦时 Space）", paused, r.busy)
+			if paused {
+				pause.Background(dot.Alpha(.24))
+			}
+			if pause.Clicked() || c.Shortcut(0, ui.KeySpace) {
+				a.changeRecording("pause")
+			}
+			if iconToolBtn(c, iconSystemSound, "系统音", r.audioLabel()+" · 切换系统音（聚焦时 A）", r.system, r.busy) || c.Shortcut(0, ui.KeyA) {
+				a.changeRecording("system")
+			}
+			ui.Box(c).Size(26, 26).Children(func() {
+				if iconToolBtn(c, iconMicrophone, "麦克风", r.audioLabel()+" · 切换麦克风（聚焦时 M）", r.mic, r.busy) || c.Shortcut(0, ui.KeyM) {
+					a.changeRecording("mic")
+				}
+				if r.micDenied {
+					ui.Text(c, "!").Absolute().Right(0).Top(0).FontSize(10).FontWeight(700).TextColor(red).IgnoreInput(true)
+				} else if r.pendingAudio == "切换麦克风…" {
+					ui.Text(c, "…").Absolute().Right(0).Top(0).FontSize(10).IgnoreInput(true)
+				} else if r.mic && r.level > .01 {
+					ui.Box(c).Absolute().Right(0).Top(0).Size(5, 5).Radius(3).Background(ui.RGB(52, 199, 89)).IgnoreInput(true)
+				}
+			})
+			toolbarDivider(c)
+			discard := toolIconControl(c, iconClose, r.discardLabel(), "丢弃录制（聚焦时 Esc）", false, r.busy)
+			if time.Now().Before(r.confirmUntil) {
+				discard.Background(red.Alpha(.25))
+			}
+			if discard.Clicked() || c.Shortcut(0, ui.KeyEscape) {
+				a.endRecording(true)
+			}
+			tip := "停止录制（聚焦时 Enter）"
+			if a.cfg.SnipShortcut != "" && a.shortcutErr == nil {
+				tip = "停止录制（全局 " + strings.Join(formatMacShortcutSymbols(a.cfg.SnipShortcut), "") + " / 聚焦时 Enter）"
+			}
+			stop := ui.ButtonBase(c).Label("停止").Tooltip(tip).Height(28).PaddingX(12).Gap(5).AlignItems(ui.Center).Radius(14).Background(red).Disabled(r.busy)
+			scale := float32(1)
+			if stop.Pressed() {
+				scale = .96
+			}
+			scale = stop.AnimateTo("stop-press", scale, springPop)
+			stop.Scale(scale, scale)
+			stop.Children(func() {
+				ui.Box(c).Size(9, 9).Radius(2).Background(ui.RGB(255, 255, 255))
+				ui.Text(c, "停止").FontSize(12).FontWeight(600).TextColor(ui.RGB(255, 255, 255))
+			})
+			if stop.Clicked() || c.Shortcut(0, ui.KeyEnter) {
+				a.endRecording(false)
+			}
 		})
-		pauseIcon := iconPause
-		if !r.pausedAt.IsZero() {
-			pauseIcon = iconPlay
-		}
-		if iconToolBtn(c, pauseIcon, r.pauseLabel(), r.pauseLabel()+" (Space)", !r.pausedAt.IsZero(), r.busy) || c.Shortcut(0, ui.KeySpace) {
-			a.changeRecording("pause")
-		}
-		if iconToolBtn(c, iconSystemSound, "系统音", "开关系统声音 (A)", r.system, r.busy) || c.Shortcut(0, ui.KeyA) {
-			a.changeRecording("system")
-		}
-		if iconToolBtn(c, iconMicrophone, "麦克风", "开关麦克风 (M)", r.mic, r.busy) || c.Shortcut(0, ui.KeyM) {
-			a.changeRecording("mic")
-		}
-		if r.mic && r.level > 0.01 {
-			ui.Text(c, "●").TextColor(ui.RGB(52, 199, 89))
-		}
-		if r.micDenied && ui.Button(c, "设置").Tooltip("打开麦克风隐私设置").Clicked() {
-			go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-		}
-		if ui.Button(c, r.discardLabel()).Disabled(r.busy).Clicked() || c.Shortcut(0, ui.KeyEscape) {
-			a.endRecording(true)
-		}
-		if ui.Button(c, "停止").Tooltip("停止并打开预览 (Enter)").TextColor(ui.RGB(255, 255, 255)).Background(ui.RGB(210, 48, 42)).Radius(15).Disabled(r.busy).Clicked() || c.Shortcut(0, ui.KeyEnter) {
-			a.endRecording(false)
-		}
 	})
 }
 
@@ -365,7 +424,11 @@ func (a *app) changeRecording(action string) {
 				if action == "mic" {
 					r.micDenied = mic
 				}
-				a.showActionToast(err.Error())
+				if action == "mic" && mic {
+					a.showMicrophoneSettingsToast()
+				} else {
+					a.showActionToast(err.Error())
+				}
 			} else {
 				switch action {
 				case "pause":
@@ -412,6 +475,7 @@ func (a *app) endRecording(discard bool) {
 	}
 	if discard && r.elapsed() >= 3*time.Second && !time.Now().Before(r.confirmUntil) {
 		r.confirmUntil = time.Now().Add(3 * time.Second)
+		a.showActionToast("再点一次丢弃本次录制")
 		r.ctrl.Invalidate()
 		a.refreshMenu()
 		return

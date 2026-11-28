@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -62,6 +63,19 @@ func TestUITestPilotOverlayToolbarAgentReady(t *testing.T) {
 	tt.ClickAt(500, 300)
 	tt.Frame()
 
+	if dir := os.Getenv("SNIPGO_PREVIEW_DIR"); dir != "" {
+		for _, dark := range []bool{false, true} {
+			tt.SetDark(dark)
+			tt.Advance(time.Second)
+			tt.Frame()
+			name := "toolbar-light.png"
+			if dark {
+				name = "toolbar-dark.png"
+			}
+			savePNGFile(t, filepath.Join(dir, name), tt.Image())
+		}
+		tt.SetDark(false)
+	}
 	// Click 放大 to activate loupe tool and open the style sub-toolbar.
 	if err := tt.Click("放大"); err != nil {
 		t.Fatalf("click 放大: %v", err)
@@ -77,7 +91,7 @@ func TestUITestPilotOverlayToolbarAgentReady(t *testing.T) {
 	opts := uitest.AuditOptions{
 		RequiredLabels: []string{"标注工具栏", "标注样式栏"},
 		RequiredInteractive: []string{
-			"框", "圆", "箭头", "放大", "撤销", "识图", "贴图", "保存", "取消", "复制",
+			"框", "圆", "箭头", "放大", "录屏", "撤销", "识图", "贴图", "保存", "取消", "复制",
 			"颜色 1", "细", "中", "粗", "2×", "2.5×", "3×", "4×",
 		},
 		RequireFocusable: true,
@@ -92,6 +106,14 @@ func TestUITestPilotOverlayToolbarAgentReady(t *testing.T) {
 	colorInfo, ok := tt.Access("颜色 1")
 	if !ok || colorInfo.Role != ui.RoleRadio || !colorInfo.Focusable {
 		t.Fatalf("颜色 1 access info=%+v ok=%v, want focusable RoleRadio", colorInfo, ok)
+	}
+
+	// The recording action belongs to the same roving-focus toolbar as the other tools.
+	for i := 0; i < len(tt.AccessAll()) && !tt.Focused("录屏"); i++ {
+		tt.Key(0, ui.KeyRight)
+	}
+	if !tt.Focused("录屏") {
+		t.Fatal("recording action unreachable by toolbar arrow navigation")
 	}
 
 	// Verify single-click agent/accessibility driving works on every sub-bar control.

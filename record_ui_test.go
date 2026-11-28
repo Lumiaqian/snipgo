@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/Lumiaqian/mygo-ui-sdk/uitest"
 	"github.com/egoist/mygo/ui"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,7 +19,10 @@ func TestRecordingViewsAcrossThemesAndDirections(t *testing.T) {
 		view   func(*ui.Context)
 		labels []string
 	}{
-		{"controls", 370, 44, func(c *ui.Context) { a.paintRecording(c, r) }, []string{"暂停", "系统音", "麦克风", "停止", "取消"}},
+		{"countdown", 364, 42, func(c *ui.Context) {
+			paintRecordCountdown(c, &recordCountdown{fromFrozen: true, deadline: time.Now().Add(time.Second)})
+		}, []string{"立即开始", "取消"}},
+		{"controls", 360, 44, func(c *ui.Context) { a.paintRecording(c, r) }, []string{"暂停", "系统音", "麦克风", "停止", "取消"}},
 		{"preview", 760, 560, func(c *ui.Context) { a.paintRecordStudio(c, s) }, []string{"关闭录屏预览", "播放 / 暂停", "拖出 MP4", "复制文件", "保存", "裁切区间"}},
 	} {
 		t.Run(v.name, func(t *testing.T) {
@@ -139,8 +144,39 @@ func TestRecordCapsuleReportsConfirmedAudio(t *testing.T) {
 	} {
 		tt := ui.NewTester(func(c *ui.Context) { a.paintRecording(c, &tc.r) }, 370, 44)
 		tt.Frame()
-		if _, ok := tt.Find(tc.want); !ok {
+		if info, ok := tt.Access("麦克风"); !ok || !strings.Contains(info.Description, tc.want) {
 			t.Errorf("missing confirmed audio status %q", tc.want)
 		}
+	}
+}
+
+func TestRecordingCapsuleControlsStayInPlace(t *testing.T) {
+	a := &app{}
+	r := &regionRecording{started: time.Now().Add(-8 * time.Second)}
+	tt := ui.NewTester(func(c *ui.Context) { a.paintRecording(c, r) }, 360, 44)
+	bounds := func() []ui.Rect {
+		tt.Frame()
+		var out []ui.Rect
+		for _, label := range []string{r.pauseLabel(), "系统音", "麦克风", r.discardLabel(), "停止"} {
+			info, ok := tt.Access(label)
+			if !ok {
+				t.Fatalf("missing %s", label)
+			}
+			out = append(out, info.Bounds)
+		}
+		return out
+	}
+	want := bounds()
+	r.mic = true
+	r.level = .8
+	if got := bounds(); !slices.Equal(got, want) {
+		t.Fatalf("level indicator moved controls: %v, initially %v", got, want)
+	}
+	r.mic = false
+	r.micDenied = true
+	r.confirmUntil = time.Now().Add(time.Second)
+	r.pausedAt = time.Now()
+	if got := bounds(); !slices.Equal(got, want) {
+		t.Fatalf("permission or discard feedback moved controls: %v, initially %v", got, want)
 	}
 }

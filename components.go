@@ -118,6 +118,10 @@ func toolbarDivider(c *ui.Context) {
 }
 
 func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) bool {
+	return toolIconControl(c, ic, label, tip, active, disabled).Clicked() && !disabled
+}
+
+func toolIconControl(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) ui.Element {
 	p := uiPalette(c)
 	btn := ui.ButtonBase(c).
 		Role(ui.RoleToggleButton).
@@ -155,12 +159,14 @@ func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled 
 		} else if active {
 			col = p.ActiveText
 		}
-		ui.Icon(c, ic).FontSize(15.5).TextColor(col)
+		size := float32(15.5)
+		if ic == iconRecord && !disabled {
+			size = 16
+			col = ui.RGB(220, 56, 51)
+		}
+		ui.Icon(c, ic).FontSize(size).TextColor(col)
 	})
-	if disabled {
-		return false
-	}
-	return btn.Clicked()
+	return btn
 }
 
 func pillButton(c *ui.Context, ic *ui.SVG, label, tip string, h, padX, iconSize, fontSize float32, primary, subtleBg bool) bool {

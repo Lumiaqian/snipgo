@@ -139,13 +139,7 @@ func (a *app) paintToolbar(c *ui.Context, o *overlay) func() {
 				selCopy := sel
 				chosen = func() { a.startScrollCapture(selCopy) }
 			}
-			record := ui.ButtonBase(c.Key("record-selection")).Label("录屏").Tooltip("录制当前选区为 MP4 / GIF (R)").
-				Size(30, 30).Radius(15).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Cursor(ui.CursorPointer)
-			if record.Hovered() || record.Focused() {
-				liquidSecondaryChrome(c, record, true, 15)
-			}
-			record.Children(func() { ui.Icon(c, iconRecord).FontSize(19).TextColor(ui.RGB(220, 56, 51)) })
-			if record.Clicked() {
+			if iconToolBtn(c, iconRecord, "录屏", "录制当前选区为 MP4 / GIF (R)", false, false) {
 				a.commitOrCloseTextEdit()
 				chosen = func() { a.startRecording(sel) }
 			}
