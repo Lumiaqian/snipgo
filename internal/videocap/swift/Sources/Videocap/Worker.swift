@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // Each helper owns exactly one object. Newlines delimit JSON commands and replies;
@@ -70,7 +71,10 @@ enum VideoHelper {
     static func main() async throws {
         let worker: Worker
         switch CommandLine.arguments.dropFirst().first {
-        case "recorder": worker = .recorder(RegionRecorder())
+        case "recorder":
+            // Initialize the helper's WindowServer connection before constructing a single-window filter.
+            _ = CGMainDisplayID()
+            worker = .recorder(RegionRecorder())
         case "frames": worker = .frames(MovieFrames())
         case "studio": worker = .studio(RecordingStudio())
         default: throw CocoaError(.featureUnsupported)
