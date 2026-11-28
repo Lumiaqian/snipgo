@@ -5,6 +5,7 @@ import Foundation
 private struct Request: Decodable {
     var method: String
     var path, dst: String?
+    var windowID: UInt32?
     var displayID, x, y, width, height, fps: Int64?
     var scale, start, end: Double?
     var enabled: Bool?
@@ -41,7 +42,7 @@ private enum Worker {
         case let (.recorder(o), "start"):
             try await o.start(path: require(r.path), displayID: require(r.displayID),
                               x: require(r.x), y: require(r.y), width: require(r.width),
-                              height: require(r.height), scale: require(r.scale))
+                              height: require(r.height), scale: require(r.scale), windowID: r.windowID)
         case let (.recorder(o), "system"): try await o.setSystem(enabled: require(r.enabled))
         case let (.recorder(o), "mic"): try await o.setMic(enabled: require(r.enabled))
         case let (.recorder(o), "pause"): try await o.pause(paused: require(r.enabled))

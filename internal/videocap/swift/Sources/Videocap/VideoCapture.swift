@@ -11,10 +11,10 @@ final class StreamEvents: NSObject, SCStreamDelegate {
 }
 
 func videoStream(display: SCDisplay, excluding ownApp: SCRunningApplication, rect: CGRect,
-                 scale: CGFloat, events: StreamEvents) throws -> (SCStream, SCStreamConfiguration) {
-    let filter = SCContentFilter(display: display, excludingApplications: [ownApp], exceptingWindows: [])
+                 scale: CGFloat, events: StreamEvents, window: SCWindow? = nil) throws -> (SCStream, SCStreamConfiguration) {
+    let filter = window.map { SCContentFilter(desktopIndependentWindow: $0) } ?? SCContentFilter(display: display, excludingApplications: [ownApp], exceptingWindows: [])
     let configuration = SCStreamConfiguration()
-    configuration.sourceRect = rect
+    if window == nil { configuration.sourceRect = rect }
     configuration.width = Int((rect.width * scale).rounded()) / 2 * 2
     configuration.height = Int((rect.height * scale).rounded()) / 2 * 2
     guard configuration.width >= 2, configuration.height >= 2 else {
