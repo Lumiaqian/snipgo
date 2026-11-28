@@ -217,6 +217,10 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 		a.deferUI(a.session.Template)
 		return true
 	case keyR:
+		if sel, locked, ok := a.session.ActiveRect(); a.session.Phase() == session.PhaseAdjusting && ok && locked {
+			a.deferUI(func() { a.startRecording(sel) })
+			return true
+		}
 		if a.session.IsLive() && a.session.Phase() == session.PhaseSelecting {
 			a.deferUI(func() { a.session.SwitchLiveToFrozenForMeasure() })
 			return true

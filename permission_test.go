@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"image"
 	"testing"
 
 	"snipgo/internal/capture"
@@ -37,5 +38,19 @@ func TestAllowCaptureDecision(t *testing.T) {
 		if ok != c.wantOK || msg != c.wantMsg || probes != c.wantProbe || prompts != c.wantPromt {
 			t.Fatalf("%s: ok=%v msg=%q probes=%d prompts=%d", c.name, ok, msg, probes, prompts)
 		}
+	}
+}
+
+func TestRecordingProbesBeforePrompting(t *testing.T) {
+	oldHas, oldProbe, oldPrompt := hasScreenPermission, probeScreenCapture, promptPermissionAsync
+	t.Cleanup(func() { hasScreenPermission, probeScreenCapture, promptPermissionAsync = oldHas, oldProbe, oldPrompt })
+	hasScreenPermission = func() bool { return false }
+	var probes, prompts int
+	probeScreenCapture = func(*app) error { probes++; return capture.ErrPermissionDenied }
+	promptPermissionAsync = func(*app) { prompts++ }
+	a := &app{}
+	a.startRecording(image.Rect(240, 280, 720, 520))
+	if probes != 1 || prompts != 1 || a.recording != nil {
+		t.Fatalf("probes=%d prompts=%d recording=%v", probes, prompts, a.recording)
 	}
 }

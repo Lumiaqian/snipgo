@@ -35,6 +35,10 @@ func (b *badgeState) Text(fallback string) string {
 
 // Set 更新状态胶囊文案，并在真实弹窗窗口下于 2.8 秒后自动淡出清空。
 func (b *badgeState) Set(text string, win *mygo.Window, fallback *string) {
+	b.setFor(text, win, fallback, 2800*time.Millisecond)
+}
+
+func (b *badgeState) setFor(text string, win *mygo.Window, fallback *string, duration time.Duration) {
 	if fallback != nil {
 		*fallback = text
 	}
@@ -47,7 +51,7 @@ func (b *badgeState) Set(text string, win *mygo.Window, fallback *string) {
 	b.gen++
 	gen := b.gen
 	if text != "" && win != nil && !win.IsDestroyed() && mygo.App.IsReady() {
-		b.timer = time.AfterFunc(2800*time.Millisecond, func() {
+		b.timer = time.AfterFunc(duration, func() {
 			mygo.RunOnMain(func() {
 				b.mu.Lock()
 				if b.gen != gen {
@@ -118,6 +122,10 @@ func toolbarDivider(c *ui.Context) {
 }
 
 func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) bool {
+	return toolIconControl(c, ic, label, tip, active, disabled, ui.Transparent).Clicked() && !disabled
+}
+
+func toolIconControl(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool, tint ui.Color) ui.Element {
 	p := uiPalette(c)
 	btn := ui.ButtonBase(c).
 		Role(ui.RoleToggleButton).
@@ -154,13 +162,17 @@ func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled 
 			col = ui.Color{R: p.TextMuted.R, G: p.TextMuted.G, B: p.TextMuted.B, A: uint8(float32(p.TextMuted.A) * 0.55)}
 		} else if active {
 			col = p.ActiveText
+		} else if tint.A > 0 {
+			col = tint
 		}
-		ui.Icon(c, ic).FontSize(15.5).TextColor(col)
+		size := float32(15.5)
+		if ic == iconRecord && !disabled {
+			size = 16
+			col = ui.RGB(220, 56, 51)
+		}
+		ui.Icon(c, ic).FontSize(size).TextColor(col)
 	})
-	if disabled {
-		return false
-	}
-	return btn.Clicked()
+	return btn
 }
 
 func pillButton(c *ui.Context, ic *ui.SVG, label, tip string, h, padX, iconSize, fontSize float32, primary, subtleBg bool) bool {

@@ -112,7 +112,7 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 | `T` / `Cmd+T` / `Cmd+S` / `⇧⌘S` | `T` 悬浮贴图 / `Cmd+S` 快存 PNG / `⇧⌘S` 另存为 |
 | `Tab` / `C` / `Shift+C` | 实时态切冻结取色或循环切格式 / 复制完整色值 / 复制去前缀纯色值 |
 | `P` / `Shift+P` / `Delete` | 采色进色板 / 贴出交互多色卡 / 删选中标注或退色板末色 |
-| `R` / `Space` | 开关像素测量尺（实时态自动切入定格标尺）/ 框选时切换窗口识别 |
+| `R` / `Space` | 未选区时开关像素标尺，已有选区时进入 3 秒录屏倒计时（Enter / Space 或「立即开始」抢跑，Esc 取消；偏好设置可关闭倒计时直接录制） / 框选时切换窗口识别 |
 | `方向键` / `Alt+方向键` | 1 DIP 平移选区或调整尺寸（加 `Shift` 步进 10 DIP） |
 | `Cmd+Z` / `Shift+Cmd+Z` / `Delete` | 撤销 / 重做 / 删除当前选中的标注图元 |
 
@@ -179,7 +179,8 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 
 ### 本地常用命令
 ```sh
-# 1. 开发构建与热重载
+# 1. 构建本机录屏助手，再启动开发热重载
+scripts/build-video-helper.sh "$(uname -m)"
 go tool mygo dev
 
 # 2. 运行全部单元测试（零 CGO）

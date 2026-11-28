@@ -459,6 +459,10 @@ func (a *app) paintSettingsGeneralTab(c *ui.Context, p palette, sw *settingsWind
 					}
 				})
 
+				if liquidSwitch(c, "record-countdown", &sw.draft.RecordCountdown, "录屏前 3 秒倒计时") {
+					a.applyAndSaveSettings(sw.draft)
+					sw.setSavedBadge("✓ 已保存")
+				}
 				delayVals := []int{3, 5, 10}
 				delaySel := 0
 				for i, sec := range delayVals {

@@ -136,3 +136,21 @@ func TestDisableHistoryDefaultAndRoundTrip(t *testing.T) {
 		t.Fatal("旧配置应默认开启历史")
 	}
 }
+
+func TestRecordingCountdownDefaultsOnAndPersistsOff(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Load(dir, "")
+	if !cfg.RecordCountdown {
+		t.Fatal("missing preference must default on")
+	}
+	cfg.RecordCountdown = false
+	if err := Save(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if Load(dir, "").RecordCountdown {
+		t.Fatal("disabled countdown did not survive restart")
+	}
+}

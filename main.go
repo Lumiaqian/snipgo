@@ -28,6 +28,7 @@ import (
 	"snipgo/internal/crop"
 	"snipgo/internal/session"
 	"snipgo/internal/store"
+	"snipgo/internal/videocap"
 )
 
 const (
@@ -63,6 +64,7 @@ type app struct {
 	ocr                 *ocrWindow
 	histWin             *historyWindow
 	setWin              *settingsWindow
+	recStudio           *recordStudio
 	tplWin              *templateWindow
 	colorToast          *colorToastWin
 	paletteBarNotice    badgeState
@@ -73,6 +75,7 @@ type app struct {
 	hasTplOpts          bool
 	countdown           *countdownSession
 	scrollCap           *scrollCaptureSession
+	recording           *regionRecording
 	snappingPin         bool
 	upd                 *updateManager
 
@@ -101,12 +104,26 @@ func configureAppLocale() {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--check-recorder" {
+		helperArch, err := videocap.CheckRecorder()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Recorder created: host=%s helper=%s\n", runtime.GOARCH, helperArch)
+		return
+	}
 	initLogFile()
 	a := &app{}
 	configureAppLocale()
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnWindowAllClosed(func() {})
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if a.recording != nil && !e.SessionEnding {
+			e.PreventDefault()
+			a.endRecording(false)
+			return
+		}
 		a.quitting = true
 		if a.session != nil {
 			a.session.Cancel()
@@ -118,6 +135,7 @@ func main() {
 		a.closeHistoryWindow()
 		a.closeSettingsWindow()
 		a.closeTemplateWindow()
+		a.closeRecordStudio()
 		a.closeColorToast()
 		a.closeAllPins()
 		cleanupAllDragTempFiles()
@@ -135,6 +153,7 @@ func main() {
 }
 
 func (a *app) ready() {
+	go pruneOldRecordings()
 	if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
 		a.userDataDir = dir
 	} else if home, err := os.UserHomeDir(); err == nil {
@@ -223,6 +242,10 @@ func (a *app) registerAllShortcuts() {
 	}
 	mygo.GlobalShortcut.UnregisterAll()
 	a.shortcutErr = mygo.GlobalShortcut.Register(a.cfg.SnipShortcut, func() {
+		if a.recording != nil {
+			a.endRecording(false)
+			return
+		}
 		a.extraStatus = ""
 		a.session.StartLive()
 	})
@@ -737,6 +760,9 @@ func (a *app) refreshMenu() {
 		},
 		&mygo.MenuItem{Label: "退出", Role: mygo.RoleQuit},
 	)
+	if r := a.recording; r != nil {
+		items = append(r.menu(a), items...)
+	}
 	a.tray.SetMenu(mygo.NewMenu(items))
 }
 
@@ -753,6 +779,12 @@ func (sysClip) WriteText(s string) {
 func (a *app) applyThemeLive(cfg config.Settings) {
 	st := themeStateFromConfig(cfg)
 	setActiveTheme(st)
+	if a.recStudio != nil {
+		applyWindowTheme(a.recStudio.win, st)
+	}
+	if a.recording != nil {
+		applyWindowTheme(a.recording.ctrl, st)
+	}
 	if a.tplWin != nil {
 		applyWindowTheme(a.tplWin.win, st)
 	}
