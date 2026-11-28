@@ -123,3 +123,24 @@ func TestRecordStudioSelectionsSurviveIdleFrames(t *testing.T) {
 		t.Fatal("returning to original settings must restore direct drag")
 	}
 }
+
+func TestRecordCapsuleReportsConfirmedAudio(t *testing.T) {
+	a := &app{}
+	for _, tc := range []struct {
+		r    regionRecording
+		want string
+	}{
+		{regionRecording{}, "静音"},
+		{regionRecording{system: true}, "系统音"},
+		{regionRecording{mic: true}, "麦克风"},
+		{regionRecording{mic: true, system: true}, "系统音 + 麦克风"},
+		{regionRecording{busy: true, pendingAudio: "切换麦克风…"}, "切换麦克风…"},
+		{regionRecording{system: true, micDenied: true}, "系统音 · 开麦失败"},
+	} {
+		tt := ui.NewTester(func(c *ui.Context) { a.paintRecording(c, &tc.r) }, 370, 44)
+		tt.Frame()
+		if _, ok := tt.Find(tc.want); !ok {
+			t.Errorf("missing confirmed audio status %q", tc.want)
+		}
+	}
+}

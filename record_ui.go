@@ -25,6 +25,7 @@ type regionRecording struct {
 	frame, ctrl                            *mygo.Window
 	path                                   string
 	level                                  float64
+	pendingAudio                           string
 	interrupted                            bool
 	started, pausedAt, confirmUntil        time.Time
 	removed                                time.Duration
@@ -45,6 +46,25 @@ func (r *regionRecording) elapsed() time.Duration {
 func (r *regionRecording) clock() string {
 	sec := int(r.elapsed().Seconds())
 	return fmt.Sprintf("%02d:%02d", sec/60, sec%60)
+}
+
+func (r *regionRecording) audioLabel() string {
+	switch {
+	case r.pendingAudio != "":
+		return r.pendingAudio
+	case r.micDenied && r.system:
+		return "系统音 · 开麦失败"
+	case r.micDenied:
+		return "静音 · 开麦失败"
+	case r.system && r.mic:
+		return "系统音 + 麦克风"
+	case r.system:
+		return "系统音"
+	case r.mic:
+		return "麦克风"
+	default:
+		return "静音"
+	}
 }
 
 func (r *regionRecording) pauseLabel() string {
@@ -104,9 +124,10 @@ func (a *app) startRecording(sel image.Rectangle) {
 	}
 	r := &regionRecording{region: region, stream: stream, path: filepath.Join(dir, "SnipGo.mp4"), busy: true}
 	a.recording = r
+	fromFrozen := !a.session.IsLive()
 	a.session.Cancel()
 	if a.cfg.RecordCountdown {
-		r.countdown = &recordCountdown{deadline: time.Now().Add(3 * time.Second)}
+		r.countdown = &recordCountdown{fromFrozen: fromFrozen, deadline: time.Now().Add(3 * time.Second)}
 		r.countdown.finish = func(start bool) {
 			a.deferUI(func() {
 				r.ctrl.Hide()
@@ -133,9 +154,10 @@ func (a *app) startRecording(sel image.Rectangle) {
 }
 
 type recordCountdown struct {
-	deadline time.Time
-	timer    *time.Timer
-	finish   func(bool)
+	fromFrozen bool
+	deadline   time.Time
+	timer      *time.Timer
+	finish     func(bool)
 }
 
 // Timer and input events resolve on the main thread. A queued event may outlive its window.
@@ -247,7 +269,11 @@ func paintRecordCountdown(c *ui.Context, cd *recordCountdown) {
 	remaining := max(1, int(math.Ceil(time.Until(cd.deadline).Seconds())))
 	c.After(100 * time.Millisecond)
 	liquidGlassCapsule(c, ui.Row(c).Height(44).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).PaddingX(12), 22, c.Vibrancy()).Children(func() {
-		ui.Text(c, fmt.Sprintf("%d 秒后开始录屏", remaining))
+		label := fmt.Sprintf("%d 秒后开始录屏", remaining)
+		if cd.fromFrozen {
+			label = "已切回实时 · " + label
+		}
+		ui.Text(c, label).NoWrap()
 		start := ui.Button(c, "立即开始").Clicked()
 		cancel := ui.Button(c, "取消").Clicked()
 		if cancel || c.Shortcut(0, ui.KeyEscape) {
@@ -275,12 +301,15 @@ func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
 			alpha = float32(.8 + .2*math.Sin(float64(time.Now().UnixMilli()%1600)*2*math.Pi/1600))
 			c.After(80 * time.Millisecond)
 		}
-		ui.Text(c, "● "+label).DragWindow().TextColor(col).Opacity(alpha)
+		ui.Column(c).DragWindow().Children(func() {
+			ui.Text(c, "● "+label).FontSize(12).FontWeight(600).TextColor(col).Opacity(alpha)
+			ui.Text(c, r.audioLabel()).FontSize(11).TextColor(uiPalette(c).TextSecondary).NoWrap()
+		})
 		pauseIcon := iconPause
 		if !r.pausedAt.IsZero() {
 			pauseIcon = iconPlay
 		}
-		if iconToolBtn(c, pauseIcon, r.pauseLabel(), r.pauseLabel()+" (Space)", false, r.busy) || c.Shortcut(0, ui.KeySpace) {
+		if iconToolBtn(c, pauseIcon, r.pauseLabel(), r.pauseLabel()+" (Space)", !r.pausedAt.IsZero(), r.busy) || c.Shortcut(0, ui.KeySpace) {
 			a.changeRecording("pause")
 		}
 		if iconToolBtn(c, iconSystemSound, "系统音", "开关系统声音 (A)", r.system, r.busy) || c.Shortcut(0, ui.KeyA) {
@@ -292,13 +321,13 @@ func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
 		if r.mic && r.level > 0.01 {
 			ui.Text(c, "●").TextColor(ui.RGB(52, 199, 89))
 		}
-		if r.micDenied && ui.Button(c, "设置").Clicked() {
+		if r.micDenied && ui.Button(c, "设置").Tooltip("打开麦克风隐私设置").Clicked() {
 			go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
 		}
 		if ui.Button(c, r.discardLabel()).Disabled(r.busy).Clicked() || c.Shortcut(0, ui.KeyEscape) {
 			a.endRecording(true)
 		}
-		if ui.Button(c, "停止").Background(ui.RGB(210, 48, 42)).Radius(15).Disabled(r.busy).Clicked() || c.Shortcut(0, ui.KeyEnter) {
+		if ui.Button(c, "停止").Tooltip("停止并打开预览 (Enter)").TextColor(ui.RGB(255, 255, 255)).Background(ui.RGB(210, 48, 42)).Radius(15).Disabled(r.busy).Clicked() || c.Shortcut(0, ui.KeyEnter) {
 			a.endRecording(false)
 		}
 	})
@@ -311,6 +340,13 @@ func (a *app) changeRecording(action string) {
 	}
 	r.busy = true
 	pause, system, mic := r.pausedAt.IsZero(), !r.system, !r.mic
+	switch action {
+	case "mic":
+		r.pendingAudio = "切换麦克风…"
+	case "system":
+		r.pendingAudio = "切换系统音…"
+	}
+	r.ctrl.Invalidate()
 	go func() {
 		ctx := context.Background()
 		var err error
@@ -324,9 +360,10 @@ func (a *app) changeRecording(action string) {
 		}
 		runOnMain(func() {
 			r.busy = false
+			r.pendingAudio = ""
 			if err != nil {
 				if action == "mic" {
-					r.micDenied = true
+					r.micDenied = mic
 				}
 				a.showActionToast(err.Error())
 			} else {
