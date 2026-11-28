@@ -2,7 +2,7 @@
   "name": "SnipGo",
   "slug": "snipgo",
   "identifier": "app.snipgo",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "out": "build",
   "buildCommand": "scripts/build-video-helper.sh arm64 x86_64",
   "macos": {
