@@ -14,7 +14,6 @@ import (
 	"github.com/egoist/mygo/native"
 	"github.com/egoist/mygo/ui"
 
-	"snipgo/internal/capture"
 	"snipgo/internal/recordsess"
 	"snipgo/internal/videocap"
 	"strings"
@@ -74,6 +73,9 @@ func (a *app) startRecording(sel image.Rectangle) {
 	if a.recording != nil {
 		return
 	}
+	if allowed, _ := a.allowCapture(); !allowed {
+		return
+	}
 	displays, err := a.currentDisplays()
 	if err != nil {
 		a.showActionToast(err.Error())
@@ -82,10 +84,6 @@ func (a *app) startRecording(sel image.Rectangle) {
 	region, err := recordsess.Select(sel, displays)
 	if err != nil {
 		a.showActionToast(err.Error())
-		return
-	}
-	if !capture.HasPermission() {
-		go a.promptPermission()
 		return
 	}
 	stream, err := videocap.NewRecorder()
