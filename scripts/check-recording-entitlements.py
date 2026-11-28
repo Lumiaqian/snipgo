@@ -11,7 +11,7 @@ mic = "com.apple.security.device.audio-input"
 for binary in (host, helper):
     for arch in subprocess.check_output(["lipo", "-archs", binary], text=True).split():
         data = subprocess.check_output(
-            ["codesign", "-d", "--arch", arch, "--entitlements", "-", binary]
+            ["codesign", "-d", "--arch", arch, "--xml", "--entitlements", "-", binary]
         )
         grants = plistlib.loads(data) if data else {}
         valid_mic = grants.get(mic) is True if binary == host else mic not in grants
