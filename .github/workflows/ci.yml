@@ -99,7 +99,7 @@ jobs:
             test -x "$helper"
             test ! -e "$app/Contents/Frameworks/libVideocap.dylib"
             for slice in $(lipo -archs "$app/Contents/MacOS/SnipGo"); do
-              lipo -verify_arch "$slice" "$helper"
+              lipo "$helper" -verify_arch "$slice"
             done
             if [ -n "$MACOS_SIGNING_IDENTITY" ]; then
               for code in "$app" "$helper"; do
