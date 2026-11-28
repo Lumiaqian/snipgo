@@ -35,6 +35,10 @@ func (b *badgeState) Text(fallback string) string {
 
 // Set 更新状态胶囊文案，并在真实弹窗窗口下于 2.8 秒后自动淡出清空。
 func (b *badgeState) Set(text string, win *mygo.Window, fallback *string) {
+	b.setFor(text, win, fallback, 2800*time.Millisecond)
+}
+
+func (b *badgeState) setFor(text string, win *mygo.Window, fallback *string, duration time.Duration) {
 	if fallback != nil {
 		*fallback = text
 	}
@@ -47,7 +51,7 @@ func (b *badgeState) Set(text string, win *mygo.Window, fallback *string) {
 	b.gen++
 	gen := b.gen
 	if text != "" && win != nil && !win.IsDestroyed() && mygo.App.IsReady() {
-		b.timer = time.AfterFunc(2800*time.Millisecond, func() {
+		b.timer = time.AfterFunc(duration, func() {
 			mygo.RunOnMain(func() {
 				b.mu.Lock()
 				if b.gen != gen {

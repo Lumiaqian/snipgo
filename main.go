@@ -64,6 +64,7 @@ type app struct {
 	ocr                 *ocrWindow
 	histWin             *historyWindow
 	setWin              *settingsWindow
+	recStudio           *recordStudio
 	tplWin              *templateWindow
 	colorToast          *colorToastWin
 	paletteBarNotice    badgeState
@@ -134,6 +135,7 @@ func main() {
 		a.closeHistoryWindow()
 		a.closeSettingsWindow()
 		a.closeTemplateWindow()
+		a.closeRecordStudio()
 		a.closeColorToast()
 		a.closeAllPins()
 		cleanupAllDragTempFiles()
@@ -777,6 +779,9 @@ func (sysClip) WriteText(s string) {
 func (a *app) applyThemeLive(cfg config.Settings) {
 	st := themeStateFromConfig(cfg)
 	setActiveTheme(st)
+	if a.recStudio != nil {
+		applyWindowTheme(a.recStudio.win, st)
+	}
 	if a.recording != nil {
 		applyWindowTheme(a.recording.ctrl, st)
 	}

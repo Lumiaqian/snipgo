@@ -23,7 +23,7 @@ func TestRecordingViewsAcrossThemesAndDirections(t *testing.T) {
 			paintRecordCountdown(c, &recordCountdown{fromFrozen: true, deadline: time.Now().Add(time.Second)})
 		}, []string{"立即开始", "取消"}},
 		{"controls", 360, 44, func(c *ui.Context) { a.paintRecording(c, r) }, []string{"暂停", "系统音", "麦克风", "停止", "取消"}},
-		{"preview", 760, 560, func(c *ui.Context) { a.paintRecordStudio(c, s) }, []string{"关闭录屏预览", "播放 / 暂停", "拖出 MP4", "复制文件", "保存", "裁切区间"}},
+		{"preview", 700, 520, func(c *ui.Context) { a.paintRecordStudio(c, s) }, []string{"关闭录屏预览", "播放 / 暂停", "拖出 MP4", "复制文件", "保存", "裁切区间"}},
 	} {
 		t.Run(v.name, func(t *testing.T) {
 			tt := ui.NewTester(v.view, v.w, v.h)
@@ -113,7 +113,7 @@ func TestRecordStudioSelectionsSurviveIdleFrames(t *testing.T) {
 	if s.output != "" || s.format != 1 || s.width != 1 || s.rate != 1 {
 		t.Fatalf("pending GIF settings: %+v", s)
 	}
-	if err := tt.Click("24 fps"); err != nil {
+	if err := tt.Click("24"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
