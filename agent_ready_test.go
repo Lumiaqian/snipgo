@@ -263,6 +263,25 @@ func TestAgentReadySettingsAllTabs(t *testing.T) {
 	}
 	uitest.AssertAgentReady(t, tt, tab2Opts)
 	uitest.AssertThemeParity(t, tt, tab2Opts)
+	if err := tt.Click("命令行与 Agent"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	agentOpts := uitest.AuditOptions{RequiredInteractive: []string{"安装命令行工具"}, RequireFocusable: true}
+	uitest.AssertAgentReady(t, tt, agentOpts)
+	uitest.AssertThemeParity(t, tt, agentOpts)
+	if dir := os.Getenv("SNIPGO_PREVIEW_DIR"); dir != "" {
+		for _, dark := range []bool{false, true} {
+			tt.SetDark(dark)
+			tt.Advance(time.Second)
+			tt.Frame()
+			name := "agent-cli-light.png"
+			if dark {
+				name = "agent-cli-dark.png"
+			}
+			savePNGFile(t, filepath.Join(dir, name), tt.Image())
+		}
+	}
 }
 
 func TestAgentReadyTemplateStudio(t *testing.T) {

@@ -2,6 +2,9 @@ package main
 
 import (
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
@@ -208,7 +211,7 @@ func (a *app) paintSettingsView(c *ui.Context, sw *settingsWindow) {
 			})
 
 			ui.Row(c).Padding(0, 18, 12, 18).AlignItems(ui.Center).Children(func() {
-				if picked := liquidSegmented(c, "set-tab", sw.tab, []string{"外观与主题", "全局快捷键", "通用与更新"}); picked >= 0 && picked != sw.tab {
+				if picked := liquidSegmented(c, "set-tab", sw.tab, []string{"外观与主题", "全局快捷键", "通用与更新", "命令行与 Agent"}); picked >= 0 && picked != sw.tab {
 					sw.tab = picked
 					if sw.recordingID != "" {
 						a.stopShortcutRecording(sw, true)
@@ -223,6 +226,8 @@ func (a *app) paintSettingsView(c *ui.Context, sw *settingsWindow) {
 					a.paintSettingsAppearanceTab(c, p, sw)
 				case 1:
 					a.paintSettingsShortcutTab(c, p, sw, defCfg)
+				case 3:
+					ui.Column(c).FillWidth().Gap(10).Children(func() { a.paintCommandLineCard(c, p, sw) })
 				default:
 					a.paintSettingsGeneralTab(c, p, sw)
 				}
@@ -572,5 +577,42 @@ func paintPreviewPillChip(c *ui.Context, ic *ui.SVG, label string, primary bool)
 			ui.Icon(c, ic).FontSize(14).TextColor(col)
 		}
 		ui.Text(c, label).FontSize(12).FontWeight(500).NoWrap().TextColor(col)
+	})
+}
+
+func (a *app) paintCommandLineCard(c *ui.Context, p palette, sw *settingsWindow) {
+	sectionTitle(c, "命令行与 Agent")
+	settingsCard(c).Children(func() {
+		home, homeErr := os.UserHomeDir()
+		exe, exeErr := os.Executable()
+		link := filepath.Join(home, ".local", "bin", "snipgo")
+		status := "未安装"
+		target, err := os.Readlink(link)
+		installed := err == nil && target == exe
+		if installed {
+			status = "已安装 · ~/.local/bin/snipgo"
+			if found, _ := exec.LookPath("snipgo"); found != link {
+				status += " · 请将 ~/.local/bin 加入 PATH"
+			}
+		}
+		ui.Text(c, status).FontSize(12).TextColor(p.TextSecondary)
+		if miniPillBtn(c, nil, "安装命令行工具", false) {
+			switch {
+			case installed:
+				sw.setSavedBadge("命令行工具已安装")
+			case homeErr != nil || exeErr != nil:
+				sw.setSavedBadge("无法定位用户目录或 SnipGo")
+			default:
+				err := os.MkdirAll(filepath.Dir(link), 0755)
+				if err == nil {
+					err = os.Symlink(exe, link)
+				}
+				if err != nil {
+					sw.setSavedBadge("安装失败：" + err.Error())
+				} else {
+					sw.setSavedBadge("已安装命令行工具")
+				}
+			}
+		}
 	})
 }
