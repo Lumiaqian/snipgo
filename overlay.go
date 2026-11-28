@@ -29,8 +29,6 @@ const overlayTitle = "SnipGo 选区"
 
 func (a *app) ShowSelection(frames []crop.Screen) {
 	a.HideSelection()
-	a.textEditing = false
-	a.textEditBuf = ""
 	a.lastOverlayIdx = -1
 	a.paletteBarNotice.Set("", nil, &a.paletteNoticeText)
 	cursor := mygo.Screen.CursorScreenPoint()
@@ -106,7 +104,7 @@ func (a *app) ShowSelection(frames []crop.Screen) {
 }
 
 func (a *app) HideSelection() {
-	a.textEditing = false
+	a.editOverlay(nil)
 	a.textEditBuf = ""
 	a.cancelPreviewSnap()
 	a.previewSnapGen++
@@ -228,7 +226,7 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 				hitText := part != annotate.EditNone && idx >= 0 && idx < len(items) && items[idx].Tool == annotate.ToolText
 				if ev.Clicks >= 2 && hitText {
 					a.session.CancelDrag()
-					a.textEditing = true
+					a.editOverlay(o)
 					a.textEditIdx = idx
 					a.textEditX, a.textEditY = items[idx].P0.X, items[idx].P0.Y
 					a.textEditBuf = items[idx].Text
@@ -237,7 +235,7 @@ func (a *app) onCanvasInput(o *overlay, ev ui.InputEvent) bool {
 					return true
 				}
 				if ac.Tool == annotate.ToolText && !hitText {
-					a.textEditing = true
+					a.editOverlay(o)
 					a.textEditIdx = -1
 					a.textEditX, a.textEditY = gx, gy
 					a.textEditBuf = ""
@@ -292,12 +290,24 @@ func commitCanvasTextEdit(ac *annotate.Canvas, editing *bool, idx *int, x, y flo
 	*buf = ""
 }
 
+func (a *app) editOverlay(o *overlay) {
+	if prev := a.textOverlay; prev != nil && prev != o {
+		setOverlayEditing(prev.win, false)
+	}
+	a.textOverlay = o
+	a.textEditing = o != nil
+	if o != nil {
+		setOverlayEditing(o.win, true)
+	}
+}
+
 func (a *app) commitOrCloseTextEdit() {
 	var ac *annotate.Canvas
 	if a.session != nil {
 		ac = a.session.Annotations()
 	}
 	commitCanvasTextEdit(ac, &a.textEditing, &a.textEditIdx, a.textEditX, a.textEditY, &a.textEditBuf)
+	a.editOverlay(nil)
 }
 
 func (a *app) invalidateOthers(self *overlay) {

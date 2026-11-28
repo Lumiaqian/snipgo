@@ -284,6 +284,49 @@ func TestAgentReadySettingsAllTabs(t *testing.T) {
 	}
 }
 
+// Compare the visible accessibility boxes against the full controls rendered at
+// the same width with enough vertical space to eliminate viewport clipping.
+func TestGeneralSettingsFirstScreen(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default(dir)
+	a := &app{cfg: cfg, picturesDir: dir, userDataDir: dir}
+	openGeneral := func(height int) *ui.Tester {
+		sw := &settingsWindow{draft: cfg}
+		tt := ui.NewTester(func(c *ui.Context) { a.paintSettingsView(c, sw) }, 500, height)
+		tt.Frame()
+		if err := tt.Click("通用与更新"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Advance(time.Second)
+		tt.Frame()
+		return tt
+	}
+	if settingsWinW != 500 || settingsWinH != 488 {
+		t.Fatal("default settings window size changed")
+	}
+	viewport, full := openGeneral(488), openGeneral(900)
+	for _, label := range []string{"3 秒", "5 秒", "10 秒", "HEX", "RGB", "OKLCH", "Tailwind"} {
+		got, ok := viewport.AccessByRole(ui.RoleRadio, label)
+		want, found := full.AccessByRole(ui.RoleRadio, label)
+		if !ok || !found || got.Disabled || !got.Focusable || got.Offscreen || got.Bounds.W <= 0 || got.Bounds.H <= 0 || got.Bounds != want.Bounds {
+			t.Errorf("%s visible=%+v full=%+v", label, got.Bounds, want.Bounds)
+		} else {
+			t.Logf("%s full target %+v", label, got.Bounds)
+		}
+	}
+	if dir := os.Getenv("SNIPGO_PREVIEW_DIR"); dir != "" {
+		savePNGFile(t, filepath.Join(dir, "settings-general-first-screen.png"), viewport.Image())
+	}
+	if err := viewport.Click("命令行与 Agent"); err != nil {
+		t.Fatal(err)
+	}
+	viewport.Frame()
+	install, ok := viewport.Access("安装命令行工具")
+	if !ok || !install.Focusable || install.Disabled {
+		t.Fatal("CLI install action unreachable")
+	}
+}
+
 func TestAgentReadyTemplateStudio(t *testing.T) {
 	a := &app{cfg: config.Default(t.TempDir())}
 	src := makeTestSampleImage(320, 200)

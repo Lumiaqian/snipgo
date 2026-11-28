@@ -21,4 +21,5 @@ type WindowInfo struct {
 	App, Title string
 	ID         uint32
 	Bounds     image.Rectangle
+	PopupMenu  bool
 }

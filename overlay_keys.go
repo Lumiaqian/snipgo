@@ -53,7 +53,7 @@ func (a *app) handleSelectionKeys(c *ui.Context) bool {
 	esc := c.Shortcut(0, ui.KeyEscape)
 	if a.textEditing {
 		if esc {
-			a.textEditing = false
+			a.editOverlay(nil)
 			a.textEditIdx = -1
 			a.textEditBuf = ""
 			a.invalidateAll()
