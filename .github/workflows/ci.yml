@@ -29,7 +29,7 @@ jobs:
 
       - name: Run unit tests, visual render checks, and vet
         run: |
-          go tool mygo native check ./internal/videocap
+          scripts/build-video-helper.sh "$(uname -m)"
           swift test --package-path internal/recordaudio --scratch-path "$RUNNER_TEMP/audio-tests"
           swift test --package-path internal/videocap/swift --scratch-path "$RUNNER_TEMP/video-tests"
           export SNIPGO_RGB_FIXTURE="$(go list -m -f '{{.Dir}}' github.com/egoist/mygo)/ui/video/testdata/rgb.mp4"
@@ -95,6 +95,22 @@ jobs:
           # 否则用户每次更新都要重新授予屏幕录制权限。
           for app in build/darwin-*/*.app; do
             codesign --verify --deep --strict --all-architectures "$app"
+            helper="$app/Contents/Resources/bin/SnipGoVideo"
+            test -x "$helper"
+            test ! -e "$app/Contents/Frameworks/libVideocap.dylib"
+            for slice in $(lipo -archs "$app/Contents/MacOS/SnipGo"); do
+              lipo -verify_arch "$slice" "$helper"
+            done
+            if [ -n "$MACOS_SIGNING_IDENTITY" ]; then
+              for code in "$app" "$helper"; do
+                codesign --verify --strict --all-architectures -R='certificate leaf = H"266927f0652f68f7d6cd5c5c8535746c3dd8ce5b"' "$code"
+                codesign -d -r- "$code"
+                details=$(codesign -dvv "$code" 2>&1)
+                [[ "$details" == *"(runtime)"* ]]
+                entitlements=$(codesign -d --entitlements - "$code" 2>/dev/null)
+                [[ "$entitlements" != *"com.apple.security.cs.disable-library-validation"* ]]
+              done
+            fi
             dr="$(codesign -d -r- "$app" 2>&1 | grep 'designated =>' || true)"
             echo "$app: $dr"
             if [ -n "$MACOS_SIGNING_IDENTITY" ]; then
@@ -105,6 +121,20 @@ jobs:
                 *'identifier "app.snipgo"'*'certificate'*) ;;
                 *) echo "::error::$app has an unexpected designated requirement"; exit 1 ;;
               esac
+            fi
+          done
+
+      - name: Create Recorder from each runnable signed app slice
+        run: |
+          for arch in arm64 x86_64; do
+            if [[ "$arch" == arm64 ]]; then thin=arm64; else thin=amd64; fi
+            if /usr/bin/arch -"$arch" /usr/bin/true; then
+              for bundle in "$thin" universal; do
+                echo "Runtime check: $bundle ($arch)"
+                /usr/bin/arch -"$arch" "build/darwin-$bundle/SnipGo.app/Contents/MacOS/SnipGo" --check-recorder
+              done
+            else
+              echo "::notice::$arch cannot run on this runner; thin and universal $arch slices are signature-checked only"
             fi
           done
 

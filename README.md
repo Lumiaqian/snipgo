@@ -177,7 +177,8 @@ SnipGo 基于纯 Go（`CGO_ENABLED=0` + [`MyGo`](https://mygo.egoist.dev/docs) +
 
 ### 本地常用命令
 ```sh
-# 1. 开发构建与热重载
+# 1. 构建本机录屏助手，再启动开发热重载
+scripts/build-video-helper.sh "$(uname -m)"
 go tool mygo dev
 
 # 2. 运行全部单元测试（零 CGO）

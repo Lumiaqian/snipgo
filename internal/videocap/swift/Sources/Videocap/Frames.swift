@@ -1,9 +1,8 @@
 import AVFoundation
 import CoreImage
 
-func makeFrames() throws -> any Frames { MovieFrames() }
 
-final class MovieFrames: Frames {
+final class MovieFrames {
   private let render = CIContext(options: [.cacheIntermediates: false])
   private var reader: AVAssetReader?
   private var output: AVAssetReaderTrackOutput?

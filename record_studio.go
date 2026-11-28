@@ -270,7 +270,7 @@ func (s *recordStudio) export() {
 	go func() {
 		studio, err := videocap.NewStudio()
 		if err == nil {
-			defer closeRecordingObject(studio)
+			defer studio.Close()
 			err = exportMovie(ctx, studio, o, func(n int) {
 				runOnMain(func() {
 					if !s.closed {

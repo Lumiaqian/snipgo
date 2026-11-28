@@ -1,9 +1,7 @@
 import AVFoundation
 import ScreenCaptureKit
 
-func makeRecorder() -> any Recorder { RegionRecorder() }
-
-private actor RegionRecorder: Recorder {
+actor RegionRecorder {
     private let events = StreamEvents()
     private let samples = DispatchQueue(label: "app.snipgo.video.samples")
     private var configuration: SCStreamConfiguration?
@@ -14,7 +12,7 @@ private actor RegionRecorder: Recorder {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         guard active == nil, let id = UInt32(exactly: displayID),
               let display = content.displays.first(where: { $0.displayID == id }),
-              let ownApp = content.applications.first(where: { $0.processID == ProcessInfo.processInfo.processIdentifier })
+              let ownApp = content.applications.first(where: { $0.processID == getppid() })
         else { throw CocoaError(.featureUnsupported) }
         let rect = CGRect(x: Int(x), y: Int(y), width: Int(width), height: Int(height))
         guard scale.isFinite, scale > 0, !rect.isEmpty,
@@ -40,8 +38,8 @@ private actor RegionRecorder: Recorder {
 
     func setMic(enabled: Bool) async throws {
         if !enabled { microphone?.stop(); microphone = nil; return }
-        guard microphone == nil, await AVCaptureDevice.requestAccess(for: .audio),
-              let (_, sink) = active else { throw CocoaError(.userCancelled) }
+        guard microphone == nil, let (_, sink) = active,
+              await AVCaptureDevice.requestAccess(for: .audio) else { throw CocoaError(.userCancelled) }
         let mic = try Microphone(queue: samples) { time, buffer in
             sink.receive(buffer, from: .microphone, at: time)
         }

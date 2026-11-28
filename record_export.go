@@ -44,7 +44,7 @@ func writeGIF(ctx context.Context, path string, o exportOptions, progress func(i
 	if e != nil {
 		return e
 	}
-	defer closeRecordingObject(decoder)
+	defer decoder.Close()
 	file, e := os.Create(path)
 	if e != nil {
 		return e

@@ -10,3 +10,5 @@ coverage.out
 
 /.mygo/
 mygo_windows_*.syso
+
+/resources/darwin-*/bin/SnipGoVideo

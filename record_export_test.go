@@ -19,7 +19,7 @@ func TestNativeTrimAndGIF(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer closeRecordingObject(studio)
+	defer studio.Close()
 	o := exportOptions{source: src, start: 0.4, end: 0.8, width: 32, fps: 10, mute: true, destination: filepath.Join(t.TempDir(), "clip.mp4")}
 	progress := func(int) {}
 	if e := exportMovie(t.Context(), studio, o, progress); e != nil {

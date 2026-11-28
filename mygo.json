@@ -4,6 +4,7 @@
   "identifier": "app.snipgo",
   "version": "0.1.11",
   "out": "build",
+  "buildCommand": "scripts/build-video-helper.sh arm64 x86_64",
   "macos": {
     "minimumSystemVersion": "14.0",
     "infoPlist": {

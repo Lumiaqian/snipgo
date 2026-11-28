@@ -11,7 +11,6 @@ import (
 
 	"github.com/Lumiaqian/mygo-ui-sdk/behaviors"
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/native"
 	"github.com/egoist/mygo/ui"
 
 	"snipgo/internal/recordsess"
@@ -94,12 +93,12 @@ func (a *app) startRecording(sel image.Rectangle) {
 	root := filepath.Join(os.TempDir(), "snipgo-recordings")
 	if err = os.MkdirAll(root, 0700); err != nil {
 		a.showActionToast(err.Error())
-		closeRecordingObject(stream)
+		stream.Close()
 		return
 	}
 	dir, err := os.MkdirTemp(root, "clip-")
 	if err != nil {
-		closeRecordingObject(stream)
+		stream.Close()
 		a.showActionToast(err.Error())
 		return
 	}
@@ -172,12 +171,6 @@ func (a *app) beginRegionStream(r *regionRecording) {
 			a.refreshMenu()
 		})
 	}()
-}
-
-func closeRecordingObject(v any) {
-	if h, ok := v.(interface{ NativeObject() *native.Object }); ok {
-		_ = h.NativeObject().Close()
-	}
 }
 
 func (a *app) openRecordingControls(r *regionRecording) {
@@ -364,7 +357,7 @@ func (a *app) closeRecording(r *regionRecording) {
 	a.recording = nil
 	r.frame.Destroy()
 	r.ctrl.Destroy()
-	closeRecordingObject(r.stream)
+	r.stream.Close()
 	if a.tray != nil {
 		a.tray.SetTitle("")
 		a.refreshMenu()

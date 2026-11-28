@@ -28,6 +28,7 @@ import (
 	"snipgo/internal/crop"
 	"snipgo/internal/session"
 	"snipgo/internal/store"
+	"snipgo/internal/videocap"
 )
 
 const (
@@ -102,6 +103,15 @@ func configureAppLocale() {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--check-recorder" {
+		helperArch, err := videocap.CheckRecorder()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Recorder created: host=%s helper=%s\n", runtime.GOARCH, helperArch)
+		return
+	}
 	initLogFile()
 	a := &app{}
 	configureAppLocale()

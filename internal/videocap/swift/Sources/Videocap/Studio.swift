@@ -1,7 +1,6 @@
 import AVFoundation
 
-func makeStudio() throws -> any Studio { RecordingStudio() }
-final class RecordingStudio: Studio {
+final class RecordingStudio {
   func export(
     src: String, dst: String, start: Double, end: Double, width: Int64, fps: Int64, mute: Bool,
     progress: @escaping @Sendable (Int64) -> Void
