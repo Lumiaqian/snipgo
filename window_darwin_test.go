@@ -149,3 +149,15 @@ func TestUnconstrainedPanelNotShiftedByMenuBarOrNotch(t *testing.T) {
 		t.Skip(skipped)
 	}
 }
+
+func TestOverlayEditingLevel(t *testing.T) {
+	for _, editing := range []bool{false, true, false} {
+		want := uintptr(102)
+		if editing {
+			want = 27
+		}
+		if got := overlayLevel(editing); got != want {
+			t.Fatalf("editing=%v level=%d want %d", editing, got, want)
+		}
+	}
+}

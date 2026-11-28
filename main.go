@@ -81,6 +81,7 @@ type app struct {
 
 	// 选区内文字批注临时编辑态
 	textEditing bool
+	textOverlay *overlay
 	textEditIdx int
 	textEditX   float64
 	textEditY   float64
