@@ -8,7 +8,7 @@ actor RegionRecorder {
     private var microphone: Microphone?
     private var active: (SCStream, VideoWriter)?
 
-    func start(path: String, displayID: Int64, x: Int64, y: Int64, width: Int64, height: Int64, scale: Double, windowID: UInt32? = nil) async throws {
+    func start(path: String, displayID: Int64, x: Int64, y: Int64, width: Int64, height: Int64, scale: Double, windowID: UInt32? = nil, appAudio: Bool = false) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         guard active == nil, let id = UInt32(exactly: displayID),
               let display = content.displays.first(where: { $0.displayID == id }),
@@ -19,6 +19,7 @@ actor RegionRecorder {
         if let windowID {
             guard let selected = content.windows.first(where: { $0.windowID == windowID }),
                   let owner = selected.owningApplication, owner.processID > 0 else {
+                if appAudio { throw WindowAudioError.unverified }
                 throw CocoaError(.fileNoSuchFile)
             }
             window = selected
@@ -31,7 +32,7 @@ actor RegionRecorder {
             }
         }
         guard scale.isFinite, scale > 0, !rect.isEmpty else { throw CocoaError(.validationMissingMandatoryProperty) }
-        let (stream, configuration) = try videoStream(display: display, excluding: ownApp, rect: rect, scale: scale, events: events, window: window)
+        let (stream, configuration) = try videoStream(display: display, excluding: ownApp, rect: rect, scale: scale, events: events, window: window, appAudio: appAudio)
         let sink = try VideoWriter(url: URL(fileURLWithPath: path), width: configuration.width, height: configuration.height)
         try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: samples)
         try stream.addStreamOutput(sink, type: .audio, sampleHandlerQueue: samples)

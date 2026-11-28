@@ -168,8 +168,8 @@ func (h *helper) Start(ctx context.Context, path string, id, x, y, w, height int
 	_, err := h.call(ctx, request{Method: "start", Path: path, DisplayID: id, X: x, Y: y, Width: w, Height: height, Scale: scale}, nil)
 	return err
 }
-func (h *helper) StartWindow(ctx context.Context, path string, id uint32, display int64, scale float64) error {
-	_, err := h.call(ctx, request{Method: "start", Path: path, WindowID: id, DisplayID: display, Scale: scale}, nil)
+func (h *helper) StartWindow(ctx context.Context, path string, id uint32, display int64, scale float64, appAudio bool) error {
+	_, err := h.call(ctx, request{Method: "start", Path: path, WindowID: id, DisplayID: display, Scale: scale, Enabled: appAudio}, nil)
 	return err
 }
 func (h *helper) SetSystem(ctx context.Context, on bool) error {

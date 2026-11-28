@@ -170,7 +170,7 @@ func runAgentRecording(ctx context.Context, r *regionRecording, p agentParams) a
 	local := region.Local
 	var err error
 	if p.Window != 0 {
-		err = r.stream.StartWindow(ctx, r.path, p.Window, region.Display.ID, region.Display.Scale)
+		err = r.stream.StartWindow(ctx, r.path, p.Window, region.Display.ID, region.Display.Scale, p.SystemAudio)
 	} else {
 		err = r.stream.Start(ctx, r.path, region.Display.ID, int64(local.Min.X), int64(local.Min.Y), int64(local.Dx()), int64(local.Dy()), region.Display.Scale)
 	}
@@ -179,7 +179,7 @@ func runAgentRecording(ctx context.Context, r *regionRecording, p agentParams) a
 	}
 	timer := time.NewTimer(time.Duration(p.Duration) * time.Second)
 	defer timer.Stop()
-	if p.SystemAudio {
+	if p.SystemAudio && p.Window == 0 {
 		if err = r.stream.SetSystem(ctx, true); err != nil {
 			return mediaError(err)
 		}

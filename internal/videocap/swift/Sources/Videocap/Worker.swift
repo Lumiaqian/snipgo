@@ -42,7 +42,7 @@ private enum Worker {
         case let (.recorder(o), "start"):
             try await o.start(path: require(r.path), displayID: require(r.displayID),
                               x: require(r.x), y: require(r.y), width: require(r.width),
-                              height: require(r.height), scale: require(r.scale), windowID: r.windowID)
+                              height: require(r.height), scale: require(r.scale), windowID: r.windowID, appAudio: r.enabled == true)
         case let (.recorder(o), "system"): try await o.setSystem(enabled: require(r.enabled))
         case let (.recorder(o), "mic"): try await o.setMic(enabled: require(r.enabled))
         case let (.recorder(o), "pause"): try await o.pause(paused: require(r.enabled))
