@@ -18,7 +18,8 @@ type Display struct {
 
 // WindowInfo 描述一个可见窗口的 CGWindowID 与全局 DIP 边界。
 type WindowInfo struct {
-	PopupMenu bool
-	ID        uint32
-	Bounds    image.Rectangle
+	App, Title string
+	ID         uint32
+	Bounds     image.Rectangle
+	PopupMenu  bool
 }

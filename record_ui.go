@@ -19,6 +19,7 @@ import (
 )
 
 type regionRecording struct {
+	agentCancel                            context.CancelFunc
 	countdown                              *recordCountdown
 	region                                 recordsess.Region
 	stream                                 videocap.Recorder
@@ -83,6 +84,9 @@ func (r *regionRecording) discardLabel() string {
 }
 
 func (r *regionRecording) menu(a *app) []*mygo.MenuItem {
+	if r.agentCancel != nil {
+		return []*mygo.MenuItem{{Label: "停止 Agent 录制", Click: func(*mygo.MenuItem, *mygo.Window) { r.agentCancel() }}}
+	}
 	if cd := r.countdown; cd != nil {
 		return []*mygo.MenuItem{{Label: "立即开始录屏", Click: func(*mygo.MenuItem, *mygo.Window) { cd.resolve(true) }}, {Label: "取消录屏倒计时", Click: func(*mygo.MenuItem, *mygo.Window) { cd.resolve(false) }}}
 	}
@@ -316,6 +320,17 @@ func paintRecordCountdown(c *ui.Context, cd *recordCountdown) {
 
 func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
 	c.Root().Background(ui.Transparent)
+	if r.agentCancel != nil {
+		withAppTheme(c, func() {
+			ui.Row(c).Fill().AlignItems(ui.Center).Gap(12).Children(func() {
+				ui.Text(c, "🔴 Agent 正在录制")
+				if miniPillBtn(c, nil, "停止 Agent 录制", false) {
+					r.agentCancel()
+				}
+			})
+		})
+		return
+	}
 	withAppTheme(c, func() {
 		c.After(time.Second)
 		bar := behaviors.Toolbar(c.Key("record-controls"), behaviors.ToolbarOptions{Label: "录制控制"})
@@ -395,6 +410,9 @@ func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
 }
 
 func (a *app) changeRecording(action string) {
+	if a.recording != nil && a.recording.agentCancel != nil {
+		return
+	}
 	r := a.recording
 	if r == nil || r.busy {
 		return
@@ -468,6 +486,10 @@ func (a *app) closeRecording(r *regionRecording) {
 
 func (a *app) endRecording(discard bool) {
 	r := a.recording
+	if r != nil && r.agentCancel != nil {
+		r.agentCancel()
+		return
+	}
 	if r != nil && r.countdown != nil {
 		r.countdown.resolve(false)
 		return

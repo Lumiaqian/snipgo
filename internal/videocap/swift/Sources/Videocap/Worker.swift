@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // Each helper owns exactly one object. Newlines delimit JSON commands and replies;
@@ -5,6 +6,7 @@ import Foundation
 private struct Request: Decodable {
     var method: String
     var path, dst: String?
+    var windowID: UInt32?
     var displayID, x, y, width, height, fps: Int64?
     var scale, start, end: Double?
     var enabled: Bool?
@@ -41,7 +43,7 @@ private enum Worker {
         case let (.recorder(o), "start"):
             try await o.start(path: require(r.path), displayID: require(r.displayID),
                               x: require(r.x), y: require(r.y), width: require(r.width),
-                              height: require(r.height), scale: require(r.scale))
+                              height: require(r.height), scale: require(r.scale), windowID: r.windowID, appAudio: r.enabled == true)
         case let (.recorder(o), "system"): try await o.setSystem(enabled: require(r.enabled))
         case let (.recorder(o), "mic"): try await o.setMic(enabled: require(r.enabled))
         case let (.recorder(o), "pause"): try await o.pause(paused: require(r.enabled))
@@ -69,7 +71,10 @@ enum VideoHelper {
     static func main() async throws {
         let worker: Worker
         switch CommandLine.arguments.dropFirst().first {
-        case "recorder": worker = .recorder(RegionRecorder())
+        case "recorder":
+            // Initialize the helper's WindowServer connection before constructing a single-window filter.
+            _ = CGMainDisplayID()
+            worker = .recorder(RegionRecorder())
         case "frames": worker = .frames(MovieFrames())
         case "studio": worker = .studio(RecordingStudio())
         default: throw CocoaError(.featureUnsupported)

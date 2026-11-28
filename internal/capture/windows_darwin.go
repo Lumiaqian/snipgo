@@ -46,6 +46,7 @@ var (
 	cfStringCreateWithCString              func(uintptr, string, uint32) uintptr
 	cgRectMakeWithDictionaryRepresentation func(uintptr, *cgRect) bool
 
+	keyWindowOwnerName uintptr
 	keyWindowOwnerPID  uintptr
 	keyWindowNumber    uintptr
 	keyWindowLayer     uintptr
@@ -82,6 +83,7 @@ func initWindowSymbols() bool {
 		purego.RegisterLibFunc(&cfStringCreateWithCString, purego.RTLD_DEFAULT, "CFStringCreateWithCString")
 		purego.RegisterLibFunc(&cgRectMakeWithDictionaryRepresentation, purego.RTLD_DEFAULT, "CGRectMakeWithDictionaryRepresentation")
 
+		keyWindowOwnerName = cfStringCreateWithCString(0, "kCGWindowOwnerName", cfStringEncodingUTF8)
 		var levelForKey func(int32) int32
 		purego.RegisterLibFunc(&levelForKey, purego.RTLD_DEFAULT, "CGWindowLevelForKey")
 		popupLayer = levelForKey(11) // kCGPopUpMenuWindowLevelKey
@@ -222,7 +224,7 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 		}
 
 		wid, _ := dictInt32(dict, keyWindowNumber)
-		info := WindowInfo{ID: uint32(wid), Bounds: rect, PopupMenu: menu}
+		info := WindowInfo{ID: uint32(wid), Bounds: rect, PopupMenu: menu, App: dictString(dict, keyWindowOwnerName), Title: dictString(dict, keyWindowName)}
 		windows = append(windows, info)
 		if frontPID > 0 && pid == frontPID {
 			if frontFallback.Bounds.Empty() {

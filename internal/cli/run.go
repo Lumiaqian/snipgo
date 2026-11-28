@@ -19,7 +19,7 @@ import (
 	"snipgo/internal/beautify"
 )
 
-var commands = []string{"status", "version", "help", "ocr", "redact", "cutout", "template", "diff", "gif"}
+var commands = []string{"status", "version", "help", "ocr", "redact", "cutout", "template", "diff", "gif", "windows", "history", "pin", "capture", "record"}
 
 func Known(name string) bool { return slices.Contains(commands, name) }
 
@@ -45,7 +45,9 @@ func Run(ctx context.Context, args []string, version string, export GIFExporter,
 		case errors.Is(err, os.ErrPermission):
 			code = "PERMISSION_DENIED"
 		}
-		fail = &Failure{Code: code, Message: err.Error()}
+		if !errors.As(err, &fail) {
+			fail = &Failure{Code: code, Message: err.Error()}
+		}
 	}
 	return writeResponse(stdout, stderr, cmd, data, fail, jsonMode)
 }
@@ -53,6 +55,10 @@ func Run(ctx context.Context, args []string, version string, export GIFExporter,
 var errArgs = agentapi.ErrInvalidArgs
 
 func execute(ctx context.Context, cmd string, args []string, version string, export GIFExporter) (any, error) {
+	switch cmd {
+	case "windows", "history", "pin", "capture", "record":
+		return callDesktop(ctx, cmd, args)
+	}
 	f := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var out, format, style, kind, padding, mode, title, caption string
@@ -108,12 +114,15 @@ func execute(ctx context.Context, cmd string, args []string, version string, exp
 	}
 	switch cmd {
 	case "help", "version", "status":
+		if cmd == "help" && slices.Equal(paths, []string{"record"}) {
+			return fields{"command": "record", "audio": recordAudioHelp}, nil
+		}
 		if len(paths) != 0 {
 			return nil, errArgs
 		}
 		switch cmd {
 		case "help":
-			return fields{"commands": commands}, nil
+			return fields{"commands": commands, "record_audio": recordAudioHelp}, nil
 		case "status":
 			dir, err := os.UserConfigDir()
 			if err != nil {
@@ -126,7 +135,21 @@ func execute(ctx context.Context, cmd string, args []string, version string, exp
 					running = strings.TrimSpace(string(result)) != ""
 				}
 			}
-			return fields{"version": version, "host_running": running, "socket_path": filepath.Join(dir, "app.snipgo", "agent.sock"), "screen_capture_authorized": nil, "tier1_ready": true, "tier2_ready": false, "agent_ipc_enabled": false}, nil
+			var permission any
+			enabled, ready := false, false
+			result, err := callDesktop(ctx, "status", nil)
+			var failure *Failure
+			if err == nil {
+				if result, ok := result.(map[string]any); ok {
+					permission = result["screen_capture_authorized"]
+					enabled = true
+					ready = true
+					running = true
+				}
+			} else if errors.As(err, &failure) && failure.Code == "HOST_NOT_RUNNING" {
+				enabled = true
+			}
+			return fields{"version": version, "host_running": running, "socket_path": filepath.Join(dir, "app.snipgo", "agent.sock"), "screen_capture_authorized": permission, "tier1_ready": true, "tier2_ready": ready, "agent_ipc_enabled": enabled}, nil
 		}
 		return fields{"version": version}, nil
 	case "template":
@@ -179,3 +202,5 @@ func execute(ctx context.Context, cmd string, args []string, version string, exp
 	}
 	return agentapi.ProcessImage(ctx, paths, agentapi.ImageOptions{Command: cmd, Out: out, Format: format, Style: style, Kind: kind, Padding: padding, Mode: mode, Title: title, Caption: caption, Date: date, Theme: theme, Trim: trim, Threshold: threshold, Ratio: ratio, Limit: limit, Scale: scale})
 }
+
+const recordAudioHelp = "默认静音。--window 配合 --system-audio 仅录制目标应用的音频，可能包含该应用其他窗口或标签页的声音。无法确认隔离时，在采集前报错。--rect 配合 --system-audio 录制系统音频。Agent 不可开启麦克风。GIF 无音轨，请使用 MP4 验证声音。"
