@@ -122,10 +122,10 @@ func toolbarDivider(c *ui.Context) {
 }
 
 func iconToolBtn(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) bool {
-	return toolIconControl(c, ic, label, tip, active, disabled).Clicked() && !disabled
+	return toolIconControl(c, ic, label, tip, active, disabled, ui.Transparent).Clicked() && !disabled
 }
 
-func toolIconControl(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool) ui.Element {
+func toolIconControl(c *ui.Context, ic *ui.SVG, label, tip string, active, disabled bool, tint ui.Color) ui.Element {
 	p := uiPalette(c)
 	btn := ui.ButtonBase(c).
 		Role(ui.RoleToggleButton).
@@ -162,6 +162,8 @@ func toolIconControl(c *ui.Context, ic *ui.SVG, label, tip string, active, disab
 			col = ui.Color{R: p.TextMuted.R, G: p.TextMuted.G, B: p.TextMuted.B, A: uint8(float32(p.TextMuted.A) * 0.55)}
 		} else if active {
 			col = p.ActiveText
+		} else if tint.A > 0 {
+			col = tint
 		}
 		size := float32(15.5)
 		if ic == iconRecord && !disabled {

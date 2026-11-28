@@ -24,6 +24,7 @@ type recordStudio struct {
 	win                       *mygo.Window
 	player                    *ui.VideoPlayer
 	source, output, status    string
+	outputSize                int64
 	start, end, duration      float64
 	format, size, width, rate int
 	mute, hadAudio, closed    bool
@@ -36,7 +37,8 @@ var gifRates = []int{10, 15, 24, 30}
 
 func (a *app) openRecordStudio(r *regionRecording) {
 	a.closeRecordStudio()
-	s := &recordStudio{enter: panelEnterState{enabled: true}, source: r.path, output: r.path, hadAudio: r.hadAudio, width: min(max(a.cfg.RecordWidth, 0), 2), rate: min(max(a.cfg.RecordRate, 0), 3)}
+	s := &recordStudio{enter: panelEnterState{enabled: true}, source: r.path, hadAudio: r.hadAudio, width: min(max(a.cfg.RecordWidth, 0), 2), rate: min(max(a.cfg.RecordRate, 0), 3)}
+	s.setOutput(r.path)
 	if r.interrupted {
 		s.status = "屏幕变化，已自动保存已录片段"
 	}
@@ -97,12 +99,22 @@ func (a *app) closeRecordStudio() {
 	}
 }
 
+func (s *recordStudio) setOutput(path string) {
+	s.output, s.outputSize = path, 0
+	if path != "" {
+		if info, err := os.Stat(path); err == nil {
+			s.outputSize = info.Size()
+		}
+	}
+}
+
 func (s *recordStudio) dirty() {
-	s.output = ""
 	s.badge.Set("", nil, nil)
 	s.status = ""
 	if s.format == 0 && s.start == 0 && s.end == s.duration && s.size == 0 && !s.mute {
-		s.output = s.source
+		s.setOutput(s.source)
+	} else {
+		s.setOutput("")
 	}
 }
 
@@ -158,8 +170,8 @@ func (s *recordStudio) paintHeader(c *ui.Context, ext string) {
 				w, h := s.player.Size()
 				label += fmt.Sprintf(" · %d×%d", w, h)
 			}
-			if info, err := os.Stat(s.output); err == nil {
-				label += fmt.Sprintf(" · %.1fs · %.1f MB", s.end-s.start, float64(info.Size())/1e6)
+			if s.outputSize > 0 {
+				label += fmt.Sprintf(" · %.1fs · %.1f MB", s.end-s.start, float64(s.outputSize)/1e6)
 			}
 		} else if label == "" {
 			label = "待生成 " + ext
@@ -204,20 +216,31 @@ func (s *recordStudio) paintStage(c *ui.Context) {
 	})
 }
 
+func recordEditCard(c *ui.Context, row ui.Element, busy bool) ui.Element {
+	card := liquidCard(c, row)
+	if busy {
+		card.Disabled(true).DimDisabled(false).IgnoreInput(true).Opacity(.55)
+	}
+	return card
+}
+
 func (s *recordStudio) paintTrim(c *ui.Context) {
 	busy := s.cancel != nil
-	liquidCard(c, ui.Row(c).Padding(8, 12).Gap(10).AlignItems(ui.Center)).Children(func() {
+	recordEditCard(c, ui.Row(c).Padding(8, 12).Gap(10).AlignItems(ui.Center), busy).Children(func() {
 		ic := iconPlay
 		if s.player != nil && s.player.Playing() {
 			ic = iconPause
 		}
-		if toolIconControl(c, ic, "播放 / 暂停", "播放或暂停预览 (Space)", false, false).Size(28, 28).Clicked() || c.Shortcut(0, ui.KeySpace) {
+		play := toolIconControl(c, ic, "播放 / 暂停", "播放或暂停预览 (Space)", false, busy, ui.Transparent).Size(28, 28)
+		if !busy && (play.Clicked() || c.Shortcut(0, ui.KeySpace)) {
 			s.playPause()
 		}
-		if s.duration > 0 && !busy {
-			old := s.start
-			slider := ui.RangeSlider(c.Key("trim"), &s.start, &s.end, 0, s.duration, .1).Grow(1).Label("裁切区间")
-			if slider.Changed() {
+		if s.duration > 0 {
+			start, end := s.start, s.end
+			slider := ui.RangeSlider(c.Key("trim"), &start, &end, 0, s.duration, .1).Grow(1).Label("裁切区间").Disabled(busy)
+			if !busy && slider.Changed() {
+				old := s.start
+				s.start, s.end = start, end
 				s.dirty()
 				pos := s.end
 				if old != s.start {
@@ -229,7 +252,7 @@ func (s *recordStudio) paintTrim(c *ui.Context) {
 					s.player.Seek(time.Duration(pos * float64(time.Second)))
 				}
 			}
-			if s.scrubbing && !slider.Pressed() && s.player != nil {
+			if !busy && s.scrubbing && !slider.Pressed() && s.player != nil {
 				s.scrubbing = false
 				s.player.Seek(time.Duration(s.start * float64(time.Second)))
 				s.player.Play()
@@ -237,7 +260,7 @@ func (s *recordStudio) paintTrim(c *ui.Context) {
 		}
 		ui.Text(c, fmt.Sprintf("%.1f–%.1fs", s.start, s.end)).FontFeatures("tnum").FontSize(12).NoWrap()
 		statusBadgePill(c, fmt.Sprintf("%.1fs", s.end-s.start), false)
-		if !busy && (s.start != 0 || s.end != s.duration) && miniPillBtn(c, nil, "重置", false) {
+		if (s.start != 0 || s.end != s.duration) && miniPillBtn(c, nil, "重置", false) && !busy {
 			s.start = 0
 			s.end = s.duration
 			s.dirty()
@@ -248,39 +271,36 @@ func (s *recordStudio) paintTrim(c *ui.Context) {
 func (s *recordStudio) paintConfig(c *ui.Context) {
 	p := uiPalette(c)
 	busy := s.cancel != nil
-	if !busy {
-		liquidCard(c, ui.Row(c).AlignItems(ui.Center).Padding(8, 12).Gap(8)).Children(func() {
-			label := func(v string) { ui.Text(c, v).FontSize(11.5).TextColor(p.TextMuted).NoWrap() }
-			label("格式")
-			oldFormat, oldWidth, oldRate, oldSize := s.format, s.width, s.rate, s.size
-			s.format = recordingSegment(c, "录屏格式", s.format, []string{"MP4", "GIF"})
-			if s.format == 1 {
-				label("宽度 px")
-				s.width = recordingSegment(c, "GIF 宽度", s.width, []string{"640", "960", "1280"})
-				label("帧率 fps")
-				s.rate = recordingSegment(c, "GIF 帧率", s.rate, []string{"10", "15", "24", "30"})
-			} else {
-				label("尺寸")
-				s.size = recordingSegment(c, "MP4 尺寸", s.size, []string{"原始", "1080p"})
-				if s.hadAudio {
-					ui.Spacer(c)
-					if liquidSwitch(c, "mute-export", &s.mute, "静音导出") {
-						s.dirty()
-					}
-				}
+	recordEditCard(c, ui.Row(c).AlignItems(ui.Center).Padding(8, 12).Gap(8), busy).Children(func() {
+		label := func(v string) { ui.Text(c, v).FontSize(11.5).TextColor(p.TextMuted).NoWrap() }
+		label("格式")
+		width, rate, size, mute := s.width, s.rate, s.size, s.mute
+		format := recordingSegment(c, "录屏格式", s.format, []string{"MP4", "GIF"})
+		if format == 1 {
+			label("宽度 px")
+			width = recordingSegment(c, "GIF 宽度", s.width, []string{"640", "960", "1280"})
+			label("帧率 fps")
+			rate = recordingSegment(c, "GIF 帧率", s.rate, []string{"10", "15", "24", "30"})
+		} else {
+			label("尺寸")
+			size = recordingSegment(c, "MP4 尺寸", s.size, []string{"原始", "1080p"})
+			if s.hadAudio {
+				ui.Spacer(c)
+				liquidSwitch(c, "mute-export", &mute, "静音导出")
 			}
+		}
 
-			if oldFormat != s.format || oldWidth != s.width || oldRate != s.rate || oldSize != s.size {
-				s.dirty()
-			}
-		})
-	}
+		if !busy && (s.format != format || s.width != width || s.rate != rate || s.size != size || s.mute != mute) {
+			s.format, s.width, s.rate, s.size, s.mute = format, width, rate, size, mute
+			s.dirty()
+		}
+	})
 }
 
 func (a *app) paintRecordFooter(c *ui.Context, s *recordStudio, ext string) {
 	p := uiPalette(c)
 	busy := s.cancel != nil
-	ui.Row(c).Height(54).PaddingX(18).Gap(8).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Height(44).Gap(8).AlignItems(ui.Center).Children(func() {
 		ready := s.output != "" && !busy
 		label := "先生成后可拖出"
 		if ready {
@@ -377,9 +397,9 @@ func (s *recordStudio) export() {
 			} else if err != nil {
 				s.status = err.Error()
 			} else {
-				s.output = dst
+				s.setOutput(dst)
 				s.status = ""
-				if info, e := os.Stat(dst); e == nil && o.gif && info.Size() > 10_000_000 {
+				if o.gif && s.outputSize > 10_000_000 {
 					s.status = "GIF 就绪 · 超过 10 MB，建议调低宽度或帧率"
 				}
 			}

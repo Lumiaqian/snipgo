@@ -279,12 +279,12 @@ func (a *app) openRecordingControls(r *regionRecording) {
 	}
 }
 
-func recordingCapsule(c *ui.Context, row ui.Element, radius float32) ui.Element {
+func recordingCapsule(c *ui.Context, row ui.Element, radius float32, rim ui.Color) ui.Element {
 	if !c.Vibrancy() {
 		return liquidGlassCapsule(c, row, radius, false)
 	}
 	p := uiPalette(c)
-	return row.Radius(radius).Border(1, p.ActiveBorder).Background(panelSurfaceWash(getActiveTheme().GlassLevel, p.Dark))
+	return row.Radius(radius).Border(1, rim).Background(panelSurfaceWash(getActiveTheme().GlassLevel, p.Dark))
 }
 
 func paintRecordCountdown(c *ui.Context, cd *recordCountdown) {
@@ -292,7 +292,7 @@ func paintRecordCountdown(c *ui.Context, cd *recordCountdown) {
 	withAppTheme(c, func() {
 		remaining := max(1, int(math.Ceil(time.Until(cd.deadline).Seconds())))
 		c.After(100 * time.Millisecond)
-		recordingCapsule(c, ui.Row(c).Fill().PaddingX(12).Gap(5).AlignItems(ui.Center), 21).Children(func() {
+		recordingCapsule(c, ui.Row(c).Fill().PaddingX(12).Gap(5).AlignItems(ui.Center), 21, uiPalette(c).ActiveBorder).Children(func() {
 			ui.Icon(c, iconRecord).FontSize(15).TextColor(ui.RGB(236, 64, 56))
 			ui.Text(c, fmt.Sprint(remaining)).FontWeight(700).FontFeatures("tnum").ContentTransition(ui.ContentTransition{Numeric: true, Down: true})
 			label := "秒后开始录屏"
@@ -319,7 +319,7 @@ func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
 	withAppTheme(c, func() {
 		c.After(time.Second)
 		bar := behaviors.Toolbar(c.Key("record-controls"), behaviors.ToolbarOptions{Label: "录制控制"})
-		recordingCapsule(c, bar.Root.Fill().PaddingX(12).AlignItems(ui.Center).Justify(ui.SpaceBetween), 22).Children(func() {
+		recordingCapsule(c, bar.Root.Fill().PaddingX(12).AlignItems(ui.Center).Justify(ui.SpaceBetween), 22, uiPalette(c).PanelRim).Children(func() {
 			paused := !r.pausedAt.IsZero()
 			red := ui.RGB(207, 50, 44)
 			dot := ui.RGB(255, 69, 58)
@@ -340,32 +340,34 @@ func (a *app) paintRecording(c *ui.Context, r *regionRecording) {
 			if paused {
 				pauseIcon = iconPlay
 			}
-			pause := toolIconControl(c, pauseIcon, r.pauseLabel(), r.pauseLabel()+"录制（聚焦时 Space）", paused, r.busy)
-			if paused {
-				pause.Background(dot.Alpha(.24))
-			}
+			pause := toolIconControl(c, pauseIcon, r.pauseLabel(), r.pauseLabel()+"录制（聚焦时 Space）", paused, r.busy, ui.Transparent)
 			if pause.Clicked() || c.Shortcut(0, ui.KeySpace) {
 				a.changeRecording("pause")
 			}
 			if iconToolBtn(c, iconSystemSound, "系统音", r.audioLabel()+" · 切换系统音（聚焦时 A）", r.system, r.busy) || c.Shortcut(0, ui.KeyA) {
 				a.changeRecording("system")
 			}
-			ui.Box(c).Size(26, 26).Children(func() {
+			ui.Box(c).Size(30, 30).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 				if iconToolBtn(c, iconMicrophone, "麦克风", r.audioLabel()+" · 切换麦克风（聚焦时 M）", r.mic, r.busy) || c.Shortcut(0, ui.KeyM) {
 					a.changeRecording("mic")
 				}
 				if r.micDenied {
-					ui.Text(c, "!").Absolute().Right(0).Top(0).FontSize(10).FontWeight(700).TextColor(red).IgnoreInput(true)
+					ui.Text(c, "!").Absolute().Right(2).Top(2).FontSize(10).FontWeight(700).TextColor(red).IgnoreInput(true)
 				} else if r.pendingAudio == "切换麦克风…" {
-					ui.Text(c, "…").Absolute().Right(0).Top(0).FontSize(10).IgnoreInput(true)
+					ui.Text(c, "…").Absolute().Right(2).Top(2).FontSize(10).IgnoreInput(true)
 				} else if r.mic && r.level > .01 {
-					ui.Box(c).Absolute().Right(0).Top(0).Size(5, 5).Radius(3).Background(ui.RGB(52, 199, 89)).IgnoreInput(true)
+					ui.Box(c).Absolute().Right(2).Top(2).Size(5, 5).Radius(3).Background(ui.RGB(52, 199, 89)).IgnoreInput(true)
 				}
 			})
 			toolbarDivider(c)
-			discard := toolIconControl(c, iconClose, r.discardLabel(), "丢弃录制（聚焦时 Esc）", false, r.busy)
-			if time.Now().Before(r.confirmUntil) {
-				discard.Background(red.Alpha(.25))
+			confirm := time.Now().Before(r.confirmUntil)
+			tint := ui.Transparent
+			if confirm {
+				tint = red
+			}
+			discard := toolIconControl(c, iconClose, r.discardLabel(), "丢弃录制（聚焦时 Esc）", false, r.busy, tint)
+			if confirm {
+				discard.Background(red.Alpha(.18)).Border(1, red.Alpha(.55))
 			}
 			if discard.Clicked() || c.Shortcut(0, ui.KeyEscape) {
 				a.endRecording(true)

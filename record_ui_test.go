@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/Lumiaqian/mygo-ui-sdk/uitest"
 	"github.com/egoist/mygo/ui"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -178,5 +180,64 @@ func TestRecordingCapsuleControlsStayInPlace(t *testing.T) {
 	r.pausedAt = time.Now()
 	if got := bounds(); !slices.Equal(got, want) {
 		t.Fatalf("permission or discard feedback moved controls: %v, initially %v", got, want)
+	}
+}
+
+func TestExportKeepsEditControlsInPlaceAndReadOnly(t *testing.T) {
+	a := &app{}
+	s := &recordStudio{format: 1, width: 1, rate: 1, duration: 8.37, start: 1.2, end: 7.8}
+	tt := ui.NewTester(func(c *ui.Context) { a.paintRecordStudio(c, s) }, 700, 520)
+	tt.Frame()
+	bounds := func() []ui.Rect {
+		var rects []ui.Rect
+		for _, name := range []string{"正在加载预览…", "裁切区间", "重置", "GIF", "960", "15"} {
+			rect, ok := tt.Find(name)
+			if !ok {
+				t.Fatalf("missing %s", name)
+			}
+			rects = append(rects, rect)
+		}
+		return rects
+	}
+	before := bounds()
+	s.cancel = func() {}
+	tt.Frame()
+	if got := bounds(); !slices.Equal(before, got) {
+		t.Fatalf("current %v, before export %v", got, before)
+	}
+	for _, target := range []string{"重置", "MP4", "1280", "30", "裁切区间"} {
+		rect, ok := tt.Find(target)
+		if !ok {
+			t.Fatalf("missing %s", target)
+		}
+		tt.ClickAt(rect.X+rect.W/2, rect.Y+rect.H/2)
+		tt.Key(0, ui.KeyRight)
+		tt.Key(0, ui.KeySpace)
+		tt.Frame()
+	}
+	if s.format != 1 || s.width != 1 || s.rate != 1 || s.start != 1.2 || s.end != 7.8 {
+		t.Fatalf("export settings changed: format=%d width=%d rate=%d range=%v–%v", s.format, s.width, s.rate, s.start, s.end)
+	}
+}
+
+func TestRecordingOutputSizeFollowsDraggableFile(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "source.mp4")
+	if err := os.WriteFile(src, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := &recordStudio{source: src, duration: 8, end: 8}
+	s.setOutput(src)
+	if s.outputSize != 7 {
+		t.Fatalf("original size %d", s.outputSize)
+	}
+	s.start = 1
+	s.dirty()
+	if s.output != "" || s.outputSize != 0 {
+		t.Fatal("dirty settings retained a file")
+	}
+	s.start = 0
+	s.dirty()
+	if s.output != src || s.outputSize != 7 {
+		t.Fatal("original file or its size not restored")
 	}
 }
