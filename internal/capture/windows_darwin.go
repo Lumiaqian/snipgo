@@ -44,6 +44,7 @@ var (
 	cfStringCreateWithCString              func(uintptr, string, uint32) uintptr
 	cgRectMakeWithDictionaryRepresentation func(uintptr, *cgRect) bool
 
+	keyWindowOwnerName uintptr
 	keyWindowOwnerPID  uintptr
 	keyWindowNumber    uintptr
 	keyWindowLayer     uintptr
@@ -80,6 +81,7 @@ func initWindowSymbols() bool {
 		purego.RegisterLibFunc(&cfStringCreateWithCString, purego.RTLD_DEFAULT, "CFStringCreateWithCString")
 		purego.RegisterLibFunc(&cgRectMakeWithDictionaryRepresentation, purego.RTLD_DEFAULT, "CGRectMakeWithDictionaryRepresentation")
 
+		keyWindowOwnerName = cfStringCreateWithCString(0, "kCGWindowOwnerName", cfStringEncodingUTF8)
 		keyWindowOwnerPID = cfStringCreateWithCString(0, "kCGWindowOwnerPID", cfStringEncodingUTF8)
 		keyWindowNumber = cfStringCreateWithCString(0, "kCGWindowNumber", cfStringEncodingUTF8)
 		keyWindowLayer = cfStringCreateWithCString(0, "kCGWindowLayer", cfStringEncodingUTF8)
@@ -210,7 +212,7 @@ func VisibleWindowInfos(cursor image.Point, displays []Display, excludeTitle str
 		}
 
 		wid, _ := dictInt32(dict, keyWindowNumber)
-		info := WindowInfo{ID: uint32(wid), Bounds: rect}
+		info := WindowInfo{ID: uint32(wid), Bounds: rect, App: dictString(dict, keyWindowOwnerName), Title: dictString(dict, keyWindowName)}
 		windows = append(windows, info)
 		if frontPID > 0 && pid == frontPID {
 			if frontFallback.Bounds.Empty() {

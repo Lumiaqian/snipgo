@@ -267,7 +267,7 @@ func TestAgentReadySettingsAllTabs(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	agentOpts := uitest.AuditOptions{RequiredInteractive: []string{"安装命令行工具"}, RequireFocusable: true}
+	agentOpts := uitest.AuditOptions{RequiredInteractive: []string{"安装命令行工具", "允许本机命令行与 Agent 访问桌面与历史"}, RequireFocusable: true}
 	uitest.AssertAgentReady(t, tt, agentOpts)
 	uitest.AssertThemeParity(t, tt, agentOpts)
 	if dir := os.Getenv("SNIPGO_PREVIEW_DIR"); dir != "" {

@@ -147,9 +147,13 @@ func (a *app) applyAndSaveSettings(next config.Settings) {
 	if next.OpenAtLogin != a.cfg.OpenAtLogin && mygo.App.IsReady() {
 		_ = mygo.App.SetOpenAtLogin(next.OpenAtLogin)
 	}
+	ipcChanged := next.AllowAgentIPC != a.cfg.AllowAgentIPC
 	prevAuto := a.cfg.AutoCheckUpdates
 	prevPre := a.cfg.IncludePrereleases
 	a.cfg = next
+	if ipcChanged {
+		a.syncAgentServer()
+	}
 	a.applyThemeLive(a.cfg)
 	a.syncSessionColorFormat()
 	if a.userDataDir != "" {
@@ -583,6 +587,10 @@ func paintPreviewPillChip(c *ui.Context, ic *ui.SVG, label string, primary bool)
 func (a *app) paintCommandLineCard(c *ui.Context, p palette, sw *settingsWindow) {
 	sectionTitle(c, "命令行与 Agent")
 	settingsCard(c).Children(func() {
+		if liquidSwitch(c, "agent-ipc", &sw.draft.AllowAgentIPC, "允许本机命令行与 Agent 访问桌面与历史") {
+			a.applyAndSaveSettings(sw.draft)
+		}
+		ui.Text(c, "开启后，同一账户下的本机程序可读取截图历史、列举窗口、抓图、录制或贴图。").FontSize(12).TextColor(p.TextSecondary)
 		home, homeErr := os.UserHomeDir()
 		exe, exeErr := os.Executable()
 		link := filepath.Join(home, ".local", "bin", "snipgo")

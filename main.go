@@ -23,6 +23,7 @@ import (
 	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
 
+	"snipgo/internal/agentipc"
 	"snipgo/internal/beautify"
 	"snipgo/internal/capture"
 	"snipgo/internal/cli"
@@ -42,6 +43,7 @@ const (
 
 // app 是菜单栏里的 SnipGo。关窗不退出，只从菜单退出。
 type app struct {
+	agentServer         *agentipc.Server
 	tray                *mygo.Tray
 	session             *session.Session
 	cfg                 config.Settings
@@ -137,6 +139,7 @@ func main() {
 			return
 		}
 		a.quitting = true
+		a.stopAgentServer()
 		if a.session != nil {
 			a.session.Cancel()
 		}
@@ -193,6 +196,7 @@ func (a *app) ready() {
 		}
 	}
 
+	a.syncAgentServer()
 	a.session = &session.Session{
 		Allowed:         a.allowCapture,
 		Live:            a.liveSnapshot,

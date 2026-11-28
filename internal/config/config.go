@@ -15,6 +15,7 @@ import (
 
 // Settings 是用户可配置的全部偏好项。
 type Settings struct {
+	AllowAgentIPC       bool   `json:"allow_agent_ipc,omitempty"`
 	RecordCountdown     bool   `json:"record_countdown"`
 	RecordFormat        int    `json:"record_format,omitempty"`
 	RecordWidth         int    `json:"record_width"`
